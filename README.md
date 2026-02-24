@@ -1,29 +1,44 @@
 # MCP Launcher
 
-My need is being able to lauch MCP server tools in a flexible manner depending on my current needs.
+> My need is being able to launch MCP server tools in a flexible manner depending on my current needs.
 
-This has been testing as single user server but not tested as a multiple user server.
+**Status**: Tested as single user server (not yet tested as multi-user)
 
-current tools: simplemcp8 webmcp ragmcp convertermcp oraclemcp
+**Available Tools**: `simplemcp8` `webmcp` `ragmcp` `convertermcp` `oraclemcp`
 
 A unified launcher system for running multiple MCP (Model Context Protocol) tools in a single Python process.
 This reduces memory usage by approximately 50% compared to running each tool as a separate process.
 
-## WORKING
+---
 
-simplemcp8 (simple test)
-webmcp (search on the web, direct or API Brave search, Google API, get put on the web)
+## ✅ WORKING
 
-## NOT WORKING yet
+| Tool | Description |
+|------|-------------|
+| `simplemcp8` | Simple test tools (double, square, greet) |
+| `webmcp` | Web search (Brave Search, Google API), URL fetch, HTTP POST |
 
-ragmcp (rag-like codebase indexing using local or API embeddings)
-convertermcp (docx to txt)
-oraclemcp (different tools to call Oracle database to feed the LLM)
+---
 
-## EXAMPLE
+## 🚧 NOT WORKING Yet
 
-(env_python) gr@gr path/to/supreme-mcp-tools $  >  (main*) 
+| Tool | Description |
+|------|-------------|
+| `ragmcp` | RAG-like codebase indexing using local or API embeddings |
+| `convertermcp` | Document conversion (DOCX to TXT) |
+| `oraclemcp` | Oracle database tools to feed the LLM |
+
+---
+
+## 📖 Example
+
+```bash
+# Terminal session
 $ python launchmcp.py simplemcp8
+```
+
+**Output:**
+```
 2026-02-24 02:05:29,013 - root - INFO - ============================================================
 2026-02-24 02:05:29,013 - root - INFO - MCP Launcher Starting
 2026-02-24 02:05:29,013 - root - INFO - ============================================================
@@ -60,7 +75,7 @@ INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
 INFO:     127.0.0.1:35192 - "POST /mcp HTTP/1.1" 200 OK
 2026-02-24 02:05:29,733 - simplemcp8_streamable - INFO - Processing JSON-RPC request: method=tools/list, id=1
 INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
-
+```
 
 ## Features
 
