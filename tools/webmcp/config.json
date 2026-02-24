@@ -1,0 +1,49 @@
+{
+  "name": "web_mcp",
+  "version": "1.0.0",
+  "description": "Enhanced Web MCP Server - Provides web search, URL fetching, and content processing capabilities",
+  "transports": {
+    "sse": {
+      "enabled": true,
+      "script": "web_mcp.py",
+      "port": 8001,
+      "endpoint": "/sse"
+    },
+    "streamable-http": {
+      "enabled": true,
+      "script": "web_mcp_streamable.py",
+      "port": 8002,
+      "endpoint": "/mcp",
+      "framing_format": "newline-delimited"
+    }
+  },
+  "tools": [
+    {
+      "name": "brave_search_web",
+      "description": "Enhanced web search using Brave Search with language support and metadata (web scraping). Returns formatted HTML results."
+    },
+    {
+      "name": "brave_search_api",
+      "description": "Enhanced web search using Brave Search API with structured results. Returns formatted JSON results including web results, news, videos, discussions, infobox, FAQ, and locations. Supports both GET and POST methods."
+    },
+    {
+      "name": "google_search_api",
+      "description": "Google Search API using SerpAPI. Returns formatted results including organic results, answer box, knowledge graph, people also ask, related searches, top stories, and local results."
+    },
+    {
+      "name": "fetch_url",
+      "description": "Enhanced web reader that fetches and processes web content with pagination, caching, and content filtering. Supports auto-detection of response type (json/html/text)."
+    },
+    {
+      "name": "post_url",
+      "description": "Sends an HTTP POST request to the specified URL with optional data and headers. Supports JSON payloads and returns the response as text."
+    }
+  ],
+  "environment_variables": {
+    "required": [],
+    "optional": [
+      "BRAVE_SEARCH_API_KEY",
+      "SERPAPI_API_KEY"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "convertermcp",
+  "version": "1.0.0",
+  "description": "MCP server for document conversion tools (DOCX to text, etc.)",
+  "server": {
+    "name": "convertermcp",
+    "port": 8003,
+    "host": "0.0.0.0",
+    "transport": "streamable-http",
+    "endpoint": "/mcp",
+    "framing_format": "newline-delimited",
+    "request_timeout": 60.0,
+    "sse_endpoint": "/sse",
+    "messages_endpoint": "/messages/"
+  },
+  "tools": [
+    {
+      "name": "convert_docx_to_text",
+      "description": "Converts a DOCX file (local path or URL) to plain text; writes to output_path if provided, otherwise returns text."
+    }
+  ],
+  "allowed_roots": [
+    "/workspaces"
+  ],
+  "max_docx_size_mb": 20
+}

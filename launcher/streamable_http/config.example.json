@@ -1,0 +1,81 @@
+{
+  "_comment": "Streamable HTTP Transport Configuration Template",
+  "_description": "This is an example configuration file for Streamable HTTP transport. Copy this file to config.json and modify as needed.",
+  
+  "transport": {
+    "type": "streamable-http",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  
+  "server": {
+    "endpoint": "/mcp",
+    "messages_path": "/messages/",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "log_level": "info"
+  },
+  
+  "framing": {
+    "format": "newline-delimited",
+    "_format_options": [
+      "newline-delimited",
+      "length-prefixed"
+    ],
+    "encoding": "utf-8",
+    "chunk_size": 8192,
+    "enable_chunked_encoding": true
+  },
+  
+  "timeouts": {
+    "request_timeout": 30.0,
+    "connection_timeout": 10.0,
+    "read_timeout": 60.0
+  },
+  
+  "retry": {
+    "max_retries": 3,
+    "retry_delay": 1.0,
+    "backoff_multiplier": 2.0
+  },
+  
+  "session": {
+    "enable_session_management": true,
+    "session_timeout": 300.0,
+    "_session_timeout_comment": "Session timeout in seconds (300 = 5 minutes)"
+  },
+  
+  "headers": {
+    "required": {
+      "Content-Type": "application/json",
+      "Accept": "application/json,text/event-stream"
+    },
+    "optional": {
+      "Mcp-Session-Id": null,
+      "Mcp-Client-Version": "1.0.0"
+    }
+  },
+  
+  "error_handling": {
+    "include_stack_traces": false,
+    "max_error_message_length": 1000
+  },
+  
+  "reconnection": {
+    "enable_auto_reconnect": true,
+    "reconnect_delay": 2.0,
+    "max_reconnect_attempts": 10
+  },
+  
+  "capabilities": {
+    "tools": {},
+    "resources": {},
+    "prompts": {}
+  },
+  
+  "server_info": {
+    "name": "mcp-tool",
+    "version": "1.0.0",
+    "_comment": "Override these values in your tool-specific config"
+  }
+}

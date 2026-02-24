@@ -1,0 +1,61 @@
+{
+  "_comment": "This is an example configuration file for the MCP launcher",
+  "_comment2": "Copy this file to launcher_config.json and modify as needed",
+
+  "toolDirectories": [
+    "/path/to/tools/webmcp",
+    "/path/to/tools/oraclemcp",
+    "/path/to/tools/simplemcp8"
+  ],
+  "_comment3": "List of directories to search for MCP tools. Each directory should contain a Python file that exports server, app, and sse_transport objects.",
+
+  "portAllocation": {
+    "mode": "auto",
+    "_comment4": "Port allocation mode: 'auto' for automatic assignment, 'manual' for specific port assignments",
+    "basePort": 8000,
+    "_comment5": "Starting port for auto allocation (only used in auto mode)",
+    "portRange": [8000, 9000],
+    "_comment6": "Port range for allocation [min, max]",
+    "ports": {
+      "_comment7": "Manual port assignments (only used in manual mode)",
+      "web_mcp": 8001,
+      "oracleMCP": 8000,
+      "simplemcp8": 8002
+    }
+  },
+
+  "server": {
+    "host": "0.0.0.0",
+    "_comment8": "Host address for all servers. Use '127.0.0.1' for localhost only",
+    "logLevel": "info",
+    "_comment9": "Log level for Uvicorn servers: debug, info, warning, error, critical"
+  },
+
+  "logging": {
+    "level": "INFO",
+    "_comment10": "Log level for the launcher itself",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "_comment11": "Log format string",
+    "file": null,
+    "_comment12": "Path to log file, or null for console-only logging"
+  },
+
+  "errorHandling": {
+    "continueOnError": true,
+    "_comment13": "Continue with other tools if one fails",
+    "failFast": false,
+    "_comment14": "Stop immediately on first error (overrides continueOnError)"
+  },
+
+  "_comment15": "Environment Variables Override:",
+  "_comment16": "All configuration values can be overridden with environment variables:",
+  "_comment17": "  LAUNCHER_TOOL_DIRECTORIES - Comma-separated list of tool directories",
+  "_comment18": "  LAUNCHER_PORT_MODE - Port allocation mode (auto/manual)",
+  "_comment19": "  LAUNCHER_BASE_PORT - Base port for auto allocation",
+  "_comment20": "  LAUNCHER_PORT_RANGE - Port range (e.g., '8000,9000')",
+  "_comment21": "  LAUNCHER_SERVER_HOST - Server host address",
+  "_comment22": "  LAUNCHER_LOG_LEVEL - Server log level",
+  "_comment23": "  LAUNCHER_LOGGING_LEVEL - Launcher log level",
+  "_comment24": "  LAUNCHER_CONTINUE_ON_ERROR - Continue on error (true/false)",
+  "_comment25": "  LAUNCHER_FAIL_FAST - Fail fast on error (true/false)"
+}

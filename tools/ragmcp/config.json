@@ -1,0 +1,247 @@
+{
+  "tool_name": "ragmcp",
+  "tool_display_name": "RAG and Code Indexing MCP",
+  "description": "Provides tools for semantic code search, sparse search, and code indexing using Qdrant vector database",
+  "version": "1.0.0",
+  "port": 8004,
+  "host": "0.0.0.0",
+  "sse_path": "/sse",
+  "messages_path": "/messages/",
+  "transport": {
+    "type": "streamable-http",
+    "endpoint": "/mcp",
+    "framing_format": "newline-delimited",
+    "request_timeout": 60.0,
+    "headers": {
+      "Content-Type": "application/json",
+      "Accept": "application/json,text/event-stream"
+    }
+  },
+  "qdrant": {
+    "host": "qdrant",
+    "port": 6333,
+    "default_collection": "folder.to.index-database-code",
+    "timeout": 30
+  },
+  "embedding": {
+    "provider": "azure",
+    "available_providers": [
+      "azure",
+      "local"
+    ],
+    "azure": {
+      "api_url": "https://put.your.API.gateway.ai/v1/embeddings",
+      "model": "text-embedding-3-large",
+      "dimensions": 3072
+    },
+    "local": {
+      "model": "e5-large",
+      "available_models": [
+        "sbert-large",
+        "e5-large",
+        "small",
+        "base"
+      ],
+      "models": {
+        "sbert-large": {
+          "model_name": "stsb-bert-large",
+          "dimensions": 1024,
+          "description": "SBERT Large - English semantic similarity"
+        },
+        "e5-large": {
+          "model_name": "intfloat/multilingual-e5-large",
+          "dimensions": 1024,
+          "description": "Multilingual E5 Large - Multilingual semantic similarity"
+        },
+        "small": {
+          "model_name": "BAAI/bge-small-en-v1.5",
+          "dimensions": 384,
+          "description": "BGE Small - Fast English embeddings"
+        },
+        "base": {
+          "model_name": "BAAI/bge-base-en-v1.5",
+          "dimensions": 768,
+          "description": "BGE Base - Balanced English embeddings"
+        }
+      }
+    }
+  },
+  "indexing": {
+    "default_workspace_root": "/path/to/your/workspace",
+    "default_mode": "sparse",
+    "available_modes": [
+      "sparse",
+      "dense",
+      "hybrid"
+    ],
+    "mode_descriptions": {
+      "sparse": "BM25-style lexical search, offline, $0 cost",
+      "dense": "Embeddings-based semantic search, API cost applies",
+      "hybrid": "Both sparse and dense vectors, best quality"
+    },
+    "chunk_size": 500,
+    "chunk_overlap": 50,
+    "log_directory": "logs"
+  },
+  "search": {
+    "default_limit": 5,
+    "max_limit": 20,
+    "code_display_limit_lines": 50
+  },
+  "copilot": {
+    "default_format": "comment",
+    "available_formats": [
+      "comment",
+      "sidebar"
+    ],
+    "default_language": "c",
+    "available_languages": [
+      "c",
+      "python",
+      "sql"
+    ],
+    "default_limit": 3,
+    "default_max_lines": 50
+  },
+  "logging": {
+    "level": "DEBUG",
+    "log_file": "ragmcp.log",
+    "format": "%(asctime)s - %(levelname)s - %(message)s"
+  },
+  "optional_dependencies": {
+    "sparse_vector_gen": {
+      "required_for": [
+        "search_code_sparse",
+        "get_copilot_context"
+      ],
+      "description": "Sparse vector generator for BM25-style search"
+    },
+    "copilot_context_injector": {
+      "required_for": [
+        "get_copilot_context"
+      ],
+      "description": "Copilot context injector for GitHub Copilot integration"
+    },
+    "local_embeddings": {
+      "required_for": [
+        "search_code (local mode)"
+      ],
+      "description": "Local embedding generation using sentence-transformers"
+    }
+  },
+  "tools": [
+    {
+      "name": "search_code",
+      "description": "Semantic search across indexed code using natural language",
+      "required_params": [
+        "query"
+      ],
+      "optional_params": [
+        "limit",
+        "file_type",
+        "function_name",
+        "collection_name"
+      ]
+    },
+    {
+      "name": "search_code_sparse",
+      "description": "Lexical (BM25-style) code search using sparse vectors",
+      "required_params": [
+        "query"
+      ],
+      "optional_params": [
+        "limit",
+        "file_type",
+        "function_name",
+        "collection_name"
+      ]
+    },
+    {
+      "name": "get_copilot_context",
+      "description": "Get formatted code context for GitHub Copilot injection",
+      "required_params": [
+        "current_context"
+      ],
+      "optional_params": [
+        "format",
+        "language",
+        "limit",
+        "max_lines",
+        "collection_name"
+      ]
+    },
+    {
+      "name": "start_indexing",
+      "description": "Start background indexing of code files into Qdrant",
+      "required_params": [],
+      "optional_params": [
+        "workspace_root",
+        "collection_name",
+        "mode",
+        "force",
+        "directories"
+      ]
+    },
+    {
+      "name": "check_indexing_progress",
+      "description": "Check the progress of background indexing process",
+      "required_params": [],
+      "optional_params": [
+        "pid"
+      ]
+    },
+    {
+      "name": "clear_index",
+      "description": "Clear all indexed code from Qdrant vector database",
+      "required_params": [],
+      "optional_params": [
+        "collection_name",
+        "confirm"
+      ]
+    },
+    {
+      "name": "list_collections",
+      "description": "List all Qdrant collections with their stats",
+      "required_params": [],
+      "optional_params": []
+    }
+  ],
+  "environment_variables": {
+    "QDRANT_HOST": {
+      "description": "Qdrant server hostname",
+      "default": "qdrant"
+    },
+    "QDRANT_PORT": {
+      "description": "Qdrant server port",
+      "default": "6333"
+    },
+    "EMBEDDING_PROVIDER": {
+      "description": "Embedding provider (azure or local)",
+      "default": "azure",
+      "options": [
+        "azure",
+        "local"
+      ]
+    },
+    "LOCAL_EMBEDDING_MODEL": {
+      "description": "Local embedding model (small or base)",
+      "default": "base",
+      "options": [
+        "small",
+        "base"
+      ]
+    },
+    "AZURE_EMBEDDING_API_URL": {
+      "description": "Azure OpenAI embeddings API URL",
+      "default": "https://put.your.API.gateway.ai/v1/embeddings"
+    },
+    "AZURE_EMBEDDING_MODEL": {
+      "description": "Azure OpenAI embeddings model name",
+      "default": "text-embedding-3-large"
+    },
+    "AI_API_KEY": {
+      "description": "API key for Azure OpenAI embeddings",
+      "required": true
+    }
+  }
+}

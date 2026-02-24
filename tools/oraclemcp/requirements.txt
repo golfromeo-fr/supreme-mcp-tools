@@ -1,0 +1,25 @@
+# Oracle MCP Server Dependencies
+
+# Core MCP framework
+mcp>=1.0.0
+anyio>=4.0.0
+click>=8.0.0
+
+# Web server (SSE transport)
+starlette>=0.27.0
+
+# Web server (Streamable HTTP transport)
+fastapi>=0.104.0
+uvicorn>=0.27.0
+
+# Database
+oracledb>=1.0.0
+
+# HTTP client (for AI optimization API)
+httpx>=0.27.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# AI client (for SQL optimization)
+openai>=1.0.0

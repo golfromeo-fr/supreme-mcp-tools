@@ -1,0 +1,73 @@
+{
+  "name": "oraclemcp",
+  "version": "1.0.0",
+  "description": "Oracle MCP Server - Provides access to Oracle databases with query execution, schema introspection, and AI-powered SQL optimization",
+  "transports": {
+    "sse": {
+      "enabled": true,
+      "script": "oracleMCP.py",
+      "port": 8000,
+      "endpoint": "/sse/"
+    },
+    "streamable-http": {
+      "enabled": true,
+      "script": "oracleMCP_streamable.py",
+      "port": 8000,
+      "endpoint": "/mcp",
+      "framing_format": "newline-delimited"
+    }
+  },
+  "tools": [
+    {
+      "name": "schemas",
+      "description": "Get schema information for specified tables including columns, constraints, and foreign keys"
+    },
+    {
+      "name": "query",
+      "description": "Execute SQL SELECT queries and return results"
+    },
+    {
+      "name": "execute_sql",
+      "description": "Execute SQL statements for INSERT, UPDATE, DELETE operations"
+    },
+    {
+      "name": "get_valid_languages",
+      "description": "Get valid language codes from LANGUES table"
+    },
+    {
+      "name": "list_user_tables_with_descriptions",
+      "description": "List all user tables and their functional descriptions"
+    },
+    {
+      "name": "get_sql_optimization_rules",
+      "description": "Get the list of rules for SQL query optimization from optimization.json"
+    },
+    {
+      "name": "explain_plan",
+      "description": "Send an EXPLAIN PLAN query to Oracle and return the execution plan"
+    },
+    {
+      "name": "optimize_sql_with_ai",
+      "description": "Accept a SQL query and use AI (gpt-4.1) to suggest optimizations based on optimization rules"
+    },
+    {
+      "name": "get_proc_rules",
+      "description": "Get the Pro*C coding rules from proc_rules.md"
+    }
+  ],
+  "environment_variables": {
+    "required": [
+      "USERID",
+      "DB_HOST",
+      "DB_PORT",
+      "DB_SERVICE_NAME"
+    ],
+    "optional": [
+      "AI_API_KEY"
+    ]
+  },
+  "files": {
+    "optimization": "optimization.json",
+    "proc_rules": "proc_rules.md"
+  }
+}

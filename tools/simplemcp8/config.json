@@ -1,0 +1,90 @@
+{
+  "name": "simplemcp8",
+  "version": "1.0.0",
+  "description": "Simple MCP server for testing and demonstration with basic tools",
+  "transports": {
+    "sse": {
+      "enabled": true,
+      "file": "simplemcp8.py",
+      "port": 8002,
+      "endpoint": "/sse",
+      "messages_path": "/messages/"
+    },
+    "streamable-http": {
+      "enabled": true,
+      "file": "simplemcp8_streamable.py",
+      "port": 8003,
+      "endpoint": "/mcp",
+      "framing_format": "newline-delimited",
+      "encoding": "utf-8"
+    }
+  },
+  "tools": {
+    "double": {
+      "name": "double",
+      "description": "Doubles the value of a number",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "The number to double"
+          }
+        }
+      }
+    },
+    "square": {
+      "name": "square",
+      "description": "Calculates the square of a number",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "The number to square"
+          }
+        }
+      }
+    },
+    "greet": {
+      "name": "greet",
+      "description": "Generates a greeting message",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name to greet"
+          },
+          "greeting": {
+            "type": "string",
+            "description": "Optional custom greeting (default: 'Hello')"
+          }
+        }
+      }
+    }
+  },
+  "server_info": {
+    "name": "simplemcp8",
+    "version": "1.0.0",
+    "protocol_version": "2024-11-05"
+  },
+  "capabilities": {
+    "tools": true,
+    "resources": false,
+    "prompts": false
+  },
+  "settings": {
+    "log_level": "info",
+    "request_timeout": 30.0,
+    "connection_timeout": 10.0,
+    "session_timeout": 300.0,
+    "enable_session_management": true
+  }
+}
