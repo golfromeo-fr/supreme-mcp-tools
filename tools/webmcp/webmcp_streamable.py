@@ -49,6 +49,17 @@ supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
+# Import monitoring components (optional - tool should work without monitoring)
+try:
+    from monitoring.middleware import add_metrics_middleware
+    from monitoring.exporters import add_metrics_routes
+    from monitoring.collector import MetricsRegistry
+    MONITORING_AVAILABLE = True
+except ImportError:
+    MONITORING_AVAILABLE = False
+    add_metrics_middleware = None
+    add_metrics_routes = None
+
 try:
     from launcher.streamable_http.streamable_http_base import (
         StreamableHttpTransportBase,
@@ -78,6 +89,10 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
+
+# Log API key status at startup for debugging
+logger.info(f"WebMCP Streamable: BRAVE_SEARCH_API_KEY loaded: {'SET' if BRAVE_SEARCH_API_KEY else 'NOT SET'}")
+logger.info(f"WebMCP Streamable: SERPAPI_API_KEY loaded: {'SET' if SERPAPI_API_KEY else 'NOT SET'}")
 
 # ============================================================================
 # Caching System (from html2md-mcp best practices)
@@ -768,6 +783,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
         
         llm_mode: When True, returns concise JSON-like structure optimized for LLM consumption.
         """
+        logger.info(f"brave_search_api handler started - BRAVE_SEARCH_API_KEY: {'SET' if BRAVE_SEARCH_API_KEY else 'NOT SET'}")
         query = arguments.get("query")
         count = int(arguments.get("count", 10))
         timeout = float(arguments.get("timeout", 30.0))
@@ -791,13 +807,25 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             return
 
         if not BRAVE_SEARCH_API_KEY:
+            # Log the missing API key for debugging
+            logger.warning("brave_search_api called but BRAVE_SEARCH_API_KEY is not set in .env")
+            error_details = (
+                "BRAVE_SEARCH_API_KEY is not configured.\n\n"
+                "To use brave_search_api, you need to:\n"
+                "1. Get a Brave Search API key from: https://brave.com/search/api/\n"
+                "2. Add it to your .env file: BRAVE_SEARCH_API_KEY=your_api_key_here\n\n"
+                "Alternative tools that don't require an API key:\n"
+                "- brave_search_web: Web scraping-based search (free, no API key needed)\n"
+                "- fetch_url: Fetch and process any URL content directly\n"
+                "- fetch_url: Useful for reading specific web pages or APIs"
+            )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
                     "code": -32602,
                     "message": "Invalid params",
-                    "data": "BRAVE_SEARCH_API_KEY not found in .env file. Please set your API key in the .env file."
+                    "data": error_details
                 }
             }
             return
@@ -1088,6 +1116,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
         
         llm_mode: When True, returns concise JSON-like structure optimized for LLM consumption.
         """
+        logger.info(f"google_search_api handler started - SERPAPI_API_KEY: {'SET' if SERPAPI_API_KEY else 'NOT SET'}")
         query = arguments.get("query")
         engine = arguments.get("engine", "google")
         google_domain = arguments.get("google_domain", "google.com")
@@ -1113,13 +1142,25 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             return
 
         if not SERPAPI_API_KEY:
+            # Log the missing API key for debugging
+            logger.warning("google_search_api called but SERPAPI_API_KEY is not set in .env")
+            error_details = (
+                "SERPAPI_API_KEY is not configured.\n\n"
+                "To use google_search_api, you need to:\n"
+                "1. Get a SerpAPI key from: https://serpapi.com/\n"
+                "2. Add it to your .env file: SERPAPI_API_KEY=your_api_key_here\n\n"
+                "Alternative tools that don't require an API key:\n"
+                "- brave_search_web: Web scraping-based search (free, no API key needed)\n"
+                "- fetch_url: Fetch and process any URL content directly\n"
+                "- google_search_api: Consider using brave_search_web for Google-like results"
+            )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
                     "code": -32602,
                     "message": "Invalid params",
-                    "data": "SERPAPI_API_KEY not found in .env file. Please set your API key in the .env file."
+                    "data": error_details
                 }
             }
             return
@@ -1821,6 +1862,42 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# ============================================================================
+# Monitoring Middleware and Routes
+# ============================================================================
+
+# Tool name for metrics labeling
+TOOL_NAME = "webmcp"
+
+# Try to add monitoring middleware and routes (graceful degradation if monitoring unavailable)
+if MONITORING_AVAILABLE and add_metrics_middleware is not None:
+    try:
+        # Get or create the metrics registry
+        registry = MetricsRegistry.get_instance()
+        
+        # Add metrics middleware to track HTTP requests
+        # Using collector_name=TOOL_NAME ensures metrics are labeled with "webmcp"
+        add_metrics_middleware(
+            app,
+            collector_name=TOOL_NAME,
+            exclude_paths={"/metrics", "/health", "/stats"}
+        )
+        logger.info(f"Added metrics middleware for tool: {TOOL_NAME}")
+        
+        # Add metrics routes (/metrics, /health, /stats)
+        add_metrics_routes(
+            app,
+            collector_name=TOOL_NAME,
+            path="/metrics"
+        )
+        logger.info(f"Added metrics routes for tool: {TOOL_NAME}")
+        
+    except Exception as e:
+        # Monitoring initialization failed - log warning but continue without metrics
+        logger.warning(f"Failed to initialize monitoring middleware: {e}. Tool will run without metrics.")
+else:
+    logger.info("Monitoring not available - running without metrics collection")
 
 
 @app.get("/")

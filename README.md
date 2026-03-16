@@ -385,6 +385,35 @@ The launcher will automatically allocate ports 8000, 8001, 8003, 8004.
 python launchmcp.py --host 127.0.0.1 --log-level debug webmcp
 ```
 
+## Monitoring
+
+The launcher includes a built-in monitoring system for collecting metrics.
+
+### Enable Monitoring
+
+1. Copy the example config:
+   ```bash
+   cp config/monitoring_config.example.json config/monitoring.json
+   ```
+2. Edit `config/monitoring.json` and set `"enabled": true`
+
+### Available Metrics
+
+- **Request metrics**: HTTP request count, duration, status codes
+- **Tool execution metrics**: Tool call count, success/error rates, duration
+- **Server metrics**: Server health and uptime
+
+### Metrics Endpoints
+
+When monitoring is enabled:
+- `GET /metrics` - Prometheus-formatted metrics
+- `GET /metrics/health` - Health status
+- `GET /metrics/stats` - Basic statistics
+
+### Configuration
+
+See [`config/monitoring_config.example.json`](config/monitoring_config.example.json) for all available options.
+
 ## Troubleshooting
 
 ### Port Already in Use

@@ -1,0 +1,116 @@
+{
+  "monitoring": {
+    "enabled": true,
+    "metrics": {
+      "collectionInterval": 1000,
+      "bufferSize": 10000,
+      "flushInterval": 5000,
+      "retentionDays": 90,
+      "storageBackend": "prometheus",
+      "exporters": [
+        {
+          "type": "prometheus",
+          "enabled": true,
+          "config": {
+            "endpoint": "/metrics",
+            "port": 9090
+          }
+        },
+        {
+          "type": "elasticsearch",
+          "enabled": false,
+          "config": {
+            "url": "http://localhost:9200",
+            "index": "mcp-metrics"
+          }
+        }
+      ]
+    },
+    "collectors": {
+      "request": {
+        "enabled": true,
+        "sampleRate": 1.0,
+        "trackArguments": false
+      },
+      "tool": {
+        "enabled": true,
+        "trackArguments": false,
+        "trackReturnValues": false
+      },
+      "server": {
+        "enabled": true,
+        "interval": 30000
+      },
+      "session": {
+        "enabled": true,
+        "trackActivity": true,
+        "timeout": 300
+      },
+      "system": {
+        "enabled": false,
+        "interval": 10000,
+        "collectCPU": true,
+        "collectMemory": true,
+        "collectDisk": true,
+        "collectNetwork": true
+      }
+    },
+    "alerting": {
+      "enabled": true,
+      "evaluationInterval": 60000,
+      "rules": [
+        {
+          "name": "high_error_rate",
+          "expression": "rate(mcp_errors_total[5m]) > 0.05",
+          "duration": "5m",
+          "severity": "warning",
+          "annotations": {
+            "summary": "High error rate detected",
+            "description": "Error rate is above 5% for the last 5 minutes"
+          }
+        },
+        {
+          "name": "high_latency",
+          "expression": "histogram_quantile(0.95, mcp_request_duration_seconds) > 1.0",
+          "duration": "10m",
+          "severity": "warning",
+          "annotations": {
+            "summary": "High latency detected",
+            "description": "P95 latency is above 1 second for the last 10 minutes"
+          }
+        },
+        {
+          "name": "server_down",
+          "expression": "mcp_server_up == 0",
+          "duration": "1m",
+          "severity": "critical",
+          "annotations": {
+            "summary": "Server is down",
+            "description": "Server {{ $labels.tool }} has been down for more than 1 minute"
+          }
+        }
+      ],
+      "notifiers": [
+        {
+          "type": "email",
+          "enabled": false,
+          "config": {
+            "to": ["admin@example.com"],
+            "from": "alerts@example.com",
+            "smtpServer": "localhost",
+            "smtpPort": 587
+          }
+        },
+        {
+          "type": "slack",
+          "enabled": false,
+          "config": {
+            "webhookUrl": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+            "channel": "#alerts",
+            "username": "MCP Monitor"
+          }
+        }
+      ]
+    }
+  }
+}

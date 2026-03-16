@@ -12,6 +12,7 @@ import signal
 import sys
 from pathlib import Path
 from typing import List, Optional
+import uvicorn
 
 from launcher import (
     Config,
@@ -25,6 +26,11 @@ from launcher import (
     PortConflictError,
     LauncherError,
 )
+
+# Import monitoring modules
+from monitoring.config import load_monitoring_config, MonitoringConfig
+from monitoring.collector import MetricsCollector, MetricsRegistry
+from monitoring.exporters import create_metrics_app
 
 
 # Configure logging
@@ -347,6 +353,129 @@ async def monitor_servers(server_manager: ServerManager, shutdown_event: asyncio
             logging.error(f"Monitor error: {e}", exc_info=True)
 
 
+# Global variables for monitoring
+_metrics_server_task: Optional[asyncio.Task] = None
+_monitoring_config: Optional[MonitoringConfig] = None
+
+
+def get_monitoring_config_path() -> Optional[Path]:
+    """
+    Get the path to the monitoring configuration file.
+    
+    Returns:
+        Path to monitoring config file or None if not found
+    """
+    # Get the workspace directory (parent of supreme-mcp-tools)
+    workspace_dir = Path(__file__).parent
+    
+    # Check workspace config directory first
+    config_path = workspace_dir / "config" / "monitoring_config.json"
+    if config_path.exists():
+        return config_path
+    
+    # Try relative to current working directory
+    config_path = Path("config/monitoring_config.json")
+    if config_path.exists():
+        return config_path
+    
+    return None
+
+
+def initialize_monitoring() -> bool:
+    """
+    Initialize the monitoring system.
+    
+    Returns:
+        True if monitoring was initialized successfully, False otherwise
+    """
+    global _monitoring_config
+    
+    try:
+        # Get monitoring config path
+        config_path = get_monitoring_config_path()
+        
+        if config_path:
+            logging.info(f"Loading monitoring configuration from: {config_path}")
+            _monitoring_config = load_monitoring_config(config_path)
+        else:
+            logging.info("No monitoring configuration file found, using defaults")
+            _monitoring_config = MonitoringConfig()
+        
+        # Check if monitoring is enabled
+        if not _monitoring_config.enabled:
+            logging.info("Monitoring is disabled in configuration")
+            return False
+        
+        # Initialize the metrics registry
+        registry = MetricsRegistry.get_instance()
+        registry.enable()
+        
+        # Get or create the default collector
+        collector = registry.get_default_collector()
+        
+        logging.info(
+            f"Monitoring initialized: collectors enabled, "
+            f"storage backend: {_monitoring_config.metrics.get('storage_backend', 'prometheus')}"
+        )
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Failed to initialize monitoring: {e}", exc_info=True)
+        return False
+
+
+async def start_metrics_server(shutdown_event: asyncio.Event) -> None:
+    """
+    Start the metrics server in the background.
+    
+    Args:
+        shutdown_event: Event to signal shutdown
+    """
+    global _monitoring_config
+    
+    if _monitoring_config is None or not _monitoring_config.enabled:
+        return
+    
+    try:
+        # Get port from config or use default
+        exporters_config = _monitoring_config.metrics.get("exporters", [])
+        port = 9090
+        
+        for exporter in exporters_config:
+            if exporter.get("type") == "prometheus" and exporter.get("enabled", False):
+                port = exporter.get("config", {}).get("port", 9090)
+                break
+        
+        # Get the collector
+        registry = MetricsRegistry.get_instance()
+        collector = registry.get_default_collector()
+        
+        # Create the FastAPI app
+        app = create_metrics_app(collector, app_name="mcp-monitoring")
+        
+        logging.info(f"Starting metrics server on port {port}")
+        
+        # Configure uvicorn
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+            access_log=False
+        )
+        
+        server = uvicorn.Server(config)
+        
+        # Run the server
+        await server.serve()
+        
+    except Exception as e:
+        logging.error(f"Metrics server error: {e}", exc_info=True)
+    finally:
+        logging.info("Metrics server stopped")
+
+
 # Module-level global for shutdown state
 _shutdown_in_progress = False
 
@@ -377,6 +506,13 @@ async def main() -> int:
     logging.info("=" * 60)
     logging.info("MCP Launcher Starting")
     logging.info("=" * 60)
+    
+    # Initialize monitoring system
+    monitoring_initialized = False
+    try:
+        monitoring_initialized = initialize_monitoring()
+    except Exception as e:
+        logging.warning(f"Monitoring initialization failed: {e}")
     
     # Get all configured tool directories
     all_tool_dirs = config.get_tool_directories()
@@ -482,6 +618,12 @@ async def main() -> int:
         # Start monitoring task
         monitor_task = asyncio.create_task(monitor_servers(server_manager, shutdown_event))
         
+        # Start metrics server if monitoring was initialized
+        metrics_task = None
+        if monitoring_initialized:
+            metrics_task = asyncio.create_task(start_metrics_server(shutdown_event))
+            logging.info("Metrics server started in background")
+        
         # Wait for shutdown signal
         await shutdown_event.wait()
         
@@ -491,6 +633,14 @@ async def main() -> int:
             await monitor_task
         except asyncio.CancelledError:
             pass
+        
+        # Cancel metrics server task
+        if metrics_task:
+            metrics_task.cancel()
+            try:
+                await metrics_task
+            except asyncio.CancelledError:
+                pass
         
     except LauncherError as e:
         logging.error(f"Launcher error: {e}")

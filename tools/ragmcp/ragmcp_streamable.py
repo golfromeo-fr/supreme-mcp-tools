@@ -44,6 +44,17 @@ supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
+# Import monitoring components (optional - tool should work without monitoring)
+try:
+    from monitoring.middleware import add_metrics_middleware
+    from monitoring.exporters import add_metrics_routes
+    from monitoring.collector import MetricsRegistry
+    MONITORING_AVAILABLE = True
+except ImportError:
+    MONITORING_AVAILABLE = False
+    add_metrics_middleware = None
+    add_metrics_routes = None
+
 try:
     from launcher.streamable_http.streamable_http_base import (
         StreamableHttpTransportBase,
@@ -1501,6 +1512,42 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# ============================================================================
+# Monitoring Middleware and Routes
+# ============================================================================
+
+# Tool name for metrics labeling
+TOOL_NAME = "ragmcp"
+
+# Try to add monitoring middleware and routes (graceful degradation if monitoring unavailable)
+if MONITORING_AVAILABLE and add_metrics_middleware is not None:
+    try:
+        # Get or create the metrics registry
+        registry = MetricsRegistry.get_instance()
+        
+        # Add metrics middleware to track HTTP requests
+        # Using collector_name=TOOL_NAME ensures metrics are labeled with "ragmcp"
+        add_metrics_middleware(
+            app,
+            collector_name=TOOL_NAME,
+            exclude_paths={"/metrics", "/health", "/stats"}
+        )
+        logger.info(f"Added metrics middleware for tool: {TOOL_NAME}")
+        
+        # Add metrics routes (/metrics, /health, /stats)
+        add_metrics_routes(
+            app,
+            collector_name=TOOL_NAME,
+            path="/metrics"
+        )
+        logger.info(f"Added metrics routes for tool: {TOOL_NAME}")
+        
+    except Exception as e:
+        # Monitoring initialization failed - log warning but continue without metrics
+        logger.warning(f"Failed to initialize monitoring middleware: {e}. Tool will run without metrics.")
+else:
+    logger.info("Monitoring not available - running without metrics collection")
 
 
 @app.get("/")

@@ -1,0 +1,163 @@
+{
+  "enabled": true,
+  "metrics": {
+    "collection_interval": 1000,
+    "buffer_size": 10000,
+    "flush_interval": 5000,
+    "retention_days": 90,
+    "storage_backend": "prometheus",
+    "exporters": [
+      {
+        "type": "prometheus",
+        "enabled": true,
+        "config": {
+          "endpoint": "/metrics",
+          "port": 9090
+        }
+      }
+    ]
+  },
+  "collectors": {
+    "request": {
+      "type": "request",
+      "enabled": true,
+      "config": {
+        "sample_rate": 1.0,
+        "track_arguments": false
+      }
+    },
+    "tool": {
+      "type": "tool",
+      "enabled": true,
+      "config": {
+        "track_arguments": false,
+        "track_return_values": false
+      }
+    },
+    "server": {
+      "type": "server",
+      "enabled": true,
+      "config": {
+        "interval": 30000
+      }
+    },
+    "session": {
+      "type": "session",
+      "enabled": true,
+      "config": {
+        "track_activity": true,
+        "timeout": 300
+      }
+    },
+    "system": {
+      "type": "system",
+      "enabled": false,
+      "config": {
+        "interval": 10000,
+        "collect_cpu": true,
+        "collect_memory": true,
+        "collect_disk": true,
+        "collect_network": true
+      }
+    }
+  },
+  "alerting": {
+    "enabled": false,
+    "evaluation_interval": 60000,
+    "rules": [
+      {
+        "name": "high_error_rate",
+        "expression": "rate(mcp_errors_total[5m]) > 0.05",
+        "duration": "5m",
+        "severity": "warning",
+        "annotations": {
+          "summary": "High error rate detected",
+          "description": "Error rate is above 5% for the last 5 minutes"
+        }
+      },
+      {
+        "name": "high_latency",
+        "expression": "histogram_quantile(0.95, mcp_request_duration_seconds) > 1.0",
+        "duration": "10m",
+        "severity": "warning",
+        "annotations": {
+          "summary": "High latency detected",
+          "description": "P95 latency is above 1 second for the last 10 minutes"
+        }
+      },
+      {
+        "name": "server_down",
+        "expression": "mcp_server_up == 0",
+        "duration": "1m",
+        "severity": "critical",
+        "annotations": {
+          "summary": "Server is down",
+          "description": "Server {{ $labels.tool }} has been down for more than 1 minute"
+        }
+      }
+    ],
+    "notifiers": [
+      {
+        "type": "email",
+        "enabled": false,
+        "config": {
+          "to": ["admin@example.com"],
+          "from": "alerts@example.com",
+          "smtp_server": "localhost",
+          "smtp_port": 587
+        }
+      },
+      {
+        "type": "slack",
+        "enabled": false,
+        "config": {
+          "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+          "channel": "#alerts",
+          "username": "MCP Monitor"
+        }
+      }
+    ]
+  },
+  "tools": {
+    "webmcp": {
+      "enabled": true,
+      "metrics": {
+        "track_requests": true,
+        "track_tool_calls": true,
+        "track_errors": true
+      }
+    },
+    "oraclemcp": {
+      "enabled": true,
+      "metrics": {
+        "track_requests": true,
+        "track_tool_calls": true,
+        "track_errors": true
+      }
+    },
+    "ragmcp": {
+      "enabled": true,
+      "metrics": {
+        "track_requests": true,
+        "track_tool_calls": true,
+        "track_errors": true
+      }
+    },
+    "simplemcp8": {
+      "enabled": true,
+      "metrics": {
+        "track_requests": true,
+        "track_tool_calls": true,
+        "track_errors": true
+      }
+    },
+    "convertermcp": {
+      "enabled": true,
+      "metrics": {
+        "track_requests": true,
+        "track_tool_calls": true,
+        "track_errors": true
+      }
+    }
+  }
+}

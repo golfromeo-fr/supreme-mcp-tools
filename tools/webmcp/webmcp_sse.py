@@ -56,6 +56,10 @@ load_dotenv(env_path)
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
 
+# Log API key status at startup for debugging
+logger.info(f"BRAVE_SEARCH_API_KEY loaded: {'SET' if BRAVE_SEARCH_API_KEY else 'NOT SET'}")
+logger.info(f"SERPAPI_API_KEY loaded: {'SET' if SERPAPI_API_KEY else 'NOT SET'}")
+
 # Verify server components
 logger.info("Initializing Web MCP Server...")
 
@@ -300,6 +304,7 @@ async def brave_search_api_tool(arguments: dict) -> list[types.TextContent]:
     
     llm_mode: When True, returns concise JSON-like structure optimized for LLM consumption.
     """
+    logger.info(f"brave_search_api called - BRAVE_SEARCH_API_KEY: {'SET' if BRAVE_SEARCH_API_KEY else 'NOT SET'}")
     query = arguments.get("query")
     count = int(arguments.get("count", 10))
     timeout = float(arguments.get("timeout", 30.0))
@@ -314,7 +319,17 @@ async def brave_search_api_tool(arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text="Error: 'query' parameter is required")]
 
     if not BRAVE_SEARCH_API_KEY:
-        return [types.TextContent(type="text", text="Error: BRAVE_SEARCH_API_KEY not found in .env file. Please set your API key in the .env file.")]
+        logger.warning("brave_search_api called but BRAVE_SEARCH_API_KEY is not set in .env")
+        error_msg = (
+            "BRAVE_SEARCH_API_KEY is not configured.\n\n"
+            "To use brave_search_api, you need to:\n"
+            "1. Get a Brave Search API key from: https://brave.com/search/api/\n"
+            "2. Add it to your .env file: BRAVE_SEARCH_API_KEY=your_api_key_here\n\n"
+            "Alternative tools that don't require an API key:\n"
+            "- brave_search_web: Web scraping-based search (free, no API key needed)\n"
+            "- fetch_url: Fetch and process any URL content directly"
+        )
+        return [types.TextContent(type="text", text=error_msg)]
 
     try:
         # Use the correct endpoint: /res/v1/web/search
@@ -565,6 +580,7 @@ async def google_search_api_tool(arguments: dict) -> list[types.TextContent]:
     
     llm_mode: When True, returns concise JSON-like structure optimized for LLM consumption.
     """
+    logger.info(f"google_search_api called - SERPAPI_API_KEY: {'SET' if SERPAPI_API_KEY else 'NOT SET'}")
     query = arguments.get("query")
     engine = arguments.get("engine", "google")
     google_domain = arguments.get("google_domain", "google.com")
@@ -581,7 +597,17 @@ async def google_search_api_tool(arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text="Error: 'query' parameter is required")]
 
     if not SERPAPI_API_KEY:
-        return [types.TextContent(type="text", text="Error: SERPAPI_API_KEY not found in .env file. Please set your API key in the .env file.")]
+        logger.warning("google_search_api called but SERPAPI_API_KEY is not set in .env")
+        error_msg = (
+            "SERPAPI_API_KEY is not configured.\n\n"
+            "To use google_search_api, you need to:\n"
+            "1. Get a SerpAPI key from: https://serpapi.com/\n"
+            "2. Add it to your .env file: SERPAPI_API_KEY=your_api_key_here\n\n"
+            "Alternative tools that don't require an API key:\n"
+            "- brave_search_web: Web scraping-based search (free, no API key needed)\n"
+            "- fetch_url: Fetch and process any URL content directly"
+        )
+        return [types.TextContent(type="text", text=error_msg)]
 
     try:
         # Build SerpAPI parameters
