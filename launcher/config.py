@@ -27,7 +27,7 @@ class Config:
             # Relative paths from supreme-mcp-tools root
             "tools/webmcp",
             "tools/oraclemcp",
-            "tools/simplemcp8",
+            "tools/simplemcp",
             "tools/convertermcp",
             "tools/ragmcp"
         ],
@@ -36,9 +36,9 @@ class Config:
             "basePort": 8000,
             "portRange": [8000, 9000],
             "ports": {
-                "oracleMCP": 8000,
-                "web_mcp": 8001,
-                "simplemcp8": 8002
+                "oraclemcp": 8000,
+                "webmcp": 8001,
+                "simplemcp": 8002
             }
         },
         "server": {

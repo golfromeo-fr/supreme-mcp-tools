@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script for simplemcp8 Streamable HTTP tools."""
+"""Test script for simplemcp Streamable HTTP tools."""
 
 import json
 import requests
@@ -136,7 +136,7 @@ def test_greet_tool():
 def main():
     """Run all tests."""
     print("=" * 60)
-    print("Testing simplemcp8 Streamable HTTP Tools")
+    print("Testing simplemcp Streamable HTTP Tools")
     print("=" * 60)
     print(f"Server: {BASE_URL}\n")
     

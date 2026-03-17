@@ -133,7 +133,7 @@ Examples:
   python launchmcp.py webmcp oraclemcp
   python launchmcp.py --config custom_config.json webmcp
   python launchmcp.py --list-tools
-  python launchmcp.py --verbose webmcp oraclemcp simplemcp8
+  python launchmcp.py --verbose webmcp oraclemcp simplemcp
         """
     )
     
@@ -522,11 +522,11 @@ async def main() -> int:
     tool_names = args.tools if args.tools else None
     if tool_names:
         # Map tool names (with possible underscores) to directory names
-        # e.g., "web_mcp" -> "webmcp", "ragmcp" -> "ragmcp"
+        # e.g., "webmcp" -> "webmcp", "ragmcp" -> "ragmcp"
         search_dirs = []
         for tool_name in tool_names:
             # Try both with underscore and without
-            tool_dir_name = tool_name.replace("_", "")  # web_mcp -> webmcp
+            tool_dir_name = tool_name.replace("_", "")  # webmcp -> webmcp
             for dir_path in all_tool_dirs:
                 dir_name = Path(dir_path).name  # e.g., "webmcp"
                 if dir_name.lower() == tool_dir_name.lower():

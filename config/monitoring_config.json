@@ -143,7 +143,7 @@
         "track_errors": true
       }
     },
-    "simplemcp8": {
+    "simplemcp": {
       "enabled": true,
       "metrics": {
         "track_requests": true,

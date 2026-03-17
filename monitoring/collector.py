@@ -830,7 +830,7 @@ class MetricsCollector:
     def set_server_status(self, tool: str, up: bool) -> None:
         """Set server status."""
         with self._lock:
-            self._metrics[f"{self.name}_server_up"].record(
+            self._metrics["server_up"].record(
                 1 if up else 0,
                 {"tool": tool}
             )
@@ -838,7 +838,7 @@ class MetricsCollector:
     def set_server_start_time(self, tool: str, timestamp: Optional[float] = None) -> None:
         """Set server start time."""
         with self._lock:
-            self._metrics[f"{self.name}_server_start_time_seconds"].record(
+            self._metrics["server_start_time_seconds"].record(
                 timestamp or time.time(),
                 {"tool": tool}
             )
@@ -1096,7 +1096,7 @@ def track_duration(
     Yields:
         Dictionary that can be updated with status
     """
-    status = {"status": "error"}
+    status = {"status": "success"}
     start_time = time.time()
     try:
         yield status
@@ -1109,7 +1109,7 @@ def track_duration(
         collector.record_tool_call(
             tool=tool,
             tool_name=tool_name,
-            status=status.get("status", "error"),
+            status=status.get("status", "success"),
             duration=duration
         )
 

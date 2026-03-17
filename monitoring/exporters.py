@@ -411,19 +411,19 @@ def create_metrics_router(
     endpoint = MetricsEndpoint(registry, collector_name, api_key=api_key)
     
     @router.get("/metrics", response_class=PlainTextResponse)
-    async def metrics():
+    async def metrics(request: Request):
         """Get Prometheus-formatted metrics."""
-        return await endpoint.get_metrics(None)
+        return await endpoint.get_metrics(request)
     
     @router.get("/health")
-    async def health():
+    async def health(request: Request):
         """Get health status."""
-        return await endpoint.get_health(None)
+        return await endpoint.get_health(request)
     
     @router.get("/stats")
-    async def stats():
+    async def stats(request: Request):
         """Get basic statistics."""
-        return await endpoint.get_stats(None)
+        return await endpoint.get_stats(request)
     
     return router
 

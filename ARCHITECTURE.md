@@ -19,16 +19,16 @@ supreme-mcp-tools/
 │   └── launcher_config.example.json
 ├── tools/                       # MCP tool directories
 │   ├── webmcp/
-│   │   ├── web_mcp.py
+│   │   ├── webmcp.py
 │   │   ├── requirements.txt
 │   │   ├── .env
 │   │   └── README.md
 │   ├── oraclemcp/
-│   │   ├── oracleMCP.py
+│   │   ├── oraclemcp.py
 │   │   ├── requirements.txt
 │   │   └── README.md
-│   └── simplemcp8/
-│       ├── simplemcp8.py
+│   └── simplemcp/
+│       ├── simplemcp.py
 │       ├── requirements.txt
 │       └── README.md
 ├── logs/

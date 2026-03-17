@@ -4,16 +4,16 @@
     "tools/oraclemcp",
     "tools/convertermcp",
     "tools/ragmcp",
-    "tools/simplemcp8"
+    "tools/simplemcp"
   ],
   "portAllocation": {
     "mode": "manual",
     "basePort": 8000,
     "portRange": [8000, 9000],
     "ports": {
-      "oracleMCP": 8000,
+      "oraclemcp": 8000,
       "web_mcp": 8001,
-      "simplemcp8": 8002,
+      "simplemcp": 8002,
       "convertermcp": 8003,
       "ragmcp": 8004
     }

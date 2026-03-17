@@ -31,7 +31,7 @@ All notable changes to the MCP Launcher will be documented in this file.
 ### Added
 - Initial release of MCP Launcher
 - Unified launcher for multiple MCP tools in single process
-- Support for simplemcp8, webmcp, oraclemcp, convertermcp, ragmcp
+- Support for simplemcp, webmcp, oraclemcp, convertermcp, ragmcp
 - Memory-efficient asyncio-based architecture (~50-65% savings)
 - CLI with --list-tools, --verbose, --dry-run options
 - Configuration via config.json with manual/auto port allocation

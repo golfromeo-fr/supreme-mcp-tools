@@ -30,7 +30,7 @@ The original SSE-based transport using Starlette.
 
 **Standalone Mode:**
 ```bash
-python simplemcp8.py
+python simplemcp.py
 ```
 
 The server will start on `http://0.0.0.0:8002` by default.
@@ -41,31 +41,31 @@ The new Streamable HTTP transport using FastAPI with JSON-RPC framing.
 
 **Standalone Mode:**
 ```bash
-python simplemcp8_streamable.py
+python simplemcp_streamable.py
 ```
 
 The server will start on `http://0.0.0.0:8003` by default.
 
 **With Custom Port:**
 ```bash
-python simplemcp8_streamable.py --host 0.0.0.0 --port 8080
+python simplemcp_streamable.py --host 0.0.0.0 --port 8080
 ```
 
 **With Debug Logging:**
 ```bash
-python simplemcp8_streamable.py --log-level debug
+python simplemcp_streamable.py --log-level debug
 ```
 
 **Important:** The Streamable HTTP server requires the `launcher` module to be available. Run from the supreme-mcp-tools directory:
 ```bash
 cd supreme-mcp-tools
-python tools/simplemcp8/simplemcp8_streamable.py
+python tools/simplemcp/simplemcp_streamable.py
 ```
 
 ### With Unified Launcher
 
 ```bash
-python launchmcp.py simplemcp8
+python launchmcp.py simplemcp
 ```
 
 ## Available Tools
@@ -190,7 +190,7 @@ Generates a greeting message.
 
 | Feature | SSE Transport | Streamable HTTP Transport |
 |---------|--------------|---------------------------|
-| File | `simplemcp8.py` | `simplemcp8_streamable.py` |
+| File | `simplemcp.py` | `simplemcp_streamable.py` |
 | Port | 8002 | 8003 |
 | Framework | Starlette | FastAPI |
 | Protocol | Server-Sent Events | JSON-RPC over HTTP |
@@ -205,7 +205,7 @@ Generates a greeting message.
 ```json
 {
   "mcpServers": {
-    "simplemcp8": {
+    "simplemcp": {
       "type": "sse",
       "url": "http://localhost:8002/sse",
       "headers": {
@@ -221,7 +221,7 @@ Generates a greeting message.
 ```json
 {
   "mcpServers": {
-    "simplemcp8": {
+    "simplemcp": {
       "type": "streamable-http",
       "url": "http://localhost:8003/mcp",
       "headers": {
@@ -259,7 +259,7 @@ Streamable HTTP transport offers several advantages:
 3. **Start the new server:**
    ```bash
    cd supreme-mcp-tools
-   python tools/simplemcp8/simplemcp8_streamable.py
+   python tools/simplemcp/simplemcp_streamable.py
    ```
 
 4. **Test the connection:**
@@ -270,7 +270,7 @@ Streamable HTTP transport offers several advantages:
 
 If you encounter issues, you can easily rollback to SSE:
 1. Stop the Streamable HTTP server
-2. Start the SSE server: `python simplemcp8.py`
+2. Start the SSE server: `python simplemcp.py`
 3. Revert your VSCode configuration to use SSE transport
 
 ## MCP Tool Structure
@@ -385,7 +385,7 @@ If you get an import error when running the Streamable HTTP server:
 - Ensure you're running from the supreme-mcp-tools directory:
   ```bash
   cd supreme-mcp-tools
-  python tools/simplemcp8/simplemcp8_streamable.py
+  python tools/simplemcp/simplemcp_streamable.py
   ```
 - Verify the launcher/streamable_http module exists
 - Check that the launcher directory has an `__init__.py` file

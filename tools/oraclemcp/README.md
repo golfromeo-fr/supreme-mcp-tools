@@ -55,7 +55,7 @@ The Oracle MCP server supports two transport types:
 #### Standalone Mode
 
 ```bash
-python oracleMCP.py
+python oraclemcp.py
 ```
 
 #### With Unified Launcher
@@ -85,7 +85,7 @@ python launchmcp.py oraclemcp
 #### Standalone Mode
 
 ```bash
-python oracleMCP_streamable.py
+python oraclemcp_streamable.py
 ```
 
 #### With Unified Launcher
@@ -118,14 +118,14 @@ To migrate from SSE to Streamable HTTP transport:
 1. **Update your VSCode configuration** - Change the transport type from `"sse"` to `"streamable-http"` and update the URL from `"/sse/"` to `"/mcp"`
 2. **Add framing configuration** - Add `"framing": "newline-delimited"` to your configuration
 3. **Verify dependencies** - Ensure `fastapi>=0.104.0` is installed (included in requirements.txt)
-4. **Update startup command** - Use `oracleMCP_streamable.py` instead of `oracleMCP.py`
+4. **Update startup command** - Use `oraclemcp_streamable.py` instead of `oraclemcp.py`
 
 See the [Migration Script](#migration-script) section for an automated migration helper.
 
 ### Command Line Options (Streamable HTTP)
 
 ```bash
-python oracleMCP_streamable.py --help
+python oraclemcp_streamable.py --help
 ```
 
 Options:
@@ -277,7 +277,7 @@ If you prefer to migrate manually:
    ```
 3. **Start the Streamable HTTP server**:
    ```bash
-   python oracleMCP_streamable.py
+   python oraclemcp_streamable.py
    ```
 4. **Verify the server is running**:
    ```bash
@@ -305,7 +305,7 @@ To rollback to SSE transport:
    ```
 3. **Start the SSE server**:
    ```bash
-   python oracleMCP.py
+   python oraclemcp.py
    ```
 
 ## Troubleshooting
@@ -332,7 +332,7 @@ To rollback to SSE transport:
 ### Streamable HTTP Transport Issues
 
 #### Connection Refused
-- Ensure the Streamable HTTP server is running: `python oracleMCP_streamable.py`
+- Ensure the Streamable HTTP server is running: `python oraclemcp_streamable.py`
 - Check that the port (default: 8000) is not already in use
 - Verify the URL in VSCode configuration matches the server endpoint
 
@@ -358,12 +358,12 @@ To rollback to SSE transport:
 
 ### Log Files
 
-- **SSE Transport**: `oracleMCP.log`
-- **Streamable HTTP Transport**: `oracleMCP_streamable.log`
+- **SSE Transport**: `oraclemcp.log`
+- **Streamable HTTP Transport**: `oraclemcp_streamable.log`
 
 Monitor logs in real-time:
 ```bash
-tail -f oracleMCP_streamable.log
+tail -f oraclemcp_streamable.log
 ```
 
 ## License

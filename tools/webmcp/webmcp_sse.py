@@ -831,7 +831,7 @@ async def post_url_tool(arguments: dict) -> list[types.TextContent]:
     """
     Handler for sending POST requests to a URL with JSON payload support.
     
-    Based on oracleMCP implementation.
+    Based on oraclemcp implementation.
     Supports HTTP POST with optional data and headers.
     """
     logger.debug(f"Processing post_url tool with arguments: {arguments}")

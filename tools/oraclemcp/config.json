@@ -5,13 +5,13 @@
   "transports": {
     "sse": {
       "enabled": true,
-      "script": "oracleMCP.py",
+      "script": "oraclemcp_sse.py",
       "port": 8000,
       "endpoint": "/sse/"
     },
     "streamable-http": {
       "enabled": true,
-      "script": "oracleMCP_streamable.py",
+      "script": "oraclemcp_streamable.py",
       "port": 8000,
       "endpoint": "/mcp",
       "framing_format": "newline-delimited"

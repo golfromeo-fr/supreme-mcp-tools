@@ -499,6 +499,6 @@ For issues and questions:
 
 ## Related Tools
 
-- **oracleMCP**: Oracle database tools and SQL execution
+- **oraclemcp**: Oracle database tools and SQL execution
 - **webmcp**: Web search and URL fetching
 - **convertermcp**: Document conversion tools

@@ -27,7 +27,7 @@ except ImportError as e:
 
 # Add parent directories to path for importing StreamableHttpTransportBase
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
-# Script is at: tools/oraclemcp/oracleMCP_streamable.py
+# Script is at: tools/oraclemcp/oraclemcp_streamable.py
 # supreme-mcp-tools is at: . (relative path)
 supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if supreme_mcp_tools_dir not in sys.path:
@@ -55,14 +55,14 @@ except ImportError as e:
     print(f"supreme_mcp_tools_dir: {supreme_mcp_tools_dir}", file=sys.stderr)
     print(f"Python path: {sys.path}", file=sys.stderr)
     print("Please ensure the launcher/streamable_http module is available.", file=sys.stderr)
-    print("Try running from the supreme-mcp-tools directory: python tools/oraclemcp/oracleMCP_streamable.py", file=sys.stderr)
+    print("Try running from the supreme-mcp-tools directory: python tools/oraclemcp/oraclemcp_streamable.py", file=sys.stderr)
     sys.exit(1)
 
 from dotenv import load_dotenv
 
 # Configure logging with file and console output
 SCRIPT_DIR = Path(__file__).parent.absolute()
-LOG_FILE = SCRIPT_DIR / "oracleMCP_streamable.log"
+LOG_FILE = SCRIPT_DIR / "oraclemcp_streamable.log"
 
 # Configure root logger first
 logging.basicConfig(
@@ -74,7 +74,7 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger("oracleMCP_streamable")
+logger = logging.getLogger("oraclemcp_streamable")
 
 # Log startup information
 logger.info("="*80)
@@ -276,7 +276,7 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
             logger.warning(f"Client sent unsupported protocol version: {protocol_version}, using 2024-11-05")
             protocol_version = "2024-11-05"
         
-        # Return server capabilities - only tools are supported (matching original oracleMCP)
+        # Return server capabilities - only tools are supported (matching original oraclemcp)
         return {
             "jsonrpc": "2.0",
             "result": {
@@ -1234,7 +1234,7 @@ if __name__ == "__main__":
     
     # Set log level
     log_level = getattr(logging, args.log_level.upper())
-    logging.getLogger("oracleMCP_streamable").setLevel(log_level)
+    logging.getLogger("oraclemcp_streamable").setLevel(log_level)
     
     logger.info(f"Starting Oracle MCP Streamable HTTP Server on http://{args.host}:{args.port}")
     

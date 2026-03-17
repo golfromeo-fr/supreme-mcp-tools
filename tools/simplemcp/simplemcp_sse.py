@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SimpleMCP8 Server - Basic MCP Tools
+SimpleMCP Server - Basic MCP Tools
 Provides simple demonstration tools for testing and development.
 """
 import sys
@@ -27,17 +27,17 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("simplemcp8")
+logger = logging.getLogger("simplemcp")
 
 # ============================================================================
 # Server Initialization
 # ============================================================================
 
 # Verify server components
-logger.info("Initializing SimpleMCP8 Server...")
+logger.info("Initializing SimpleMCP Server...")
 
 try:
-    server = Server("simplemcp8")
+    server = Server("simplemcp")
     sse_transport = SseServerTransport("/messages/")
     logger.info("Server components initialized successfully")
 except Exception as e:
@@ -178,7 +178,7 @@ app = Starlette(
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting SimpleMCP8 Server on http://0.0.0.0:8002")
+    logger.info("Starting SimpleMCP Server on http://0.0.0.0:8002")
     try:
         uvicorn.run(app, host="0.0.0.0", port=8002)
     except KeyboardInterrupt:
@@ -194,7 +194,7 @@ VSCode Configuration Example:
 
 {
   "mcpServers": {
-    "simplemcp8": {
+    "simplemcp": {
       "type": "sse",
       "url": "http://localhost:8002/sse",
       "headers": {

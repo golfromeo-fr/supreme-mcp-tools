@@ -319,7 +319,7 @@ class MetricsContext:
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Exit the context and record request end."""
-        duration = self.start_time - time.time() if self.start_time else 0.0
+        duration = time.time() - self.start_time if self.start_time else 0.0
         
         if exc_type is not None:
             # An exception occurred

@@ -4,7 +4,7 @@
 
 **Status**: Tested as single user server (not yet tested as multi-user)
 
-**Available Tools**: `simplemcp8` `webmcp` `ragmcp` `convertermcp` `oraclemcp`
+**Available Tools**: `simplemcp` `webmcp` `ragmcp` `convertermcp` `oraclemcp`
 
 A unified launcher system for running multiple MCP (Model Context Protocol) tools in a single Python process.
 This reduces memory usage by approximately 50% compared to running each tool as a separate process.
@@ -15,7 +15,7 @@ This reduces memory usage by approximately 50% compared to running each tool as 
 
 | Tool | Description |
 |------|-------------|
-| `simplemcp8` | Simple test tools (double, square, greet) |
+| `simplemcp` | Simple test tools (double, square, greet) |
 | `webmcp` | Web search (Brave Search, Google API), URL fetch, HTTP POST |
 
 ---
@@ -34,7 +34,7 @@ This reduces memory usage by approximately 50% compared to running each tool as 
 
 ```bash
 # Terminal session
-$ python launchmcp.py simplemcp8
+$ python launchmcp.py simplemcp
 ```
 
 **Output:**
@@ -42,38 +42,38 @@ $ python launchmcp.py simplemcp8
 2026-02-24 02:05:29,013 - root - INFO - ============================================================
 2026-02-24 02:05:29,013 - root - INFO - MCP Launcher Starting
 2026-02-24 02:05:29,013 - root - INFO - ============================================================
-2026-02-24 02:05:29,013 - root - INFO - Searching only in directories for requested tools: ['path/to/supreme-mcp-tools/tools/simplemcp8']
-2026-02-24 02:05:29,013 - launcher.tool_discovery - INFO - Searching for MCP tools in: path/to/supreme-mcp-tools/tools/simplemcp8
-2026-02-24 02:05:29,591 - launcher.streamable_http.streamable_http_base - INFO - StreamableHttpTransport initialized for 'simplemcp8'
-2026-02-24 02:05:29,591 - simplemcp8_streamable - INFO - SimpleMCP8 Streamable HTTP transport initialized
-2026-02-24 02:05:29,592 - launcher.tool_discovery - INFO - Discovered tool: simplemcp8 from path/to/supreme-mcp-tools/tools/simplemcp8/simplemcp8_streamable.py
-2026-02-24 02:05:29,592 - root - INFO - Discovered 1 MCP tools: ['simplemcp8']
-2026-02-24 02:05:29,592 - launcher.port_manager - INFO - Allocated port 8002 for tool simplemcp8
-2026-02-24 02:05:29,592 - root - INFO - Allocated ports: {'simplemcp8': 8002}
+2026-02-24 02:05:29,013 - root - INFO - Searching only in directories for requested tools: ['path/to/supreme-mcp-tools/tools/simplemcp']
+2026-02-24 02:05:29,013 - launcher.tool_discovery - INFO - Searching for MCP tools in: path/to/supreme-mcp-tools/tools/simplemcp
+2026-02-24 02:05:29,591 - launcher.streamable_http.streamable_http_base - INFO - StreamableHttpTransport initialized for 'simplemcp'
+2026-02-24 02:05:29,591 - simplemcp_streamable - INFO - SimpleMCP8 Streamable HTTP transport initialized
+2026-02-24 02:05:29,592 - launcher.tool_discovery - INFO - Discovered tool: simplemcp from path/to/supreme-mcp-tools/tools/simplemcp/simplemcp_streamable.py
+2026-02-24 02:05:29,592 - root - INFO - Discovered 1 MCP tools: ['simplemcp']
+2026-02-24 02:05:29,592 - launcher.port_manager - INFO - Allocated port 8002 for tool simplemcp
+2026-02-24 02:05:29,592 - root - INFO - Allocated ports: {'simplemcp': 8002}
 2026-02-24 02:05:29,592 - root - INFO - Starting 1 servers...
-2026-02-24 02:05:29,592 - launcher.server_manager - INFO - Starting server for simplemcp8 on port 8002
-2026-02-24 02:05:29,592 - launcher.server_manager - INFO - Server for simplemcp8 starting on port 8002
-2026-02-24 02:05:29,592 - root - INFO - Server for simplemcp8 started on port 8002
-2026-02-24 02:05:29,592 - launcher.server_manager - INFO - Running server for simplemcp8 on port 8002
+2026-02-24 02:05:29,592 - launcher.server_manager - INFO - Starting server for simplemcp on port 8002
+2026-02-24 02:05:29,592 - launcher.server_manager - INFO - Server for simplemcp starting on port 8002
+2026-02-24 02:05:29,592 - root - INFO - Server for simplemcp started on port 8002
+2026-02-24 02:05:29,592 - launcher.server_manager - INFO - Running server for simplemcp on port 8002
 INFO:     Started server process [2850649]
 INFO:     Waiting for application startup.
-2026-02-24 02:05:29,606 - simplemcp8_streamable - INFO - SimpleMCP8 Streamable HTTP server starting up...
+2026-02-24 02:05:29,606 - simplemcp_streamable - INFO - SimpleMCP8 Streamable HTTP server starting up...
 2026-02-24 02:05:29,606 - root - INFO - Successfully started 1/1 servers
 
 ============================================================
 MCP Launcher Running
 ============================================================
-  simplemcp8: http://0.0.0.0:8002
+  simplemcp: http://0.0.0.0:8002
 ============================================================
 Press Ctrl+C to stop all servers
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
-2026-02-24 02:05:29,702 - simplemcp8_streamable - INFO - Processing JSON-RPC request: method=initialize, id=0
+2026-02-24 02:05:29,702 - simplemcp_streamable - INFO - Processing JSON-RPC request: method=initialize, id=0
 INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
-2026-02-24 02:05:29,724 - simplemcp8_streamable - INFO - Processing JSON-RPC request: method=notifications/initialized, id=None
+2026-02-24 02:05:29,724 - simplemcp_streamable - INFO - Processing JSON-RPC request: method=notifications/initialized, id=None
 INFO:     127.0.0.1:35192 - "POST /mcp HTTP/1.1" 200 OK
-2026-02-24 02:05:29,733 - simplemcp8_streamable - INFO - Processing JSON-RPC request: method=tools/list, id=1
+2026-02-24 02:05:29,733 - simplemcp_streamable - INFO - Processing JSON-RPC request: method=tools/list, id=1
 INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
 ```
 
@@ -334,7 +334,7 @@ Output:
 ============================================================
 MCP Launcher Running
 ============================================================
-  oracleMCP: http://0.0.0.0:8000
+  oraclemcp: http://0.0.0.0:8000
   webmcp: http://0.0.0.0:8001
   convertermcp: http://0.0.0.0:8003
   ragmcp: http://0.0.0.0:8004
@@ -354,7 +354,7 @@ Output:
 MCP Launcher Running
 ============================================================
   webmcp: http://0.0.0.0:8001
-  oracleMCP: http://0.0.0.0:8000
+  oraclemcp: http://0.0.0.0:8000
 ============================================================
 Press Ctrl+C to stop all servers
 ```

@@ -43,7 +43,7 @@ except ImportError as e:
 
 # Add parent directories to path for importing StreamableHttpTransportBase
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
-# Script is at: supreme-mcp-tools/tools/webmcp/web_mcp_streamable.py
+# Script is at: supreme-mcp-tools/tools/webmcp/webmcp_streamable.py
 # supreme-mcp-tools is at: supreme-mcp-tools
 supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if supreme_mcp_tools_dir not in sys.path:
@@ -71,7 +71,7 @@ except ImportError as e:
     print(f"supreme_mcp_tools_dir: {supreme_mcp_tools_dir}", file=sys.stderr)
     print(f"Python path: {sys.path}", file=sys.stderr)
     print("Please ensure the launcher/streamable_http module is available.", file=sys.stderr)
-    print("Try running from the supreme-mcp-tools directory: python tools/webmcp/web_mcp_streamable.py", file=sys.stderr)
+    print("Try running from the supreme-mcp-tools directory: python tools/webmcp/webmcp_streamable.py", file=sys.stderr)
     sys.exit(1)
 
 # Configure logging
@@ -79,7 +79,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("web_mcp_streamable")
+logger = logging.getLogger("webmcp_streamable")
 
 # Add protocol version compatibility
 SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2025-11-25"]
@@ -261,7 +261,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             framing_format="newline-delimited",
             request_timeout=60.0,  # Longer timeout for web requests
         )
-        super().__init__("web_mcp", config)
+        super().__init__("webmcp", config)
         logger.info("Web MCP Streamable HTTP transport initialized")
     
     async def _handle_initialize(self, params, session):
@@ -272,7 +272,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             logger.warning(f"Client sent unsupported protocol version: {protocol_version}, using 2024-11-05")
             protocol_version = "2024-11-05"
         
-        # Return server capabilities - only tools are supported (matching original web_mcp)
+        # Return server capabilities - only tools are supported (matching original webmcp)
         return {
             "jsonrpc": "2.0",
             "result": {
@@ -1759,7 +1759,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
         """
         Handler for sending POST requests to a URL with JSON payload support.
         
-        Based on oracleMCP implementation.
+        Based on oraclemcp implementation.
         Supports HTTP POST with optional data and headers.
         """
         logger.debug(f"Processing post_url tool with arguments: {arguments}")
@@ -1904,7 +1904,7 @@ else:
 async def root():
     """Root endpoint with server information."""
     return {
-        "name": "web_mcp",
+        "name": "webmcp",
         "version": "1.0.0",
         "transport": "streamable-http",
         "endpoint": "/mcp",
@@ -2014,7 +2014,7 @@ if __name__ == "__main__":
     
     # Set log level
     log_level = getattr(logging, args.log_level.upper())
-    logging.getLogger("web_mcp_streamable").setLevel(log_level)
+    logging.getLogger("webmcp_streamable").setLevel(log_level)
     
     logger.info(f"Starting Web MCP Streamable HTTP Server on http://{args.host}:{args.port}")
     
@@ -2038,7 +2038,7 @@ VSCode Configuration Example (Streamable HTTP):
 
 {
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "streamable-http",
       "url": "http://localhost:8002/mcp",
       "headers": {

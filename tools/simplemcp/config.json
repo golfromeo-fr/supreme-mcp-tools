@@ -1,19 +1,19 @@
 {
-  "name": "simplemcp8",
+  "name": "simplemcp",
   "version": "1.0.0",
   "description": "Simple MCP server for testing and demonstration with basic tools",
   "transports": {
     "sse": {
       "enabled": true,
-      "file": "simplemcp8.py",
+      "file": "simplemcp_sse.py",
       "port": 8002,
       "endpoint": "/sse",
       "messages_path": "/messages/"
     },
     "streamable-http": {
       "enabled": true,
-      "file": "simplemcp8_streamable.py",
-      "port": 8003,
+      "file": "simplemcp_streamable.py",
+      "port": 8002,
       "endpoint": "/mcp",
       "framing_format": "newline-delimited",
       "encoding": "utf-8"
@@ -71,7 +71,7 @@
     }
   },
   "server_info": {
-    "name": "simplemcp8",
+    "name": "simplemcp",
     "version": "1.0.0",
     "protocol_version": "2024-11-05"
   },

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SimpleMCP8 Server - Streamable HTTP Transport
+SimpleMCP Server - Streamable HTTP Transport
 Provides simple demonstration tools for testing and development using Streamable HTTP transport.
 """
 import sys
@@ -23,7 +23,7 @@ except ImportError as e:
 
 # Add parent directories to path for importing StreamableHttpTransportBase
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
-# Script is at: tools/simplemcp8/simplemcp8_streamable.py
+# Script is at: tools/simplemcp/simplemcp_streamable.py
 # supreme-mcp-tools is at: . (relative path)
 supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if supreme_mcp_tools_dir not in sys.path:
@@ -51,7 +51,7 @@ except ImportError as e:
     print(f"supreme_mcp_tools_dir: {supreme_mcp_tools_dir}", file=sys.stderr)
     print(f"Python path: {sys.path}", file=sys.stderr)
     print("Please ensure the launcher/streamable_http module is available.", file=sys.stderr)
-    print("Try running from the supreme-mcp-tools directory: python tools/simplemcp8/simplemcp8_streamable.py", file=sys.stderr)
+    print("Try running from the supreme-mcp-tools directory: python tools/simplemcp/simplemcp_streamable.py", file=sys.stderr)
     sys.exit(1)
 
 # Configure logging
@@ -62,30 +62,30 @@ logging.basicConfig(
 
 # Add protocol version compatibility
 SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2025-11-25"]
-logger = logging.getLogger("simplemcp8_streamable")
+logger = logging.getLogger("simplemcp_streamable")
 
 
 # ============================================================================
-# SimpleMCP8 Streamable HTTP Transport Implementation
+# SimpleMCP Streamable HTTP Transport Implementation
 # ============================================================================
 
-class SimpleMCP8StreamableHttp(StreamableHttpTransportBase):
+class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
     """
-    SimpleMCP8 server implementation using Streamable HTTP transport.
+    SimpleMCP server implementation using Streamable HTTP transport.
     
     This class provides the three simple tools (double, square, greet) using
     the Streamable HTTP transport with JSON-RPC framing.
     """
     
     def __init__(self):
-        """Initialize the SimpleMCP8 Streamable HTTP server."""
+        """Initialize the SimpleMCP Streamable HTTP server."""
         config = StreamableHttpConfig(
             endpoint="/mcp",
             framing_format="newline-delimited",
             request_timeout=30.0,
         )
-        super().__init__("simplemcp8", config)
-        logger.info("SimpleMCP8 Streamable HTTP transport initialized")
+        super().__init__("simplemcp", config)
+        logger.info("SimpleMCP Streamable HTTP transport initialized")
     
     async def _handle_initialize(self, params, session):
         """Handle initialize request - only tools are supported."""
@@ -95,7 +95,7 @@ class SimpleMCP8StreamableHttp(StreamableHttpTransportBase):
             logger.warning(f"Client sent unsupported protocol version: {protocol_version}, using 2024-11-05")
             protocol_version = "2024-11-05"
         
-        # Return server capabilities - only tools are supported (matching original simplemcp8)
+        # Return server capabilities - only tools are supported (matching original simplemcp)
         return {
             "jsonrpc": "2.0",
             "result": {
@@ -278,22 +278,22 @@ class SimpleMCP8StreamableHttp(StreamableHttpTransportBase):
 # ============================================================================
 
 # Create the transport instance
-transport = SimpleMCP8StreamableHttp()
+transport = SimpleMCPStreamableHttp()
 
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application lifespan events."""
     # Startup
-    logger.info("SimpleMCP8 Streamable HTTP server starting up...")
+    logger.info("SimpleMCP Streamable HTTP server starting up...")
     yield
     # Shutdown
-    logger.info("SimpleMCP8 Streamable HTTP server shutting down...")
+    logger.info("SimpleMCP Streamable HTTP server shutting down...")
     await transport.cleanup_sessions()
 
 # Create FastAPI application with lifespan
 app = FastAPI(
-    title="SimpleMCP8 Streamable HTTP Server",
+    title="SimpleMCP Streamable HTTP Server",
     description="Simple MCP tools using Streamable HTTP transport",
     version="1.0.0",
     lifespan=lifespan
@@ -304,7 +304,7 @@ app = FastAPI(
 # ============================================================================
 
 # Tool name for metrics labeling
-TOOL_NAME = "simplemcp8"
+TOOL_NAME = "simplemcp"
 
 # Try to add monitoring middleware and routes (graceful degradation if monitoring unavailable)
 if MONITORING_AVAILABLE and add_metrics_middleware is not None:
@@ -313,7 +313,7 @@ if MONITORING_AVAILABLE and add_metrics_middleware is not None:
         registry = MetricsRegistry.get_instance()
         
         # Add metrics middleware to track HTTP requests
-        # Using collector_name=TOOL_NAME ensures metrics are labeled with "simplemcp8"
+        # Using collector_name=TOOL_NAME ensures metrics are labeled with "simplemcp"
         add_metrics_middleware(
             app,
             collector_name=TOOL_NAME,
@@ -340,7 +340,7 @@ else:
 async def root():
     """Root endpoint with server information."""
     return {
-        "name": "simplemcp8",
+        "name": "simplemcp",
         "version": "1.0.0",
         "transport": "streamable-http",
         "endpoint": "/mcp",
@@ -422,7 +422,7 @@ async def handle_mcp_request(request: Request):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="SimpleMCP8 Streamable HTTP Server")
+    parser = argparse.ArgumentParser(description="SimpleMCP Streamable HTTP Server")
     parser.add_argument(
         "--host",
         default="0.0.0.0",
@@ -445,9 +445,9 @@ if __name__ == "__main__":
     
     # Set log level
     log_level = getattr(logging, args.log_level.upper())
-    logging.getLogger("simplemcp8_streamable").setLevel(log_level)
+    logging.getLogger("simplemcp_streamable").setLevel(log_level)
     
-    logger.info(f"Starting SimpleMCP8 Streamable HTTP Server on http://{args.host}:{args.port}")
+    logger.info(f"Starting SimpleMCP Streamable HTTP Server on http://{args.host}:{args.port}")
     
     try:
         uvicorn.run(
@@ -469,7 +469,7 @@ VSCode Configuration Example (Streamable HTTP):
 
 {
   "mcpServers": {
-    "simplemcp8": {
+    "simplemcp": {
       "type": "streamable-http",
       "url": "http://localhost:8003/mcp",
       "headers": {

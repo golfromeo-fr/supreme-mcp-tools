@@ -5,7 +5,7 @@
   "toolDirectories": [
     "/path/to/tools/webmcp",
     "/path/to/tools/oraclemcp",
-    "/path/to/tools/simplemcp8"
+    "/path/to/tools/simplemcp"
   ],
   "_comment3": "List of directories to search for MCP tools. Each directory should contain a Python file that exports server, app, and sse_transport objects.",
 
@@ -19,8 +19,8 @@
     "ports": {
       "_comment7": "Manual port assignments (only used in manual mode)",
       "web_mcp": 8001,
-      "oracleMCP": 8000,
-      "simplemcp8": 8002
+      "oraclemcp": 8000,
+      "simplemcp": 8002
     }
   },
 

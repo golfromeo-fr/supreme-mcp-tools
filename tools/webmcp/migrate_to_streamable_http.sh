@@ -39,7 +39,7 @@ echo ""
 echo -e "${YELLOW}Current SSE Configuration:${NC}"
 echo '{
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "sse",
       "url": "http://localhost:8001/sse",
       "headers": {
@@ -54,7 +54,7 @@ echo ""
 echo -e "${YELLOW}New Streamable HTTP Configuration:${NC}"
 echo '{
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "streamable-http",
       "url": "http://localhost:8002/mcp",
       "headers": {
@@ -70,16 +70,16 @@ echo ""
 echo -e "${BLUE}Migration Steps:${NC}"
 echo ""
 echo "1. Stop the SSE server (if running)"
-echo "   - Press Ctrl+C in the terminal running web_mcp.py"
+echo "   - Press Ctrl+C in the terminal running webmcp.py"
 echo ""
 echo "2. Update your VSCode configuration:"
 echo "   - Open VSCode settings (Ctrl+,)"
 echo "   - Search for 'mcpServers'"
-echo "   - Replace the web_mcp configuration with the new one shown above"
+echo "   - Replace the webmcp configuration with the new one shown above"
 echo ""
 echo "3. Start the Streamable HTTP server:"
-echo "   - Run: python web_mcp_streamable.py"
-echo "   - Or with custom options: python web_mcp_streamable.py --host 0.0.0.0 --port 8002"
+echo "   - Run: python webmcp_streamable.py"
+echo "   - Or with custom options: python webmcp_streamable.py --host 0.0.0.0 --port 8002"
 echo ""
 echo "4. Verify the server is running:"
 echo "   - Run: curl http://localhost:8002/health"
@@ -127,14 +127,14 @@ if [[ "$start_response" =~ ^[Yy]$ ]]; then
     echo ""
     
     # Start the server in the foreground
-    cd "$SCRIPT_DIR" && python3 web_mcp_streamable.py
+    cd "$SCRIPT_DIR" && python3 webmcp_streamable.py
 else
     echo ""
     echo -e "${GREEN}Migration preparation complete!${NC}"
     echo ""
     echo "To start the Streamable HTTP server later, run:"
     echo "  cd $SCRIPT_DIR"
-    echo "  python3 web_mcp_streamable.py"
+    echo "  python3 webmcp_streamable.py"
     echo ""
 fi
 
@@ -150,7 +150,7 @@ echo "1. Stop the Streamable HTTP server (if running)"
 echo "2. Restore your VSCode configuration to:"
 echo '{
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "sse",
       "url": "http://localhost:8001/sse",
       "headers": {
@@ -159,7 +159,7 @@ echo '{
     }
   }
 }'
-echo "3. Start the SSE server: python web_mcp.py"
+echo "3. Start the SSE server: python webmcp.py"
 echo ""
 
 echo -e "${GREEN}Migration complete!${NC}"

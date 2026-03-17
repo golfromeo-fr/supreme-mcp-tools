@@ -18,7 +18,7 @@ import openai
 
 # Configure logging with file and console output
 SCRIPT_DIR = Path(__file__).parent.absolute()
-LOG_FILE = SCRIPT_DIR / "oracleMCP.log"
+LOG_FILE = SCRIPT_DIR / "oraclemcp.log"
 
 # Configure root logger first
 logging.basicConfig(
@@ -30,7 +30,7 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger("oracleMCP")
+logger = logging.getLogger("oraclemcp")
 
 # Log startup information
 logger.info("="*80)
@@ -49,7 +49,7 @@ def initialize_server():
     global server, sse_transport
     try:
         logger.info("Creating MCP server instance")
-        server = Server("oracleMCP")
+        server = Server("oraclemcp")
         logger.info("Creating SSE transport")
         sse_transport = SseServerTransport("/messages/")
         return True
@@ -679,7 +679,7 @@ settings.json configuration:
 			],
 			"env": {}
 		}, */
-		"oracleMCP": {
+		"oraclemcp": {
 			"type": "sse",
 			"url": "http://0.0.0.0:8000/sse/",
 			"headers": {

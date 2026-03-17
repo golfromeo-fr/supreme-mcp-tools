@@ -39,12 +39,12 @@ The server will start on `http://0.0.0.0:8001` with SSE endpoint at `/sse`
 
 #### Option 1: Using the startup script (recommended)
 ```bash
-start_web_mcp.bat
+start_webmcp.bat
 ```
 
 #### Option 2: Direct Python command
 ```bash
-python web_mcp.py
+python webmcp.py
 ```
 
 ### Streamable HTTP Transport (Recommended)
@@ -53,17 +53,17 @@ The Streamable HTTP server will start on `http://0.0.0.0:8002` with endpoint at 
 
 #### Option 1: Using the startup script (if available)
 ```bash
-start_web_mcp_streamable.bat
+start_webmcp_streamable.bat
 ```
 
 #### Option 2: Direct Python command
 ```bash
-python web_mcp_streamable.py
+python webmcp_streamable.py
 ```
 
 #### Command-line options:
 ```bash
-python web_mcp_streamable.py --host 0.0.0.0 --port 8002 --log-level info
+python webmcp_streamable.py --host 0.0.0.0 --port 8002 --log-level info
 ```
 
 ## VSCode Configuration
@@ -75,7 +75,7 @@ Add this to your VSCode `settings.json`:
 ```json
 {
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "sse",
       "url": "http://localhost:8001/sse",
       "headers": {
@@ -93,7 +93,7 @@ Add this to your VSCode `settings.json`:
 ```json
 {
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "streamable-http",
       "url": "http://localhost:8002/mcp",
       "headers": {
@@ -114,7 +114,7 @@ Add this to your VSCode `settings.json`:
 ```json
 {
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
       "type": "sse",
       "url": "http://localhost:8001/sse",
       "headers": {
@@ -261,7 +261,7 @@ Both transports share the same tool implementations, ensuring consistent behavio
 
 1. **Ensure Streamable HTTP version is running**:
    ```bash
-   python web_mcp_streamable.py
+   python webmcp_streamable.py
    ```
    The server will start on `http://0.0.0.0:8002/mcp`
 
@@ -270,7 +270,7 @@ Both transports share the same tool implementations, ensuring consistent behavio
    ```json
    {
      "mcpServers": {
-       "web_mcp": {
+       "webmcp": {
          "type": "sse",
          "url": "http://localhost:8001/sse"
        }
@@ -282,7 +282,7 @@ Both transports share the same tool implementations, ensuring consistent behavio
    ```json
    {
      "mcpServers": {
-       "web_mcp": {
+       "webmcp": {
          "type": "streamable-http",
          "url": "http://localhost:8002/mcp",
          "headers": {
@@ -307,7 +307,7 @@ If you need to rollback to SSE:
 
 1. Stop the Streamable HTTP server
 2. Revert your `settings.json` to the SSE configuration
-3. Start the SSE server: `python web_mcp.py`
+3. Start the SSE server: `python webmcp.py`
 4. Restart VSCode
 
 ### Configuration Differences
@@ -345,7 +345,7 @@ SERPAPI_API_KEY=your_serpapi_key_here
 
 2. **Port already in use**: Change the port using `--port` argument:
    ```bash
-   python web_mcp_streamable.py --port 8003
+   python webmcp_streamable.py --port 8003
    ```
 
 3. **API key errors**: Verify your `.env` file is in the correct location and contains valid API keys.
@@ -358,7 +358,7 @@ SERPAPI_API_KEY=your_serpapi_key_here
 
 Both servers support log level configuration:
 ```bash
-python web_mcp_streamable.py --log-level debug
+python webmcp_streamable.py --log-level debug
 ```
 
 Log levels: `debug`, `info`, `warning`, `error`

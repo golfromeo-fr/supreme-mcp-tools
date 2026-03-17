@@ -12,7 +12,7 @@
     "streamable-http": {
       "enabled": true,
       "script": "web_mcp_streamable.py",
-      "port": 8002,
+      "port": 8001,
       "endpoint": "/mcp",
       "framing_format": "newline-delimited"
     }
