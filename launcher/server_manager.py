@@ -3,6 +3,8 @@ Server lifecycle manager for the MCP launcher system.
 
 This module provides functionality to manage the lifecycle of multiple
 Uvicorn servers running MCP tools concurrently.
+
+Supports the Flexible Extensibility Framework V3 with management servers.
 """
 
 import asyncio
@@ -15,6 +17,8 @@ import uvicorn
 
 from .errors import ServerStartupError, ServerRuntimeError
 from .tool_discovery import ToolMetadata
+from .service_registry import ServiceRegistry
+from .tool_extensions import ExtensionRegistry, ExtensionHTTPServer
 
 
 logger = logging.getLogger(__name__)
@@ -31,24 +35,38 @@ class ServerInstance:
     status: str = "stopped"  # stopped, starting, running, error
     start_time: Optional[datetime] = None
     error: Optional[Exception] = None
+    # FEF V3 fields
+    mgmt_port: Optional[int] = None
+    mgmt_server: Optional[ExtensionHTTPServer] = None
+    extension_registry: Optional[ExtensionRegistry] = None
     
     def __repr__(self) -> str:
         return f"ServerInstance(tool={self.tool_name}, port={self.port}, status={self.status})"
 
 
 class ServerManager:
-    """Manage lifecycle of multiple Uvicorn servers."""
+    """Manage lifecycle of multiple Uvicorn servers with FEF V3 support."""
     
-    def __init__(self, host: str = "0.0.0.0", log_level: str = "info"):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        log_level: str = "info",
+        service_registry: Optional[ServiceRegistry] = None,
+        enable_management: bool = True
+    ):
         """
         Initialize the server manager.
         
         Args:
             host: Host address for servers
             log_level: Log level for servers
+            service_registry: Optional service registry for FEF V3
+            enable_management: Whether to enable management servers for tools
         """
         self.host = host
         self.log_level = log_level
+        self.service_registry = service_registry
+        self.enable_management = enable_management
         
         self.servers: Dict[str, ServerInstance] = {}
         self.tasks: Dict[str, asyncio.Task] = {}
@@ -57,14 +75,16 @@ class ServerManager:
     async def start_server(
         self,
         tool_metadata: ToolMetadata,
-        port: int
+        port: int,
+        mgmt_port: Optional[int] = None
     ) -> ServerInstance:
         """
-        Start a single MCP tool server.
+        Start a single MCP tool server with optional management server.
         
         Args:
             tool_metadata: Tool metadata object
-            port: Port number to use
+            port: Port number to use for MCP server
+            mgmt_port: Optional port for management server (FEF V3)
             
         Returns:
             ServerInstance for the started server
@@ -90,6 +110,19 @@ class ServerManager:
             # Create Uvicorn server
             server = uvicorn.Server(config)
             
+            # Create extension registry for FEF V3
+            extension_registry = None
+            mgmt_server = None
+            
+            if self.enable_management and mgmt_port:
+                extension_registry = ExtensionRegistry()
+                mgmt_server = ExtensionHTTPServer(
+                    tool_name=tool_name,
+                    registry=extension_registry,
+                    port=mgmt_port,
+                    host=self.host
+                )
+            
             # Create server instance
             instance = ServerInstance(
                 tool_name=tool_name,
@@ -98,21 +131,37 @@ class ServerManager:
                 server_config=config,
                 server=server,
                 status="starting",
-                start_time=datetime.now()
+                start_time=datetime.now(),
+                mgmt_port=mgmt_port,
+                mgmt_server=mgmt_server,
+                extension_registry=extension_registry
             )
             
             self.servers[tool_name] = instance
             
-            # Start the server in a task
+            # Start the MCP server in a task
             task = asyncio.create_task(self._run_server(instance))
             self.tasks[tool_name] = task
+            
+            # Start management server if enabled
+            if mgmt_server:
+                await mgmt_server.start()
+                
+                # Register with service registry
+                if self.service_registry:
+                    await self.service_registry.register(
+                        name=tool_name,
+                        management_url=f"http://{self.host}:{mgmt_port}",
+                        mcp_port=port
+                    )
             
             logger.info(f"Server for {tool_name} starting on port {port}")
             return instance
         
         except Exception as e:
-            instance.status = "error"
-            instance.error = e
+            if tool_name in self.servers:
+                self.servers[tool_name].status = "error"
+                self.servers[tool_name].error = e
             raise ServerStartupError(
                 f"Failed to start server for {tool_name}",
                 tool_name=tool_name,
@@ -179,7 +228,7 @@ class ServerManager:
     
     async def stop_server(self, tool_name: str) -> bool:
         """
-        Stop a specific server.
+        Stop a specific server and its management server.
         
         Args:
             tool_name: Name of the tool
@@ -196,6 +245,14 @@ class ServerManager:
         logger.info(f"Stopping server for {tool_name}")
         
         try:
+            # Stop management server first (FEF V3)
+            if instance.mgmt_server:
+                await instance.mgmt_server.stop()
+            
+            # Unregister from service registry
+            if self.service_registry:
+                await self.service_registry.unregister(tool_name)
+            
             # Cancel the task if running
             if tool_name in self.tasks:
                 task = self.tasks[tool_name]

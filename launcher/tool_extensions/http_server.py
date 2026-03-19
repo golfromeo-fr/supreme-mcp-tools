@@ -1,0 +1,259 @@
+"""
+Extension HTTP Server
+
+Each tool exposes an HTTP API for extension management.
+This server provides REST endpoints and WebSocket support for cross-process communication.
+"""
+
+import asyncio
+import json
+import logging
+from typing import Any, Dict, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+
+from .registry import ExtensionRegistry, ExtensionType
+
+logger = logging.getLogger(__name__)
+
+
+# Request/Response Models
+class QueryRequest(BaseModel):
+    """Request model for querying data sources."""
+    params: Optional[Dict[str, Any]] = None
+
+
+class MutateRequest(BaseModel):
+    """Request model for mutating configuration."""
+    params: Dict[str, Any]
+
+
+class ExecuteRequest(BaseModel):
+    """Request model for executing actions."""
+    params: Optional[Dict[str, Any]] = None
+
+
+class ExtensionHTTPServer:
+    """
+    HTTP server for extension management in tool processes.
+    
+    Provides REST endpoints for:
+    - Health checks
+    - Listing extensions
+    - Querying data sources
+    - Mutating configuration
+    - Executing actions
+    - WebSocket event streaming
+    """
+    
+    def __init__(
+        self,
+        tool_name: str,
+        registry: ExtensionRegistry,
+        config_manager: Optional[Any] = None,
+        port: int = 9001,
+        host: str = "0.0.0.0",
+        api_key: Optional[str] = None
+    ):
+        """
+        Initialize the extension HTTP server.
+        
+        Args:
+            tool_name: Name of the tool this server belongs to
+            registry: Extension registry instance
+            config_manager: Optional configuration manager
+            port: Port to listen on
+            host: Host to bind to
+            api_key: Optional API key for authentication
+        """
+        self.tool_name = tool_name
+        self.registry = registry
+        self.config_manager = config_manager
+        self.port = port
+        self.host = host
+        self.api_key = api_key
+        
+        self.app = FastAPI(
+            title=f"{tool_name} Management API",
+            description=f"Extension management API for {tool_name}",
+            version="1.0.0"
+        )
+        
+        # Add CORS middleware
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        
+        self._server: Optional[uvicorn.Server] = None
+        self._task: Optional[asyncio.Task] = None
+        
+        self._register_routes()
+    
+    def _register_routes(self) -> None:
+        """Register all API routes."""
+        
+        @self.app.get("/health")
+        async def health_check():
+            """Health check endpoint."""
+            return {
+                "status": "healthy",
+                "tool": self.tool_name,
+                "extensions_count": sum(
+                    len(exts) for exts in self.registry.list_extensions(self.tool_name).values()
+                )
+            }
+        
+        @self.app.get("/extensions")
+        async def list_extensions():
+            """List all extensions registered by this tool."""
+            extensions = self.registry.list_extensions(self.tool_name)
+            return extensions.get(self.tool_name, [])
+        
+        @self.app.get("/extensions/{extension_name}")
+        async def get_extension(extension_name: str):
+            """Get details of a specific extension."""
+            ext = self.registry.get_extension(self.tool_name, extension_name)
+            if ext is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Extension '{extension_name}' not found"
+                )
+            return ext.to_dict()
+        
+        @self.app.post("/extensions/{extension_name}/query")
+        async def query_extension(extension_name: str, request: QueryRequest):
+            """Query a data source extension."""
+            try:
+                result = self.registry.query(
+                    self.tool_name,
+                    extension_name,
+                    request.params
+                )
+                return {"data": result}
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Error querying extension: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+        
+        @self.app.post("/extensions/{extension_name}/mutate")
+        async def mutate_extension(extension_name: str, request: MutateRequest):
+            """Mutate configuration via extension."""
+            try:
+                result = self.registry.mutate(
+                    self.tool_name,
+                    extension_name,
+                    request.params
+                )
+                return {"result": result}
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Error mutating extension: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+        
+        @self.app.post("/extensions/{extension_name}/execute")
+        async def execute_extension(extension_name: str, request: ExecuteRequest):
+            """Execute an action extension."""
+            try:
+                result = self.registry.execute(
+                    self.tool_name,
+                    extension_name,
+                    request.params
+                )
+                return {"result": result}
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Error executing extension: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+        
+        @self.app.websocket("/extensions/{extension_name}/events")
+        async def websocket_events(websocket: WebSocket, extension_name: str):
+            """WebSocket endpoint for real-time event streaming."""
+            await websocket.accept()
+            
+            # Verify extension exists
+            ext = self.registry.get_extension(self.tool_name, extension_name)
+            if ext is None:
+                await websocket.close(code=4004, reason=f"Extension '{extension_name}' not found")
+                return
+            
+            # Subscribe to events
+            queue = self.registry.subscribe_queue(self.tool_name, extension_name)
+            
+            try:
+                while True:
+                    # Wait for events and send to client
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                        await websocket.send_json(event)
+                    except asyncio.TimeoutError:
+                        # Send ping to keep connection alive
+                        await websocket.send_json({"type": "ping"})
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected for {extension_name}")
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+            finally:
+                self.registry.unsubscribe_queue(self.tool_name, extension_name, queue)
+        
+        @self.app.get("/config")
+        async def get_config():
+            """Get current configuration."""
+            if self.config_manager is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Configuration manager not available"
+                )
+            return self.config_manager.get_all()
+        
+        @self.app.post("/config/{key}")
+        async def set_config(key: str, value: Dict[str, Any]):
+            """Set a configuration value."""
+            if self.config_manager is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Configuration manager not available"
+                )
+            await self.config_manager.set(key, value.get("value"))
+            return {"success": True, "key": key, "value": value.get("value")}
+    
+    async def start(self) -> None:
+        """Start the HTTP server."""
+        config = uvicorn.Config(
+            self.app,
+            host=self.host,
+            port=self.port,
+            log_level="info",
+            access_log=True
+        )
+        self._server = uvicorn.Server(config)
+        
+        logger.info(f"Starting management server for {self.tool_name} on port {self.port}")
+        
+        self._task = asyncio.create_task(self._server.serve())
+        
+        # Wait for server to start
+        await asyncio.sleep(0.5)
+        
+        logger.info(f"Management server for {self.tool_name} started on port {self.port}")
+    
+    async def stop(self) -> None:
+        """Stop the HTTP server."""
+        if self._server:
+            self._server.should_exit = True
+            if self._task:
+                await self._task
+            logger.info(f"Management server for {self.tool_name} stopped")
+    
+    def get_app(self) -> FastAPI:
+        """Get the FastAPI application."""
+        return self.app

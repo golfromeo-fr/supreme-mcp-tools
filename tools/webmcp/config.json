@@ -1,17 +1,17 @@
 {
-  "name": "web_mcp",
+  "name": "webmcp",
   "version": "1.0.0",
   "description": "Enhanced Web MCP Server - Provides web search, URL fetching, and content processing capabilities",
   "transports": {
     "sse": {
       "enabled": true,
-      "script": "web_mcp.py",
+      "script": "webmcp.py",
       "port": 8001,
       "endpoint": "/sse"
     },
     "streamable-http": {
       "enabled": true,
-      "script": "web_mcp_streamable.py",
+      "script": "webmcp_streamable.py",
       "port": 8001,
       "endpoint": "/mcp",
       "framing_format": "newline-delimited"

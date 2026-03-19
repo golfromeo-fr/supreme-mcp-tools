@@ -12,7 +12,7 @@
     "portRange": [8000, 9000],
     "ports": {
       "oraclemcp": 8000,
-      "web_mcp": 8001,
+      "webmcp": 8001,
       "simplemcp": 8002,
       "convertermcp": 8003,
       "ragmcp": 8004

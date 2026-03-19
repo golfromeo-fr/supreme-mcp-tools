@@ -18,7 +18,7 @@
     "_comment6": "Port range for allocation [min, max]",
     "ports": {
       "_comment7": "Manual port assignments (only used in manual mode)",
-      "web_mcp": 8001,
+      "webmcp": 8001,
       "oraclemcp": 8000,
       "simplemcp": 8002
     }

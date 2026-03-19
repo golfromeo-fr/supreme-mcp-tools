@@ -41,14 +41,14 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("web_mcp")
+logger = logging.getLogger("webmcp")
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("web_mcp")
+logger = logging.getLogger("webmcp")
 
 # Load environment variables from .env file
 env_path = Path(__file__).parent / ".env"
@@ -64,7 +64,7 @@ logger.info(f"SERPAPI_API_KEY loaded: {'SET' if SERPAPI_API_KEY else 'NOT SET'}"
 logger.info("Initializing Web MCP Server...")
 
 try:
-    server = Server("web_mcp")
+    server = Server("webmcp")
     sse_transport = SseServerTransport("/messages/")
     logger.info("Server components initialized successfully")
 except Exception as e:
@@ -1448,7 +1448,7 @@ VSCode settings.json configuration:
 
 {
   "mcpServers": {
-    "web_mcp": {
+    "webmcp": {
         "type": "sse",
         "url": "http://localhost:8001/sse",
         "headers": {
