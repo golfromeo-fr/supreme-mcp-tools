@@ -252,6 +252,10 @@ class ExtensionRegistry:
                 "result": result
             })
             return result
+        except ValueError as e:
+            # Client input validation errors - log at WARNING level
+            logger.warning(f"Validation error in mutation '{extension_name}': {e}")
+            raise
         except Exception as e:
             logger.error(f"Error mutating extension '{extension_name}': {e}")
             raise
@@ -297,6 +301,10 @@ class ExtensionRegistry:
                 "result": result
             })
             return result
+        except ValueError as e:
+            # Client input validation errors - log at WARNING level
+            logger.warning(f"Validation error in action '{extension_name}': {e}")
+            raise
         except Exception as e:
             logger.error(f"Error executing extension '{extension_name}': {e}")
             raise

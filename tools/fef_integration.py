@@ -154,9 +154,15 @@ class ToolExtensionManager:
         previous = self.cache_config.to_dict()
         
         if "max_size" in params:
-            self.cache_config.max_size = int(params["max_size"])
+            try:
+                self.cache_config.max_size = int(params["max_size"])
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid max_size value: {params['max_size']!r}. Must be an integer.")
         if "ttl" in params:
-            self.cache_config.ttl_seconds = int(params["ttl"])
+            try:
+                self.cache_config.ttl_seconds = int(params["ttl"])
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid ttl value: {params['ttl']!r}. Must be an integer.")
         if "enabled" in params:
             self.cache_config.enabled = bool(params["enabled"])
         
