@@ -298,6 +298,62 @@ async def test_http_api():
     async with AsyncClient() as client:
         response = await client.get("http://localhost:9999/extensions")
         assert response.status_code == 200
+
+## Using the FEF Integration Helper
+
+A simpler integration path is available using `tools/fef_integration.py`:
+
+```python
+# In your tool's main module
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from tools.fef_integration import (
+    ToolExtensionManager,
+    register_common_extensions,
+    setup_tool_extensions
+)
+from launcher.tool_extensions import Extension, ExtensionType
+
+# Create custom extensions for your tool
+def get_custom_stats(params):
+    return {"custom_metric": 123}
+
+custom_extensions = [
+    Extension(
+        name="custom_stats",
+        ext_type=ExtensionType.DATA_SOURCE,
+        schema={"input": {}, "output": {"type": "object"}},
+        handler=get_custom_stats,
+        metadata={"description": "Custom tool statistics"}
+    )
+]
+
+# Set up FEF V3 with common + custom extensions
+manager, registry, http_server = setup_tool_extensions(
+    tool_name="mytool",
+    mgmt_port=9005,
+    custom_extensions=custom_extensions
+)
+
+# Start management server
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(http_server.start())
+```
+
+## Tool-Specific Extensions
+
+Each MCP tool in the repository has its own set of FEF V3 extensions:
+
+| Tool | MCP Port | Mgmt Port | Data Sources | Mutators | Actions |
+|------|----------|-----------|--------------|----------|---------|
+| webmcp | 8001 | 9001 | request_stats, cache_stats, search_stats, fetch_stats | cache_config, api_key, search_config | clear_cache, reset_counters |
+| oraclemcp | 8000 | 9000 | query_stats, connection_pool, schema_cache | pool_config | reset_connections |
+| simplemcp | 8002 | 9002 | request_stats, cache_stats, tool_usage | cache_config, api_key | clear_cache, reset_counters |
+| convertermcp | 8003 | 9003 | conversion_stats, format_usage | output_config | clear_cache |
+| ragmcp | 8004 | 9004 | vector_db_stats, embedding_stats, collection_stats | collection_config | reindex |
         assert len(response.json()) == 1
     
     # Cleanup

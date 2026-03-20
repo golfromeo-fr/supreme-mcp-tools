@@ -6,12 +6,17 @@ Provides enhanced web search and URL fetch capabilities with content processing
 Based on best practices from:
 - mcp-server-fetch (official MCP fetch server)
 - html2md-mcp (community HTML to Markdown converter)
+
+FEF V3 Integration:
+- Management server on port 9001
+- Extensions: search_stats, fetch_stats, search_history, fetch_cache_hits
+- Mutators: search_config
 """
 import sys
 import os
 import hashlib
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Dict, Any
 from pathlib import Path
 
 # Check for required dependencies before importing
@@ -70,6 +75,243 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize server components: {e}")
     sys.exit(1)
+
+
+# ============================================================================
+# FEF V3 Integration
+# ============================================================================
+
+# Add parent directory to path for FEF V3 imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+try:
+    from tools.fef_integration import (
+        ToolExtensionManager,
+        register_common_extensions,
+        setup_tool_extensions
+    )
+    from launcher.tool_extensions import Extension, ExtensionType, ExtensionRegistry
+    FEF_V3_AVAILABLE = True
+    logger.info("FEF V3 modules loaded successfully")
+except ImportError as e:
+    FEF_V3_AVAILABLE = False
+    logger.warning(f"FEF V3 not available: {e}")
+
+# WebMCP-specific metrics
+webmcp_metrics = {
+    "search_count": 0,
+    "fetch_count": 0,
+    "search_errors": 0,
+    "fetch_errors": 0,
+    "total_search_time_ms": 0.0,
+    "total_fetch_time_ms": 0.0,
+}
+
+# Search configuration
+search_config = {
+    "max_results": 10,
+    "safe_search": "active",
+    "country": "us",
+    "language": "en"
+}
+
+
+def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get search statistics."""
+    avg_search_time = (
+        webmcp_metrics["total_search_time_ms"] / webmcp_metrics["search_count"]
+        if webmcp_metrics["search_count"] > 0 else 0.0
+    )
+    return {
+        "total_searches": webmcp_metrics["search_count"],
+        "search_errors": webmcp_metrics["search_errors"],
+        "avg_search_time_ms": round(avg_search_time, 2),
+        "config": search_config
+    }
+
+
+def get_fetch_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get fetch statistics."""
+    avg_fetch_time = (
+        webmcp_metrics["total_fetch_time_ms"] / webmcp_metrics["fetch_count"]
+        if webmcp_metrics["fetch_count"] > 0 else 0.0
+    )
+    return {
+        "total_fetches": webmcp_metrics["fetch_count"],
+        "fetch_errors": webmcp_metrics["fetch_errors"],
+        "avg_fetch_time_ms": round(avg_fetch_time, 2)
+    }
+
+
+def get_search_history(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get recent search queries."""
+    limit = params.get("limit", 10)
+    return {
+        "recent_searches": webmcp_metrics.get("recent_searches", [])[-limit:],
+        "total": len(webmcp_metrics.get("recent_searches", []))
+    }
+
+
+def get_fetch_cache_hits(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get fetch cache hit ratio."""
+    cache_hits = webmcp_metrics.get("cache_hits", 0)
+    cache_misses = webmcp_metrics.get("cache_misses", 0)
+    total = cache_hits + cache_misses
+    hit_ratio = cache_hits / total if total > 0 else 0.0
+    return {
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
+        "hit_ratio": round(hit_ratio, 3)
+    }
+
+
+def set_search_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Update search configuration."""
+    previous = search_config.copy()
+    
+    if "max_results" in params:
+        search_config["max_results"] = int(params["max_results"])
+    if "safe_search" in params:
+        search_config["safe_search"] = params["safe_search"]
+    if "country" in params:
+        search_config["country"] = params["country"]
+    if "language" in params:
+        search_config["language"] = params["language"]
+    
+    logger.info(f"[webmcp] Search config updated: {search_config}")
+    
+    return {
+        "success": True,
+        "message": "Search configuration updated",
+        "previous": previous,
+        "new": search_config.copy()
+    }
+
+
+def setup_fef_v3():
+    """Set up FEF V3 extensions for webmcp."""
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        return None, None, None
+    
+    # Create custom extensions for webmcp
+    custom_extensions = [
+        Extension(
+            name="search_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_searches": {"type": "integer"},
+                        "search_errors": {"type": "integer"},
+                        "avg_search_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_search_stats,
+            metadata={
+                "description": "Search engine statistics",
+                "category": "metrics"
+            }
+        ),
+        Extension(
+            name="fetch_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_fetches": {"type": "integer"},
+                        "fetch_errors": {"type": "integer"},
+                        "avg_fetch_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_fetch_stats,
+            metadata={
+                "description": "URL fetch statistics",
+                "category": "metrics"
+            }
+        ),
+        Extension(
+            name="search_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "safe_search": {"type": "string", "enum": ["off", "moderate", "active"]},
+                        "country": {"type": "string"},
+                        "language": {"type": "string"}
+                    }
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "message": {"type": "string"}
+                    }
+                }
+            },
+            handler=set_search_config,
+            metadata={
+                "description": "Update search engine configuration",
+                "category": "configuration"
+            }
+        ),
+        Extension(
+            name="search_history",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                    }
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "recent_searches": {"type": "array", "items": {"type": "string"}},
+                        "total": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_search_history,
+            metadata={"description": "Recent search queries", "category": "metrics"}
+        ),
+        Extension(
+            name="fetch_cache_hits",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "cache_hits": {"type": "integer"},
+                        "cache_misses": {"type": "integer"},
+                        "hit_ratio": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_fetch_cache_hits,
+            metadata={"description": "Fetch cache hit ratio", "category": "metrics"}
+        ),
+    ]
+    
+    return setup_tool_extensions(
+        tool_name="webmcp",
+        mgmt_port=9001,
+        custom_extensions=custom_extensions
+    )
+
+
+# Initialize FEF V3
+fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 # ============================================================================
@@ -1432,11 +1674,34 @@ app = Starlette(
 # Start the server
 if __name__ == "__main__":
     import uvicorn
+    import asyncio
+    
+    async def start_with_fef():
+        """Start MCP server with FEF V3 management server."""
+        # Start FEF V3 management server if available
+        if fef_http_server:
+            logger.info("Starting FEF V3 management server on http://0.0.0.0:9001")
+            await fef_http_server.start()
+        
+        # Start MCP server
+        logger.info("Starting Enhanced Web MCP Server on http://0.0.0.0:8001")
+        config = uvicorn.Config(app, host="0.0.0.0", port=8001)
+        server_instance = uvicorn.Server(config)
+        await server_instance.serve()
+    
     logger.info("Starting Enhanced Web MCP Server on http://0.0.0.0:8001")
+    if FEF_V3_AVAILABLE:
+        logger.info("FEF V3 management server on http://0.0.0.0:9001")
+    
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8001)
+        if FEF_V3_AVAILABLE:
+            asyncio.run(start_with_fef())
+        else:
+            uvicorn.run(app, host="0.0.0.0", port=8001)
     except KeyboardInterrupt:
         logger.info("Server shutting down gracefully...")
+        if fef_http_server:
+            asyncio.run(fef_http_server.stop())
         sys.exit(0)
     except Exception as e:
         logger.error(f"Server error: {e}")

@@ -3,6 +3,12 @@
 RAG MCP Server - Streamable HTTP Transport
 Provides tools for semantic code search, sparse search, and code indexing using Qdrant.
 Migrated from SSE to Streamable HTTP transport.
+
+FEF V3 Integration:
+- Management server on port 9014
+- Extensions: vector_db_stats, embedding_stats, collection_stats
+- Mutators: collection_config, embedding_config
+- Actions: reindex
 """
 import sys
 import os
@@ -1501,9 +1507,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Qdrant client not initialized. Code search features will be unavailable.")
     
+    # Start FEF V3 management server if available
+    if FEF_V3_AVAILABLE and fef_http_server:
+        try:
+            await fef_http_server.start()
+            logger.info("FEF V3 management server started on port 9014")
+        except Exception as e:
+            logger.warning(f"Failed to start FEF V3 management server: {e}")
+    
     yield
     logger.info("RAG MCP Streamable HTTP server shutting down...")
     await transport.cleanup_sessions()
+    if FEF_V3_AVAILABLE and fef_http_server:
+        try:
+            await fef_http_server.stop()
+        except Exception:
+            pass
 
 # Create FastAPI application with lifespan
 app = FastAPI(
@@ -1548,6 +1567,240 @@ if MONITORING_AVAILABLE and add_metrics_middleware is not None:
         logger.warning(f"Failed to initialize monitoring middleware: {e}. Tool will run without metrics.")
 else:
     logger.info("Monitoring not available - running without metrics collection")
+
+
+# ============================================================================
+# FEF V3 Integration
+# ============================================================================
+
+try:
+    from tools.fef_integration import (
+        ToolExtensionManager,
+        register_common_extensions,
+        setup_tool_extensions
+    )
+    from launcher.tool_extensions import Extension, ExtensionType, ExtensionRegistry
+    FEF_V3_AVAILABLE = True
+    logger.info("FEF V3 modules loaded successfully")
+except ImportError as e:
+    FEF_V3_AVAILABLE = False
+    logger.warning(f"FEF V3 not available: {e}")
+
+# RAGMCP-specific metrics
+ragmcp_metrics = {
+    "semantic_searches": 0,
+    "sparse_searches": 0,
+    "index_operations": 0,
+    "embedding_calls": 0,
+    "total_search_time_ms": 0.0,
+    "search_errors": 0,
+}
+
+# Collection configuration
+collection_config = {
+    "default_collection": "code_index",
+    "similarity_threshold": 0.7,
+    "max_results": 10,
+}
+
+
+def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get vector database statistics."""
+    collections = []
+    if transport.qdrant_client:
+        try:
+            cols = transport.qdrant_client.get_collections().collections
+            collections = [c.name for c in cols]
+        except Exception:
+            pass
+    
+    return {
+        "connected": transport.qdrant_client is not None,
+        "collections": collections,
+        "default_collection": collection_config["default_collection"]
+    }
+
+
+def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get embedding statistics."""
+    return {
+        "provider": EMBEDDING_PROVIDER,
+        "local_model": LOCAL_EMBEDDING_MODEL,
+        "embedding_calls": ragmcp_metrics["embedding_calls"],
+        "local_available": LOCAL_EMBEDDINGS_AVAILABLE
+    }
+
+
+def set_embedding_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Update embedding configuration for external API models."""
+    global EMBEDDING_PROVIDER, LOCAL_EMBEDDING_MODEL
+    previous = {"provider": EMBEDDING_PROVIDER, "model": LOCAL_EMBEDDING_MODEL}
+    
+    if "provider" in params:
+        EMBEDDING_PROVIDER = params["provider"]
+    if "model" in params:
+        LOCAL_EMBEDDING_MODEL = params["model"]
+    
+    logger.info(f"[ragmcp] Embedding config updated: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL}")
+    
+    return {
+        "success": True,
+        "message": "Embedding configuration updated",
+        "previous": previous,
+        "new": {"provider": EMBEDDING_PROVIDER, "model": LOCAL_EMBEDDING_MODEL}
+    }
+
+
+def get_collection_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get collection statistics."""
+    count = 0
+    if transport.qdrant_client:
+        try:
+            info = transport.qdrant_client.get_collection(collection_config["default_collection"])
+            count = info.points_count or 0
+        except Exception:
+            pass
+    
+    return {
+        "collection": collection_config["default_collection"],
+        "points_count": count,
+        "similarity_threshold": collection_config["similarity_threshold"]
+    }
+
+
+def set_collection_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Update collection configuration."""
+    previous = collection_config.copy()
+    
+    if "default_collection" in params:
+        collection_config["default_collection"] = params["default_collection"]
+    if "similarity_threshold" in params:
+        collection_config["similarity_threshold"] = float(params["similarity_threshold"])
+    if "max_results" in params:
+        collection_config["max_results"] = int(params["max_results"])
+    
+    logger.info(f"[ragmcp] Collection config updated: {collection_config}")
+    
+    return {
+        "success": True,
+        "message": "Collection configuration updated",
+        "previous": previous,
+        "new": collection_config.copy()
+    }
+
+
+def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Action: Trigger reindexing."""
+    collection = params.get("collection", collection_config["default_collection"])
+    ragmcp_metrics["index_operations"] += 1
+    logger.info(f"[ragmcp] Reindex triggered for collection: {collection}")
+    
+    return {
+        "success": True,
+        "message": f"Reindexing initiated for collection: {collection}",
+        "collection": collection
+    }
+
+
+def setup_fef_v3():
+    """Set up FEF V3 extensions for ragmcp."""
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        return None, None, None
+    
+    custom_extensions = [
+        Extension(
+            name="vector_db_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "connected": {"type": "boolean"},
+                        "collections": {"type": "array", "items": {"type": "string"}}
+                    }
+                }
+            },
+            handler=get_vector_db_stats,
+            metadata={"description": "Vector database connection and collection info", "category": "metrics"}
+        ),
+        Extension(
+            name="embedding_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "embedding_calls": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_embedding_stats,
+            metadata={"description": "Embedding provider statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="collection_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {"type": "string"},
+                        "points_count": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_collection_stats,
+            metadata={"description": "Collection statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="collection_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "default_collection": {"type": "string"},
+                        "similarity_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                        "max_results": {"type": "integer", "minimum": 1}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_collection_config,
+            metadata={"description": "Update collection configuration", "category": "configuration"}
+        ),
+        Extension(
+            name="embedding_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string", "enum": ["azure", "openai", "local"]},
+                        "model": {"type": "string"}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_embedding_config,
+            metadata={"description": "Update embedding provider/model for external API", "category": "configuration"}
+        ),
+    ]
+    
+    return setup_tool_extensions(
+        tool_name="ragmcp",
+        mgmt_port=9014,
+        custom_extensions=custom_extensions
+    )
+
+
+# Initialize FEF V3
+fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")

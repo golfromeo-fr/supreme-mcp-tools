@@ -16,6 +16,36 @@
       "simplemcp": 8002,
       "convertermcp": 8003,
       "ragmcp": 8004
+    },
+    "managementPorts": {
+      "oraclemcp": 9000,
+      "webmcp": 9001,
+      "simplemcp": 9002,
+      "convertermcp": 9003,
+      "ragmcp": 9004
+    }
+  },
+  "fefV3": {
+    "enabled": true,
+    "managementServer": {
+      "host": "0.0.0.0",
+      "cors": {
+        "enabled": true,
+        "allowOrigins": ["*"],
+        "allowMethods": ["GET", "POST", "PUT", "DELETE"],
+        "allowHeaders": ["*"]
+      }
+    },
+    "security": {
+      "apiKeyAuth": false,
+      "rateLimiting": {
+        "enabled": false,
+        "requestsPerMinute": 60
+      }
+    },
+    "monitoring": {
+      "enabled": true,
+      "metricsEndpoint": "/metrics"
     }
   },
   "server": {
@@ -25,7 +55,7 @@
   "logging": {
     "level": "INFO",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "file": null
+    "file": "logs/launcher.log"
   },
   "errorHandling": {
     "continueOnError": true,

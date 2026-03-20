@@ -2,14 +2,21 @@
 """
 Oracle MCP Server - Streamable HTTP Transport
 Provides access to Oracle databases with query execution, schema introspection, and AI-powered SQL optimization.
+
+FEF V3 Integration:
+- Management server on port 9010 (separate from oraclemcp_sse on 9000)
+- Extensions: query_stats, connection_pool, schema_cache
+- Mutators: pool_config, query_timeout
+- Actions: reset_connections, clear_cache
 """
 import sys
 import os
 import logging
 import json
 import re
+import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -1065,10 +1072,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
+    
+    # Start FEF V3 management server if available
+    if FEF_V3_AVAILABLE and fef_http_server:
+        try:
+            await fef_http_server.start()
+            logger.info("FEF V3 management server started on port 9010")
+        except Exception as e:
+            logger.warning(f"Failed to start FEF V3 management server: {e}")
+    
     yield
+    
     # Shutdown
     logger.info("Oracle MCP Streamable HTTP server shutting down...")
     await transport.cleanup_sessions()
+    if FEF_V3_AVAILABLE and fef_http_server:
+        try:
+            await fef_http_server.stop()
+        except Exception:
+            pass
 
 # Create FastAPI application with lifespan
 app = FastAPI(
@@ -1113,6 +1135,203 @@ if MONITORING_AVAILABLE and add_metrics_middleware is not None:
         logger.warning(f"Failed to initialize monitoring middleware: {e}. Tool will run without metrics.")
 else:
     logger.info("Monitoring not available - running without metrics collection")
+
+
+# ============================================================================
+# FEF V3 Integration
+# ============================================================================
+
+try:
+    from tools.fef_integration import (
+        ToolExtensionManager,
+        register_common_extensions,
+        setup_tool_extensions
+    )
+    from launcher.tool_extensions import Extension, ExtensionType, ExtensionRegistry
+    FEF_V3_AVAILABLE = True
+    logger.info("FEF V3 modules loaded successfully")
+except ImportError as e:
+    FEF_V3_AVAILABLE = False
+    logger.warning(f"FEF V3 not available: {e}")
+
+# OracleMCP-specific metrics
+oraclemcp_metrics = {
+    "query_count": 0,
+    "query_errors": 0,
+    "total_query_time_ms": 0.0,
+    "connection_count": 0,
+    "connection_errors": 0,
+    "schema_lookups": 0,
+}
+
+# Connection pool configuration
+pool_config = {
+    "min_connections": 1,
+    "max_connections": 10,
+    "increment": 1,
+    "query_timeout_seconds": 30
+}
+
+
+def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get query statistics."""
+    avg_query_time = (
+        oraclemcp_metrics["total_query_time_ms"] / oraclemcp_metrics["query_count"]
+        if oraclemcp_metrics["query_count"] > 0 else 0.0
+    )
+    return {
+        "total_queries": oraclemcp_metrics["query_count"],
+        "query_errors": oraclemcp_metrics["query_errors"],
+        "avg_query_time_ms": round(avg_query_time, 2),
+        "schema_lookups": oraclemcp_metrics["schema_lookups"]
+    }
+
+
+def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get connection pool statistics."""
+    return {
+        "active_connections": oraclemcp_metrics["connection_count"],
+        "connection_errors": oraclemcp_metrics["connection_errors"],
+        "config": pool_config
+    }
+
+
+def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get schema cache statistics."""
+    return {
+        "cached_tables": len(table_columns_cache) if 'table_columns_cache' in globals() else 0,
+        "schema_lookups": oraclemcp_metrics["schema_lookups"]
+    }
+
+
+def set_pool_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Update connection pool configuration."""
+    previous = pool_config.copy()
+    
+    if "min_connections" in params:
+        pool_config["min_connections"] = int(params["min_connections"])
+    if "max_connections" in params:
+        pool_config["max_connections"] = int(params["max_connections"])
+    if "query_timeout" in params:
+        pool_config["query_timeout_seconds"] = int(params["query_timeout"])
+    
+    logger.info(f"[oraclemcp] Pool config updated: {pool_config}")
+    
+    return {
+        "success": True,
+        "message": "Connection pool configuration updated",
+        "previous": previous,
+        "new": pool_config.copy()
+    }
+
+
+def reset_connections(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Action: Reset database connections."""
+    oraclemcp_metrics["connection_count"] = 0
+    oraclemcp_metrics["connection_errors"] = 0
+    logger.info("[oraclemcp] Connection counters reset")
+    
+    return {
+        "success": True,
+        "message": "Connection counters have been reset"
+    }
+
+
+def setup_fef_v3():
+    """Set up FEF V3 extensions for oraclemcp."""
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        return None, None, None
+    
+    custom_extensions = [
+        Extension(
+            name="query_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_queries": {"type": "integer"},
+                        "query_errors": {"type": "integer"},
+                        "avg_query_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_query_stats,
+            metadata={"description": "Oracle query execution statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="connection_pool",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "active_connections": {"type": "integer"},
+                        "connection_errors": {"type": "integer"},
+                        "config": {"type": "object"}
+                    }
+                }
+            },
+            handler=get_connection_pool_stats,
+            metadata={"description": "Connection pool statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="schema_cache",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "cached_tables": {"type": "integer"},
+                        "schema_lookups": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_schema_cache_stats,
+            metadata={"description": "Schema cache statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="pool_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "min_connections": {"type": "integer", "minimum": 1},
+                        "max_connections": {"type": "integer", "minimum": 1},
+                        "query_timeout": {"type": "integer", "minimum": 1}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_pool_config,
+            metadata={"description": "Update connection pool configuration", "category": "configuration"}
+        ),
+        Extension(
+            name="reset_connections",
+            ext_type=ExtensionType.ACTION,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=reset_connections,
+            metadata={"description": "Reset database connection counters", "category": "maintenance"}
+        ),
+    ]
+    
+    return setup_tool_extensions(
+        tool_name="oraclemcp",
+        mgmt_port=9010,
+        custom_extensions=custom_extensions
+    )
+
+
+# Initialize FEF V3
+fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")

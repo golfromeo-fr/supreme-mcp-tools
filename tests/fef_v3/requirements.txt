@@ -1,0 +1,14 @@
+# FEF V3 Test Suite Dependencies
+# Install with: pip install -r requirements.txt
+
+# HTTP requests
+requests>=2.31.0
+
+# Rich terminal output for better test reporting
+rich>=13.7.0
+
+# Optional: For advanced testing features
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
+# pytest-cov>=4.1.0
+# pytest-json-report>=1.5.0

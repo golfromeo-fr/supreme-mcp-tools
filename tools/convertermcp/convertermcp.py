@@ -2,13 +2,19 @@
 """
 Converter MCP Server - Document Conversion Tools
 Provides tools for converting document formats (DOCX to text, etc.)
+
+FEF V3 Integration:
+- Management server on port 9003
+- Extensions: conversion_stats, format_usage, conversion_queue, storage_usage
+- Mutators: output_config, parallel_limit
 """
 import sys
 import os
 import tempfile
 import logging
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Check for required dependencies before importing
 try:
@@ -60,6 +66,238 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize server components: {e}")
     sys.exit(1)
+
+
+# ============================================================================
+# FEF V3 Integration
+# ============================================================================
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+try:
+    from tools.fef_integration import (
+        ToolExtensionManager,
+        register_common_extensions,
+        setup_tool_extensions
+    )
+    from launcher.tool_extensions import Extension, ExtensionType, ExtensionRegistry
+    FEF_V3_AVAILABLE = True
+    logger.info("FEF V3 modules loaded successfully")
+except ImportError as e:
+    FEF_V3_AVAILABLE = False
+    logger.warning(f"FEF V3 not available: {e}")
+
+# ConverterMCP-specific metrics
+convertermcp_metrics = {
+    "total_conversions": 0,
+    "conversion_errors": 0,
+    "total_conversion_time_ms": 0.0,
+    "bytes_processed": 0,
+}
+
+# Format usage tracking
+format_usage = {}
+
+# Output configuration
+output_config = {
+    "encoding": "utf-8",
+    "max_size_mb": MAX_DOCX_SIZE_MB,
+    "preserve_formatting": True,
+}
+
+
+def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get conversion statistics."""
+    avg_time = (
+        convertermcp_metrics["total_conversion_time_ms"] / convertermcp_metrics["total_conversions"]
+        if convertermcp_metrics["total_conversions"] > 0 else 0.0
+    )
+    return {
+        "total_conversions": convertermcp_metrics["total_conversions"],
+        "conversion_errors": convertermcp_metrics["conversion_errors"],
+        "avg_conversion_time_ms": round(avg_time, 2),
+        "bytes_processed": convertermcp_metrics["bytes_processed"]
+    }
+
+
+def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get format usage statistics."""
+    return {
+        "formats": format_usage,
+        "total": sum(format_usage.values())
+    }
+
+
+def set_output_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Update output configuration."""
+    previous = output_config.copy()
+    
+    if "encoding" in params:
+        output_config["encoding"] = params["encoding"]
+    if "max_size_mb" in params:
+        output_config["max_size_mb"] = int(params["max_size_mb"])
+    if "preserve_formatting" in params:
+        output_config["preserve_formatting"] = bool(params["preserve_formatting"])
+    
+    logger.info(f"[convertermcp] Output config updated: {output_config}")
+    
+    return {
+        "success": True,
+        "message": "Output configuration updated",
+        "previous": previous,
+        "new": output_config.copy()
+    }
+
+
+def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get current conversion queue status."""
+    return {
+        "pending_conversions": convertermcp_metrics.get("pending", 0),
+        "active_conversions": convertermcp_metrics.get("active", 0),
+        "completed_today": convertermcp_metrics["total_conversions"]
+    }
+
+
+def get_storage_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get storage usage by output."""
+    return {
+        "total_bytes_processed": convertermcp_metrics["bytes_processed"],
+        "estimated_disk_usage_mb": round(convertermcp_metrics["bytes_processed"] / (1024 * 1024), 2)
+    }
+
+
+def set_parallel_limit(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Set maximum parallel conversions."""
+    previous = convertermcp_metrics.get("parallel_limit", 4)
+    
+    if "parallel_limit" in params:
+        convertermcp_metrics["parallel_limit"] = int(params["parallel_limit"])
+    
+    logger.info(f"[convertermcp] Parallel limit updated: {convertermcp_metrics.get('parallel_limit', 4)}")
+    
+    return {
+        "success": True,
+        "message": "Parallel limit updated",
+        "previous": previous,
+        "new": convertermcp_metrics.get("parallel_limit", 4)
+    }
+
+
+def setup_fef_v3():
+    """Set up FEF V3 extensions for convertermcp."""
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        return None, None, None
+    
+    custom_extensions = [
+        Extension(
+            name="conversion_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_conversions": {"type": "integer"},
+                        "conversion_errors": {"type": "integer"},
+                        "avg_conversion_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_conversion_stats,
+            metadata={"description": "Document conversion statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="format_usage",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "formats": {"type": "object"},
+                        "total": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_format_usage,
+            metadata={"description": "Format usage statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="output_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "encoding": {"type": "string"},
+                        "max_size_mb": {"type": "integer", "minimum": 1},
+                        "preserve_formatting": {"type": "boolean"}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_output_config,
+            metadata={"description": "Update output configuration", "category": "configuration"}
+        ),
+        Extension(
+            name="conversion_queue",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "pending_conversions": {"type": "integer"},
+                        "active_conversions": {"type": "integer"},
+                        "completed_today": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_conversion_queue,
+            metadata={"description": "Conversion queue status", "category": "metrics"}
+        ),
+        Extension(
+            name="storage_usage",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_bytes_processed": {"type": "integer"},
+                        "estimated_disk_usage_mb": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_storage_usage,
+            metadata={"description": "Storage usage by output", "category": "metrics"}
+        ),
+        Extension(
+            name="parallel_limit",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "parallel_limit": {"type": "integer", "minimum": 1, "maximum": 16}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_parallel_limit,
+            metadata={"description": "Set max parallel conversions", "category": "configuration"}
+        ),
+    ]
+    
+    return setup_tool_extensions(
+        tool_name="convertermcp",
+        mgmt_port=9003,
+        custom_extensions=custom_extensions
+    )
+
+
+fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 # ============================================================================
@@ -337,11 +575,31 @@ app = Starlette(
 
 if __name__ == "__main__":
     import uvicorn
+    import asyncio
+    
+    async def start_with_fef():
+        """Start MCP server with FEF V3 management server."""
+        if fef_http_server:
+            logger.info("Starting FEF V3 management server on http://0.0.0.0:9003")
+            await fef_http_server.start()
+        
+        config = uvicorn.Config(app, host="0.0.0.0", port=8003)
+        server_instance = uvicorn.Server(config)
+        await server_instance.serve()
+    
     logger.info("Starting Converter MCP Server on http://0.0.0.0:8003")
+    if FEF_V3_AVAILABLE:
+        logger.info("FEF V3 management server on http://0.0.0.0:9003")
+    
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8003)
+        if FEF_V3_AVAILABLE:
+            asyncio.run(start_with_fef())
+        else:
+            uvicorn.run(app, host="0.0.0.0", port=8003)
     except KeyboardInterrupt:
         logger.info("Server shutting down gracefully...")
+        if fef_http_server:
+            asyncio.run(fef_http_server.stop())
         sys.exit(0)
     except Exception as e:
         logger.error(f"Server error: {e}")

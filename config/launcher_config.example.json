@@ -5,7 +5,9 @@
   "toolDirectories": [
     "/path/to/tools/webmcp",
     "/path/to/tools/oraclemcp",
-    "/path/to/tools/simplemcp"
+    "/path/to/tools/simplemcp",
+    "/path/to/tools/convertermcp",
+    "/path/to/tools/ragmcp"
   ],
   "_comment3": "List of directories to search for MCP tools. Each directory should contain a Python file that exports server, app, and sse_transport objects.",
 
@@ -18,9 +20,45 @@
     "_comment6": "Port range for allocation [min, max]",
     "ports": {
       "_comment7": "Manual port assignments (only used in manual mode)",
-      "webmcp": 8001,
       "oraclemcp": 8000,
-      "simplemcp": 8002
+      "webmcp": 8001,
+      "simplemcp": 8002,
+      "convertermcp": 8003,
+      "ragmcp": 8004
+    },
+    "managementPorts": {
+      "_comment7b": "FEF V3 management server ports",
+      "oraclemcp": 9000,
+      "webmcp": 9001,
+      "simplemcp": 9002,
+      "convertermcp": 9003,
+      "ragmcp": 9004
+    }
+  },
+
+  "fefV3": {
+    "_comment7c": "Flexible Extensibility Framework V3 configuration",
+    "enabled": true,
+    "managementServer": {
+      "host": "0.0.0.0",
+      "cors": {
+        "enabled": true,
+        "allowOrigins": ["*"],
+        "allowMethods": ["GET", "POST", "PUT", "DELETE"],
+        "allowHeaders": ["*"]
+      }
+    },
+    "security": {
+      "apiKeyAuth": false,
+      "_comment7d": "Enable API key authentication for management endpoints",
+      "rateLimiting": {
+        "enabled": false,
+        "requestsPerMinute": 60
+      }
+    },
+    "monitoring": {
+      "enabled": true,
+      "metricsEndpoint": "/metrics"
     }
   },
 
@@ -32,11 +70,12 @@
   },
 
   "logging": {
+    "_comment0": "Console-only if file is null, otherwise logs to specified file",
     "level": "INFO",
     "_comment10": "Log level for the launcher itself",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     "_comment11": "Log format string",
-    "file": null,
+    "file": "logs/launcher.log",
     "_comment12": "Path to log file, or null for console-only logging"
   },
 

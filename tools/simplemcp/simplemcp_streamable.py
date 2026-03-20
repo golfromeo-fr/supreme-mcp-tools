@@ -2,12 +2,18 @@
 """
 SimpleMCP Server - Streamable HTTP Transport
 Provides simple demonstration tools for testing and development using Streamable HTTP transport.
+
+FEF V3 Integration:
+- Management server on port 9012
+- Extensions: tool_usage, api_response_times
+- Mutators: timeout_config
 """
 import sys
 import os
 import logging
+import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -286,10 +292,25 @@ async def lifespan(app: FastAPI):
     """Handle application lifespan events."""
     # Startup
     logger.info("SimpleMCP Streamable HTTP server starting up...")
+    
+    # Start FEF V3 management server if available
+    if FEF_V3_AVAILABLE and fef_http_server:
+        try:
+            await fef_http_server.start()
+            logger.info("FEF V3 management server started on port 9012")
+        except Exception as e:
+            logger.warning(f"Failed to start FEF V3 management server: {e}")
+    
     yield
+    
     # Shutdown
     logger.info("SimpleMCP Streamable HTTP server shutting down...")
     await transport.cleanup_sessions()
+    if FEF_V3_AVAILABLE and fef_http_server:
+        try:
+            await fef_http_server.stop()
+        except Exception:
+            pass
 
 # Create FastAPI application with lifespan
 app = FastAPI(
@@ -334,6 +355,155 @@ if MONITORING_AVAILABLE and add_metrics_middleware is not None:
         logger.warning(f"Failed to initialize monitoring middleware: {e}. Tool will run without metrics.")
 else:
     logger.info("Monitoring not available - running without metrics collection")
+
+
+# ============================================================================
+# FEF V3 Integration
+# ============================================================================
+
+try:
+    from tools.fef_integration import (
+        ToolExtensionManager,
+        register_common_extensions,
+        setup_tool_extensions
+    )
+    from launcher.tool_extensions import Extension, ExtensionType, ExtensionRegistry
+    FEF_V3_AVAILABLE = True
+    logger.info("FEF V3 modules loaded successfully")
+except ImportError as e:
+    FEF_V3_AVAILABLE = False
+    logger.warning(f"FEF V3 not available: {e}")
+
+# SimpleMCP-specific metrics
+simplemcp_metrics = {
+    "double_count": 0,
+    "square_count": 0,
+    "greet_count": 0,
+    "total_tool_calls": 0,
+    "total_time_ms": 0.0,
+}
+
+# Timeout configuration
+timeout_config = {
+    "default_timeout_ms": 30000,
+    "max_timeout_ms": 120000,
+}
+
+
+def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get tool usage statistics."""
+    return {
+        "double_count": simplemcp_metrics["double_count"],
+        "square_count": simplemcp_metrics["square_count"],
+        "greet_count": simplemcp_metrics["greet_count"],
+        "total_tool_calls": simplemcp_metrics["total_tool_calls"],
+        "avg_time_ms": round(
+            simplemcp_metrics["total_time_ms"] / simplemcp_metrics["total_tool_calls"]
+            if simplemcp_metrics["total_tool_calls"] > 0 else 0.0, 2
+        )
+    }
+
+
+def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Data source: Get API response time statistics."""
+    return {
+        "min_time_ms": 0,
+        "max_time_ms": round(simplemcp_metrics["total_time_ms"], 2) if simplemcp_metrics["total_tool_calls"] > 0 else 0,
+        "avg_time_ms": round(
+            simplemcp_metrics["total_time_ms"] / simplemcp_metrics["total_tool_calls"]
+            if simplemcp_metrics["total_tool_calls"] > 0 else 0.0, 2
+        )
+    }
+
+
+def set_timeout_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutator: Update timeout configuration."""
+    previous = timeout_config.copy()
+    
+    if "default_timeout_ms" in params:
+        timeout_config["default_timeout_ms"] = int(params["default_timeout_ms"])
+    if "max_timeout_ms" in params:
+        timeout_config["max_timeout_ms"] = int(params["max_timeout_ms"])
+    
+    logger.info(f"[simplemcp] Timeout config updated: {timeout_config}")
+    
+    return {
+        "success": True,
+        "message": "Timeout configuration updated",
+        "previous": previous,
+        "new": timeout_config.copy()
+    }
+
+
+def setup_fef_v3():
+    """Set up FEF V3 extensions for simplemcp."""
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        return None, None, None
+    
+    custom_extensions = [
+        Extension(
+            name="tool_usage",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "double_count": {"type": "integer"},
+                        "square_count": {"type": "integer"},
+                        "greet_count": {"type": "integer"},
+                        "total_tool_calls": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_tool_usage,
+            metadata={"description": "Tool usage statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="api_response_times",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "min_time_ms": {"type": "number"},
+                        "max_time_ms": {"type": "number"},
+                        "avg_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_api_response_times,
+            metadata={"description": "API response time statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="timeout_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "default_timeout_ms": {"type": "integer", "minimum": 1000},
+                        "max_timeout_ms": {"type": "integer", "minimum": 5000}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_timeout_config,
+            metadata={"description": "Update timeout configuration", "category": "configuration"}
+        ),
+    ]
+    
+    return setup_tool_extensions(
+        tool_name="simplemcp",
+        mgmt_port=9012,
+        custom_extensions=custom_extensions
+    )
+
+
+# Initialize FEF V3
+fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")

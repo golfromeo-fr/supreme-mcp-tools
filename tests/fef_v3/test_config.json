@@ -1,0 +1,261 @@
+{
+  "testSuite": {
+    "name": "FEF V3 Automated Test Suite",
+    "version": "1.0.0",
+    "description": "Comprehensive test suite for the Flexible Extensibility Framework V3"
+  },
+  "tools": {
+    "webmcp": {
+      "enabled": true,
+      "mcp_port": 8001,
+      "mgmt_port": 9001,
+      "description": "Enhanced web search and URL fetch capabilities",
+      "extensions": {
+        "common": [
+          "request_stats",
+          "cache_stats",
+          "tool_info",
+          "cache_config",
+          "api_key",
+          "clear_cache",
+          "reset_counters"
+        ],
+        "custom": [
+          "search_stats",
+          "fetch_stats",
+          "search_config",
+          "search_history",
+          "fetch_cache_hits"
+        ]
+      },
+      "testCases": {
+        "search_stats": {
+          "params": {},
+          "expectedFields": ["total_searches", "search_errors", "avg_search_time_ms"]
+        },
+        "fetch_stats": {
+          "params": {},
+          "expectedFields": ["total_fetches", "fetch_errors", "avg_fetch_time_ms"]
+        },
+        "search_config": {
+          "params": {
+            "max_results": 20,
+            "safe_search": "moderate",
+            "country": "us",
+            "language": "en"
+          },
+          "expectedFields": ["success", "message", "previous", "new"]
+        },
+        "search_history": {
+          "params": {"limit": 5},
+          "expectedFields": ["recent_searches", "total"]
+        }
+      }
+    },
+    "simplemcp": {
+      "enabled": true,
+      "mcp_port": 8002,
+      "mgmt_port": 9002,
+      "description": "Simple demonstration tools for testing and development",
+      "extensions": {
+        "common": [
+          "request_stats",
+          "cache_stats",
+          "tool_info",
+          "cache_config",
+          "api_key",
+          "clear_cache",
+          "reset_counters"
+        ],
+        "custom": [
+          "tool_usage",
+          "api_response_times",
+          "timeout_config"
+        ]
+      },
+      "testCases": {
+        "tool_usage": {
+          "params": {},
+          "expectedFields": ["double_count", "greet_count", "total_tool_calls", "avg_time_ms"]
+        },
+        "api_response_times": {
+          "params": {},
+          "expectedFields": ["min_time_ms", "max_time_ms", "avg_time_ms"]
+        },
+        "timeout_config": {
+          "params": {
+            "default_timeout_ms": 60000,
+            "max_timeout_ms": 300000
+          },
+          "expectedFields": ["success", "message", "previous", "new"]
+        }
+      }
+    },
+    "ragmcp": {
+      "enabled": true,
+      "mcp_port": 8004,
+      "mgmt_port": 9004,
+      "description": "Retrieval-Augmented Generation with vector database",
+      "extensions": {
+        "common": [
+          "request_stats",
+          "cache_stats",
+          "tool_info",
+          "cache_config",
+          "api_key",
+          "clear_cache",
+          "reset_counters"
+        ],
+        "custom": [
+          "vector_db_stats",
+          "embedding_stats",
+          "collection_stats",
+          "collection_config",
+          "embedding_config"
+        ]
+      },
+      "testCases": {
+        "vector_db_stats": {
+          "params": {},
+          "expectedFields": ["connected", "collections"]
+        },
+        "embedding_stats": {
+          "params": {},
+          "expectedFields": ["provider", "embedding_calls"]
+        },
+        "collection_stats": {
+          "params": {},
+          "expectedFields": ["collection", "points_count"]
+        },
+        "collection_config": {
+          "params": {
+            "default_collection": "test",
+            "similarity_threshold": 0.7,
+            "max_results": 10
+          },
+          "expectedFields": ["success", "message", "previous", "new"]
+        }
+      }
+    },
+    "convertermcp": {
+      "enabled": true,
+      "mcp_port": 8003,
+      "mgmt_port": 9003,
+      "description": "Document conversion tools (DOCX, PDF, etc.)",
+      "extensions": {
+        "common": [
+          "request_stats",
+          "cache_stats",
+          "tool_info",
+          "cache_config",
+          "api_key",
+          "clear_cache",
+          "reset_counters"
+        ],
+        "custom": [
+          "conversion_stats",
+          "format_usage",
+          "conversion_queue",
+          "storage_usage",
+          "output_config",
+          "parallel_limit"
+        ]
+      },
+      "testCases": {
+        "conversion_stats": {
+          "params": {},
+          "expectedFields": ["total_conversions", "conversion_errors", "avg_conversion_time_ms"]
+        },
+        "format_usage": {
+          "params": {},
+          "expectedFields": ["formats"]
+        },
+        "output_config": {
+          "params": {
+            "encoding": "utf-8",
+            "max_size_mb": 50
+          },
+          "expectedFields": ["success", "message", "previous", "new"]
+        }
+      }
+    },
+    "oraclemcp": {
+      "enabled": true,
+      "mcp_port": 8000,
+      "mgmt_port": 9000,
+      "description": "Oracle database access and query tools",
+      "extensions": {
+        "common": [
+          "request_stats",
+          "cache_stats",
+          "tool_info",
+          "cache_config",
+          "api_key",
+          "clear_cache",
+          "reset_counters"
+        ],
+        "custom": [
+          "query_stats",
+          "connection_pool",
+          "schema_cache",
+          "pool_config"
+        ]
+      },
+      "testCases": {
+        "query_stats": {
+          "params": {},
+          "expectedFields": ["total_queries", "query_errors", "avg_query_time_ms"]
+        },
+        "connection_pool": {
+          "params": {},
+          "expectedFields": ["active_connections", "idle_connections", "max_connections"]
+        },
+        "schema_cache": {
+          "params": {},
+          "expectedFields": ["cached_tables", "cache_size"]
+        },
+        "pool_config": {
+          "params": {
+            "max_connections": 10,
+            "min_connections": 2
+          },
+          "expectedFields": ["success", "message", "previous", "new"]
+        }
+      }
+    }
+  },
+  "performance": {
+    "enabled": true,
+    "thresholds": {
+      "avg_response_time_ms": 100,
+      "max_response_time_ms": 500,
+      "concurrent_requests": 10
+    }
+  },
+  "errorHandling": {
+    "enabled": true,
+    "testCases": [
+      {
+        "name": "nonexistent_extension",
+        "description": "Test handling of non-existent extension",
+        "expectedStatusCodes": [404, 400]
+      },
+      {
+        "name": "invalid_parameters",
+        "description": "Test handling of invalid parameters",
+        "expectedStatusCodes": [400, 422]
+      },
+      {
+        "name": "missing_required_params",
+        "description": "Test handling of missing required parameters",
+        "expectedStatusCodes": [400, 422]
+      }
+    ]
+  },
+  "reporting": {
+    "format": "console",
+    "outputFile": "test_results.json",
+    "verbose": false,
+    "includeDetails": true
+  }
+}
