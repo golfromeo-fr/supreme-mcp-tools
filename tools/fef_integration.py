@@ -4,15 +4,35 @@ FEF V3 Integration Helper for MCP Tools
 
 Provides common extension handlers and registration utilities
 for integrating FEF V3 into MCP tools.
+
+Environment Variables:
+    MCP_MGMT_PORT: Port for the management server (set by launcher)
 """
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+
+def get_management_port() -> Optional[int]:
+    """
+    Get the management port from environment variable.
+    
+    Returns:
+        Management port if set, None otherwise
+    """
+    port_str = os.environ.get("MCP_MGMT_PORT")
+    if port_str:
+        try:
+            return int(port_str)
+        except ValueError:
+            logger.warning(f"Invalid MCP_MGMT_PORT value: {port_str}")
+    return None
 
 
 @dataclass
@@ -419,7 +439,7 @@ def register_common_extensions(
 
 def setup_tool_extensions(
     tool_name: str,
-    mgmt_port: int,
+    mgmt_port: Optional[int] = None,
     custom_extensions: Optional[List] = None
 ) -> tuple:
     """
@@ -427,21 +447,75 @@ def setup_tool_extensions(
     
     This is the main entry point for tool integration.
     
+    When called from a tool launched by the launcher, the MCP_MGMT_PORT
+    environment variable will be set and the launcher will already have
+    an ExtensionHTTPServer running on that port. In this case, we register
+    extensions directly with that server's registry.
+    
+    When called standalone (no MCP_MGMT_PORT), a new registry and server
+    are created.
+    
     Args:
         tool_name: Name of the tool
-        mgmt_port: Port for the management server
+        mgmt_port: Port for the management server (optional, uses env var if not set)
         custom_extensions: Optional list of custom Extension objects
         
     Returns:
         Tuple of (extension_manager, registry, http_server)
+        Note: http_server will be None if using launcher's existing server
     """
     from launcher.tool_extensions import ExtensionRegistry, ExtensionHTTPServer
+    
+    # Determine the management port
+    env_port = get_management_port()
+    if mgmt_port is None:
+        mgmt_port = env_port
+    elif env_port is not None and mgmt_port != env_port:
+        logger.warning(
+            f"[{tool_name}] mgmt_port ({mgmt_port}) differs from MCP_MGMT_PORT ({env_port}). "
+            f"Using MCP_MGMT_PORT to connect to launcher's registry."
+        )
+        mgmt_port = env_port
     
     # Create extension manager
     manager = ToolExtensionManager(tool_name)
     
-    # Get registry
-    registry = ExtensionRegistry.get_instance()
+    # Check if launcher already has a registry server running
+    # If MCP_MGMT_PORT is set, the launcher started an ExtensionHTTPServer
+    # We need to get the registry from that server and register extensions with it
+    registry = None
+    http_server = None
+    
+    if mgmt_port is not None:
+        # Try to get the existing registry from the launcher's server
+        # The launcher sets MCP_MGMT_PORT and creates a server before starting the tool
+        # We need to access that registry directly (same process)
+        from launcher.tool_extensions.registry import _global_registries
+        
+        # Look for an existing registry for this tool
+        if tool_name in _global_registries:
+            registry = _global_registries[tool_name]
+            logger.info(f"[{tool_name}] Using existing registry from launcher")
+        else:
+            # Create a new registry and server (standalone mode)
+            registry = ExtensionRegistry()
+            http_server = ExtensionHTTPServer(
+                tool_name=tool_name,
+                registry=registry,
+                port=mgmt_port
+            )
+            logger.info(f"[{tool_name}] Created new registry and server on port {mgmt_port}")
+    else:
+        # No management port specified - create everything
+        registry = ExtensionRegistry()
+        # Use default port if none specified
+        default_port = 9012
+        http_server = ExtensionHTTPServer(
+            tool_name=tool_name,
+            registry=registry,
+            port=default_port
+        )
+        logger.info(f"[{tool_name}] FEF V3 standalone mode on port {default_port}")
     
     # Register common extensions
     register_common_extensions(tool_name, registry, manager)
@@ -452,13 +526,6 @@ def setup_tool_extensions(
             registry.register(tool_name, ext)
             logger.info(f"[{tool_name}] Registered custom extension: {ext.name}")
     
-    # Create HTTP server
-    http_server = ExtensionHTTPServer(
-        tool_name=tool_name,
-        registry=registry,
-        port=mgmt_port
-    )
-    
-    logger.info(f"[{tool_name}] FEF V3 extensions configured on port {mgmt_port}")
+    logger.info(f"[{tool_name}] FEF V3 extensions configured (port={mgmt_port}, server={'new' if http_server else 'existing'})")
     
     return manager, registry, http_server

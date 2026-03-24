@@ -1493,10 +1493,179 @@ Collection `{collection_name}` does not exist in Qdrant.
 # Create transport instance
 transport = RAGMCPStreamableHttp()
 
+# Global FEF V3 variables (initialized lazily)
+fef_manager = None
+fef_registry = None
+fef_http_server = None
+fef_setup_done = False
+
+
+def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
+    """
+    Set up FEF V3 extensions for ragmcp.
+    
+    This function can be called by the launcher after creating a registry,
+    or it will be called lazily during lifespan startup.
+    
+    Args:
+        registry: Optional existing registry to use (from launcher)
+    """
+    global fef_manager, fef_registry, fef_http_server, fef_setup_done
+    
+    if fef_setup_done:
+        logger.info("FEF V3 extensions already set up")
+        return
+    
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        fef_setup_done = True
+        return
+    
+    custom_extensions = [
+        Extension(
+            name="vector_db_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "connected": {"type": "boolean"},
+                        "collections": {"type": "array", "items": {"type": "string"}},
+                        "default_collection": {"type": "string"}
+                    }
+                }
+            },
+            handler=get_vector_db_stats,
+            metadata={"description": "Vector database connection and collection info", "category": "metrics"}
+        ),
+        Extension(
+            name="embedding_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "local_model": {"type": "string"},
+                        "embedding_calls": {"type": "integer"},
+                        "local_available": {"type": "boolean"}
+                    }
+                }
+            },
+            handler=get_embedding_stats,
+            metadata={"description": "Embedding provider statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="collection_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {"type": "string"},
+                        "points_count": {"type": "integer"},
+                        "similarity_threshold": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_collection_stats,
+            metadata={"description": "Collection statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="collection_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "default_collection": {"type": "string"},
+                        "similarity_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                        "max_results": {"type": "integer", "minimum": 1}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
+            },
+            handler=set_collection_config,
+            metadata={"description": "Update collection configuration", "category": "configuration"}
+        ),
+        Extension(
+            name="embedding_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string", "enum": ["azure", "openai", "local"]},
+                        "model": {"type": "string"}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
+            },
+            handler=set_embedding_config,
+            metadata={"description": "Update embedding provider/model for external API", "category": "configuration"}
+        ),
+        Extension(
+            name="reindex",
+            ext_type=ExtensionType.ACTION,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {"type": "string"}
+                    }
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "message": {"type": "string"},
+                        "collection": {"type": "string"}
+                    }
+                }
+            },
+            handler=reindex_action,
+            metadata={"description": "Trigger reindexing of a collection", "category": "maintenance"}
+        ),
+    ]
+    
+    # If a registry is provided (from launcher), use it
+    if registry is not None:
+        fef_registry = registry
+        fef_manager = ToolExtensionManager("ragmcp")
+        
+        # Register common extensions
+        register_common_extensions("ragmcp", fef_registry, fef_manager)
+        
+        # Register custom extensions
+        for ext in custom_extensions:
+            fef_registry.register("ragmcp", ext)
+            logger.info(f"[ragmcp] Registered custom extension: {ext.name}")
+        
+        # No HTTP server needed - launcher already has one
+        fef_http_server = None
+        logger.info("[ragmcp] FEF V3 extensions registered with launcher's registry")
+    else:
+        # Standalone mode - create our own registry and server
+        mgmt_port = int(os.environ.get("MCP_MGMT_PORT", "9014"))
+        fef_manager, fef_registry, fef_http_server = setup_tool_extensions(
+            tool_name="ragmcp",
+            mgmt_port=mgmt_port,
+            custom_extensions=custom_extensions
+        )
+        logger.info(f"[ragmcp] FEF V3 standalone mode on port {mgmt_port}")
+    
+    fef_setup_done = True
+
+
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application lifespan events."""
+    global fef_http_server
+    
     logger.info("RAG MCP Streamable HTTP server starting up...")
     
     # Log Qdrant client status (initialized in transport.__init__)
@@ -1507,7 +1676,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Qdrant client not initialized. Code search features will be unavailable.")
     
-    # Start FEF V3 management server if available
+    # Set up FEF V3 extensions if not already done by launcher
+    if not fef_setup_done:
+        setup_extensions(registry=None)
+    
+    # Start FEF V3 management server if we have one (standalone mode)
     if FEF_V3_AVAILABLE and fef_http_server:
         try:
             await fef_http_server.start()
@@ -1689,7 +1862,7 @@ def set_collection_config(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
+def reindex_action(params: Dict[str, Any]) -> Dict[str, Any]:
     """Action: Trigger reindexing."""
     collection = params.get("collection", collection_config["default_collection"])
     ragmcp_metrics["index_operations"] += 1
@@ -1700,107 +1873,6 @@ def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
         "message": f"Reindexing initiated for collection: {collection}",
         "collection": collection
     }
-
-
-def setup_fef_v3():
-    """Set up FEF V3 extensions for ragmcp."""
-    if not FEF_V3_AVAILABLE:
-        logger.warning("FEF V3 not available, skipping extension setup")
-        return None, None, None
-    
-    custom_extensions = [
-        Extension(
-            name="vector_db_stats",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "connected": {"type": "boolean"},
-                        "collections": {"type": "array", "items": {"type": "string"}}
-                    }
-                }
-            },
-            handler=get_vector_db_stats,
-            metadata={"description": "Vector database connection and collection info", "category": "metrics"}
-        ),
-        Extension(
-            name="embedding_stats",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "provider": {"type": "string"},
-                        "embedding_calls": {"type": "integer"}
-                    }
-                }
-            },
-            handler=get_embedding_stats,
-            metadata={"description": "Embedding provider statistics", "category": "metrics"}
-        ),
-        Extension(
-            name="collection_stats",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "collection": {"type": "string"},
-                        "points_count": {"type": "integer"}
-                    }
-                }
-            },
-            handler=get_collection_stats,
-            metadata={"description": "Collection statistics", "category": "metrics"}
-        ),
-        Extension(
-            name="collection_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_collection": {"type": "string"},
-                        "similarity_threshold": {"type": "number", "minimum": 0, "maximum": 1},
-                        "max_results": {"type": "integer", "minimum": 1}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_collection_config,
-            metadata={"description": "Update collection configuration", "category": "configuration"}
-        ),
-        Extension(
-            name="embedding_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "provider": {"type": "string", "enum": ["azure", "openai", "local"]},
-                        "model": {"type": "string"}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_embedding_config,
-            metadata={"description": "Update embedding provider/model for external API", "category": "configuration"}
-        ),
-    ]
-    
-    return setup_tool_extensions(
-        tool_name="ragmcp",
-        mgmt_port=9014,
-        custom_extensions=custom_extensions
-    )
-
-
-# Initialize FEF V3
-fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")

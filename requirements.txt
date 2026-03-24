@@ -11,6 +11,9 @@ fastapi>=0.104.0
 
 # HTTP client
 httpx>=0.27.0
+
+# Management UI (NiceGUI)
+nicegui>=1.4.0
 aiohttp>=3.9.0
 
 # WebSocket support

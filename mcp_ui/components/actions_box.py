@@ -1,0 +1,81 @@
+"""
+Actions Box Component.
+
+Renders actions panel with execute buttons.
+"""
+
+from nicegui import ui
+from typing import List, Dict, Any, Callable, Optional
+
+from ..models import Extension
+from .mutators_box import _generate_form
+
+
+def ActionsBox(
+    extensions: List[Extension],
+    on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    loading: bool = False
+) -> None:
+    """
+    Render actions box with execute buttons.
+    
+    Args:
+        extensions: List of Extension objects (actions).
+        on_execute: Callback when executing an action.
+        loading: Whether to show loading state.
+    """
+    with ui.card().classes('w-full'):
+        ui.label('Actions').classes('text-h6 mb-2')
+        
+        if not extensions:
+            ui.label('No actions available').classes('text-grey')
+            return
+        
+        for ext in extensions:
+            with ui.expansion(ext.name, icon='play_arrow').classes('w-full'):
+                if ext.description:
+                    ui.label(ext.description).classes('text-grey mb-2')
+                
+                # Generate form from schema
+                form_values = _generate_form(ext.json_schema)
+                
+                # Execute button with confirmation
+                execute_btn = ui.button(
+                    'Execute',
+                    icon='play_arrow',
+                    color='primary',
+                    on_click=lambda e=ext.name, v=form_values: (
+                        _confirm_and_execute(e, v, on_execute)
+                    )
+                )
+                if loading:
+                    execute_btn.disable()
+
+
+def _generate_action_form(schema: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
+    """Generate form for action parameters."""
+    return _generate_form(schema)
+
+
+async def _confirm_and_execute(
+    extension_name: str,
+    get_values: Callable[[], Dict[str, Any]],
+    on_execute: Optional[Callable[[str, Dict[str, Any]], None]]
+) -> None:
+    """Show confirmation dialog and execute action."""
+    with ui.dialog() as dialog, ui.card():
+        ui.label(f'Execute {extension_name}?').classes('text-h6')
+        ui.label('This action cannot be undone.').classes('text-grey mb-4')
+        
+        with ui.row():
+            ui.button('Cancel', on_click=dialog.close).props('flat')
+            ui.button(
+                'Execute',
+                color='primary',
+                on_click=lambda: [
+                    on_execute(extension_name, get_values()) if on_execute else None,
+                    dialog.close()
+                ]
+            )
+    
+    dialog.open()

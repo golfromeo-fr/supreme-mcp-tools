@@ -3,6 +3,11 @@ Local Extension Registry
 
 Each tool runs its own ExtensionRegistry instance for local extension management.
 This is the core component of the Flexible Extensibility Framework V3.
+
+Global Registry Tracking:
+    The _global_registries dictionary tracks all registry instances by tool name.
+    This allows tools to find and use the launcher's registry when running under
+    the launcher's management.
 """
 
 import asyncio
@@ -12,6 +17,10 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Global tracking of registry instances by tool name
+# This allows tools to find the launcher's registry when running under management
+_global_registries: Dict[str, "ExtensionRegistry"] = {}
 
 
 class ExtensionType(Enum):
@@ -41,44 +50,89 @@ class Extension:
     handler: Callable
     metadata: Dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert extension to dictionary representation."""
-        return {
+    def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
+        """
+        Convert extension to dictionary representation.
+        
+        Args:
+            include_data: If True, fetch and include current data for data sources.
+        """
+        result = {
             "name": self.name,
             "type": self.ext_type.value,
             "schema": self.schema,
             "metadata": self.metadata,
         }
+        
+        # For data sources, optionally include current data values
+        if include_data and self.ext_type == ExtensionType.DATA_SOURCE:
+            try:
+                result["data"] = self.handler({})
+            except Exception as e:
+                logger.warning(f"Error fetching data for extension '{self.name}': {e}")
+                result["data"] = None
+        
+        return result
+    
+    def get_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Get current data values for a data source extension.
+        
+        Returns:
+            Dictionary with current data values, or None if not a data source
+            or if an error occurs.
+        """
+        if self.ext_type != ExtensionType.DATA_SOURCE:
+            return None
+        
+        try:
+            return self.handler({})
+        except Exception as e:
+            logger.warning(f"Error fetching data for extension '{self.name}': {e}")
+            return None
 
 
 class ExtensionRegistry:
     """
     Local extension registry for managing extensions within a tool process.
     
-    This is a singleton registry that manages all extensions registered by a tool.
     Each tool process has its own instance of this registry.
     """
     
-    _instance: Optional["ExtensionRegistry"] = None
-    _lock = asyncio.Lock()
-    
-    def __init__(self):
-        """Initialize the extension registry."""
+    def __init__(self, tool_name: Optional[str] = None):
+        """
+        Initialize the extension registry.
+        
+        Args:
+            tool_name: Optional tool name to register this registry globally.
+                      When set, tools can find this registry via _global_registries.
+        """
         self._extensions: Dict[str, Dict[str, Extension]] = {}
         self._event_subscribers: Dict[str, List[Callable]] = {}
         self._event_queues: Dict[str, List[asyncio.Queue]] = {}
+        self._tool_name = tool_name
+        
+        # Register globally if tool_name is provided
+        if tool_name:
+            _global_registries[tool_name] = self
+            logger.info(f"Registered global registry for tool '{tool_name}'")
     
-    @classmethod
-    def get_instance(cls) -> "ExtensionRegistry":
-        """Get the singleton instance of the registry."""
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+    def register_global(self, tool_name: str) -> None:
+        """
+        Register this registry in the global tracking.
+        
+        Args:
+            tool_name: Tool name to register under
+        """
+        self._tool_name = tool_name
+        _global_registries[tool_name] = self
+        logger.info(f"Registered global registry for tool '{tool_name}'")
     
-    @classmethod
-    def reset(cls) -> None:
-        """Reset the singleton instance (for testing)."""
-        cls._instance = None
+    def unregister_global(self) -> None:
+        """Unregister this registry from global tracking."""
+        if self._tool_name and self._tool_name in _global_registries:
+            del _global_registries[self._tool_name]
+            logger.info(f"Unregistered global registry for tool '{self._tool_name}'")
     
     def register(self, tool_name: str, extension: Extension) -> None:
         """
@@ -143,7 +197,8 @@ class ExtensionRegistry:
     def list_extensions(
         self,
         tool_name: Optional[str] = None,
-        ext_type: Optional[ExtensionType] = None
+        ext_type: Optional[ExtensionType] = None,
+        include_data: bool = True
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         List all extensions, optionally filtered by tool and type.
@@ -151,6 +206,7 @@ class ExtensionRegistry:
         Args:
             tool_name: Optional filter by tool name
             ext_type: Optional filter by extension type
+            include_data: If True, include current data for data sources (default: True)
             
         Returns:
             Dictionary mapping tool names to lists of extension info
@@ -166,7 +222,7 @@ class ExtensionRegistry:
             extensions = []
             for ext in self._extensions[tool].values():
                 if ext_type is None or ext.ext_type == ext_type:
-                    extensions.append(ext.to_dict())
+                    extensions.append(ext.to_dict(include_data=include_data))
             
             if extensions:
                 result[tool] = extensions

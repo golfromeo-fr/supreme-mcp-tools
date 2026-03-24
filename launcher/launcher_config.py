@@ -34,7 +34,7 @@ class Config:
         "portAllocation": {
             "mode": "auto",
             "basePort": 8000,
-            "portRange": [8000, 9000],
+            "portRange": [8000, 10000],
             "ports": {
                 "oraclemcp": 8000,
                 "webmcp": 8001,
@@ -312,11 +312,30 @@ class Config:
     
     def get_port_range(self) -> List[int]:
         """Get port range for allocation."""
-        return self.config.get("portAllocation", {}).get("portRange", [8000, 9000])
+        return self.config.get("portAllocation", {}).get("portRange", [8000, 10000])
     
     def get_manual_ports(self) -> Dict[str, int]:
-        """Get manual port assignments."""
-        return self.config.get("portAllocation", {}).get("ports", {})
+        """Get manual port assignments for MCP endpoints and management ports.
+        
+        Returns a dictionary with both MCP endpoint ports and management ports.
+        Management port names are suffixed with '_mgmt' (e.g., 'simplemcp_mgmt').
+        """
+        ports = self.config.get("portAllocation", {}).get("ports", {}).copy()
+        
+        # Add management ports with _mgmt suffix
+        management_ports = self.config.get("portAllocation", {}).get("managementPorts", {})
+        for tool_name, port in management_ports.items():
+            ports[f"{tool_name}_mgmt"] = port
+        
+        return ports
+    
+    def get_management_ports(self) -> Dict[str, int]:
+        """Get management port assignments from config.
+        
+        These are pre-configured management ports but tools get their
+        actual management ports auto-allocated by the port manager.
+        """
+        return self.config.get("portAllocation", {}).get("managementPorts", {}).copy()
     
     def get_server_host(self) -> str:
         """Get server host address."""

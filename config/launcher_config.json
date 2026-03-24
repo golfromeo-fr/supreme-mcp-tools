@@ -9,7 +9,7 @@
   "portAllocation": {
     "mode": "manual",
     "basePort": 8000,
-    "portRange": [8000, 9000],
+    "portRange": [8000, 10000],
     "ports": {
       "oraclemcp": 8000,
       "webmcp": 8001,

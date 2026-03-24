@@ -286,18 +286,135 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
 # Create the transport instance
 transport = SimpleMCPStreamableHttp()
 
+# Global FEF V3 variables (initialized lazily)
+fef_manager = None
+fef_registry = None
+fef_http_server = None
+fef_setup_done = False
+
+
+def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
+    """
+    Set up FEF V3 extensions for simplemcp.
+    
+    This function can be called by the launcher after creating a registry,
+    or it will be called lazily during lifespan startup.
+    
+    Args:
+        registry: Optional existing registry to use (from launcher)
+    """
+    global fef_manager, fef_registry, fef_http_server, fef_setup_done
+    
+    if fef_setup_done:
+        logger.info("FEF V3 extensions already set up")
+        return
+    
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        fef_setup_done = True
+        return
+    
+    custom_extensions = [
+        Extension(
+            name="tool_usage",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "double_count": {"type": "integer"},
+                        "square_count": {"type": "integer"},
+                        "greet_count": {"type": "integer"},
+                        "total_tool_calls": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_tool_usage,
+            metadata={"description": "Tool usage statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="api_response_times",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "min_time_ms": {"type": "number"},
+                        "max_time_ms": {"type": "number"},
+                        "avg_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_api_response_times,
+            metadata={"description": "API response time statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="timeout_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "default_timeout_ms": {"type": "integer", "minimum": 1000},
+                        "max_timeout_ms": {"type": "integer", "minimum": 5000}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
+            },
+            handler=set_timeout_config,
+            metadata={"description": "Update timeout configuration", "category": "configuration"}
+        ),
+    ]
+    
+    # If a registry is provided (from launcher), use it
+    if registry is not None:
+        fef_registry = registry
+        fef_manager = ToolExtensionManager("simplemcp")
+        
+        # Register common extensions
+        register_common_extensions("simplemcp", fef_registry, fef_manager)
+        
+        # Register custom extensions
+        for ext in custom_extensions:
+            fef_registry.register("simplemcp", ext)
+            logger.info(f"[simplemcp] Registered custom extension: {ext.name}")
+        
+        # No HTTP server needed - launcher already has one
+        fef_http_server = None
+        logger.info("[simplemcp] FEF V3 extensions registered with launcher's registry")
+    else:
+        # Standalone mode - create our own registry and server
+        mgmt_port = int(os.environ.get("MCP_MGMT_PORT", "9012"))
+        fef_manager, fef_registry, fef_http_server = setup_tool_extensions(
+            tool_name="simplemcp",
+            mgmt_port=mgmt_port,
+            custom_extensions=custom_extensions
+        )
+        logger.info(f"[simplemcp] FEF V3 standalone mode on port {mgmt_port}")
+    
+    fef_setup_done = True
+
+
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application lifespan events."""
+    global fef_http_server
+    
     # Startup
     logger.info("SimpleMCP Streamable HTTP server starting up...")
     
-    # Start FEF V3 management server if available
+    # Set up FEF V3 extensions if not already done by launcher
+    if not fef_setup_done:
+        setup_extensions(registry=None)
+    
+    # Start FEF V3 management server if we have one (standalone mode)
     if FEF_V3_AVAILABLE and fef_http_server:
         try:
             await fef_http_server.start()
-            logger.info("FEF V3 management server started on port 9012")
+            logger.info("FEF V3 management server started")
         except Exception as e:
             logger.warning(f"Failed to start FEF V3 management server: {e}")
     
@@ -433,77 +550,6 @@ def set_timeout_config(params: Dict[str, Any]) -> Dict[str, Any]:
         "previous": previous,
         "new": timeout_config.copy()
     }
-
-
-def setup_fef_v3():
-    """Set up FEF V3 extensions for simplemcp."""
-    if not FEF_V3_AVAILABLE:
-        logger.warning("FEF V3 not available, skipping extension setup")
-        return None, None, None
-    
-    custom_extensions = [
-        Extension(
-            name="tool_usage",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "double_count": {"type": "integer"},
-                        "square_count": {"type": "integer"},
-                        "greet_count": {"type": "integer"},
-                        "total_tool_calls": {"type": "integer"}
-                    }
-                }
-            },
-            handler=get_tool_usage,
-            metadata={"description": "Tool usage statistics", "category": "metrics"}
-        ),
-        Extension(
-            name="api_response_times",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "min_time_ms": {"type": "number"},
-                        "max_time_ms": {"type": "number"},
-                        "avg_time_ms": {"type": "number"}
-                    }
-                }
-            },
-            handler=get_api_response_times,
-            metadata={"description": "API response time statistics", "category": "metrics"}
-        ),
-        Extension(
-            name="timeout_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_timeout_ms": {"type": "integer", "minimum": 1000},
-                        "max_timeout_ms": {"type": "integer", "minimum": 5000}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_timeout_config,
-            metadata={"description": "Update timeout configuration", "category": "configuration"}
-        ),
-    ]
-    
-    return setup_tool_extensions(
-        tool_name="simplemcp",
-        mgmt_port=9012,
-        custom_extensions=custom_extensions
-    )
-
-
-# Initialize FEF V3
-fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")

@@ -9,6 +9,7 @@ Supports the Flexible Extensibility Framework V3 with management servers.
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -115,13 +116,29 @@ class ServerManager:
             mgmt_server = None
             
             if self.enable_management and mgmt_port:
-                extension_registry = ExtensionRegistry()
+                # Set environment variable so tool can use the same management port
+                os.environ["MCP_MGMT_PORT"] = str(mgmt_port)
+                logger.info(f"Set MCP_MGMT_PORT={mgmt_port} for {tool_name}")
+                
+                # Create registry with tool_name for global tracking
+                # This allows the tool to find this registry when it starts
+                extension_registry = ExtensionRegistry(tool_name=tool_name)
                 mgmt_server = ExtensionHTTPServer(
                     tool_name=tool_name,
                     registry=extension_registry,
                     port=mgmt_port,
                     host=self.host
                 )
+                
+                # Call tool's setup_extensions() if available to register extensions
+                # This must be done AFTER module load but BEFORE server starts
+                tool_module = tool_metadata.exports.get("_module")
+                if tool_module and hasattr(tool_module, "setup_extensions"):
+                    try:
+                        logger.info(f"Calling {tool_name}.setup_extensions() with launcher's registry")
+                        tool_module.setup_extensions(registry=extension_registry)
+                    except Exception as e:
+                        logger.warning(f"Failed to call {tool_name}.setup_extensions(): {e}")
             
             # Create server instance
             instance = ServerInstance(
@@ -148,10 +165,12 @@ class ServerManager:
                 await mgmt_server.start()
                 
                 # Register with service registry
+                # NOTE: Use "localhost" for the URL even though server binds to self.host (0.0.0.0)
+                # Clients cannot connect to 0.0.0.0 - they need localhost or 127.0.0.1
                 if self.service_registry:
                     await self.service_registry.register(
                         name=tool_name,
-                        management_url=f"http://{self.host}:{mgmt_port}",
+                        management_url=f"http://localhost:{mgmt_port}",
                         mcp_port=port
                     )
             

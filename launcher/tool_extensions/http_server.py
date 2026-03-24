@@ -101,14 +101,28 @@ class ExtensionHTTPServer:
         
         @self.app.get("/health")
         async def health_check():
-            """Health check endpoint."""
-            return {
-                "status": "healthy",
-                "tool": self.tool_name,
-                "extensions_count": sum(
-                    len(exts) for exts in self.registry.list_extensions(self.tool_name).values()
+            """Health check endpoint - optimized for fast response."""
+            import time
+            start = time.time()
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[HEALTH_CHECK] Received health check request at {start}")
+            try:
+                # Use include_data=False to avoid calling slow data source handlers
+                extensions_count = sum(
+                    len(exts) for exts in self.registry.list_extensions(self.tool_name, include_data=False).values()
                 )
-            }
+                elapsed = time.time() - start
+                logger.warning(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
+                return {
+                    "status": "healthy",
+                    "tool": self.tool_name,
+                    "extensions_count": extensions_count
+                }
+            except Exception as e:
+                elapsed = time.time() - start
+                logger.error(f"[HEALTH_CHECK] Failed after {elapsed:.3f}s: {e}")
+                raise
         
         @self.app.get("/extensions")
         async def list_extensions():

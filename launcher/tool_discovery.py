@@ -300,6 +300,9 @@ class ToolDiscovery:
             if hasattr(module, export_name) and export_name not in exports:
                 exports[export_name] = getattr(module, export_name)
         
+        # Store module reference for launcher to call setup_extensions()
+        exports["_module"] = module
+        
         return ToolMetadata(
             name=name,
             module_path=name,

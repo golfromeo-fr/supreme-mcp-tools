@@ -49,7 +49,7 @@ class ServiceRegistry:
     def __init__(
         self,
         health_check_interval: float = 30.0,
-        health_check_timeout: float = 5.0
+        health_check_timeout: float = 10.0
     ):
         """
         Initialize the service registry.
@@ -236,7 +236,17 @@ class ServiceRegistry:
                 f"{service.management_url}/health"
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except Exception as json_err:
+                        # Log the raw response text for debugging
+                        response_text = await response.text()
+                        logger.error(
+                            f"Health check JSON parse failed for '{name}': {json_err}. "
+                            f"Response status: {response.status}, Text: {response_text[:500]}"
+                        )
+                        raise
+                    
                     async with self._lock:
                         if name in self._services:
                             self._services[name].status = "healthy"
@@ -260,10 +270,20 @@ class ServiceRegistry:
                     logger.warning(
                         f"Health check returned {response.status} for '{name}'"
                     )
-        except Exception as e:
+        except BaseException as e:
+            # Catch BaseException to handle CancelledError and all other exceptions
             async with self._lock:
                 if name in self._services:
                     self._services[name].status = "unhealthy"
                     self._services[name].last_check = time.time()
             
-            logger.warning(f"Health check failed for '{name}': {e}")
+            # Check for timeout-related exceptions
+            if isinstance(e, (asyncio.CancelledError, asyncio.TimeoutError)) or \
+               (hasattr(e, '__cause__') and isinstance(e.__cause__, asyncio.CancelledError)):
+                logger.warning(f"Health check timed out for '{name}'")
+            else:
+                import traceback
+                logger.warning(
+                    f"Health check failed for '{name}': {type(e).__name__}: {e}. "
+                    f"Traceback: {traceback.format_exc()[:500]}"
+                )

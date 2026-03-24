@@ -26,6 +26,8 @@ from launcher import (
     PortConflictError,
     LauncherError,
 )
+from launcher.management_server import ManagementServer
+from launcher.service_registry import ServiceRegistry
 
 # Import monitoring modules
 from monitoring.config import load_monitoring_config, MonitoringConfig
@@ -183,6 +185,19 @@ Examples:
         help="Override log level"
     )
     
+    parser.add_argument(
+        "--no-management",
+        action="store_true",
+        help="Disable the centralized management API server (enabled by default on port 9091)"
+    )
+    
+    parser.add_argument(
+        "--management-port",
+        type=int,
+        default=9091,
+        help="Port for the management server (default: 9091)"
+    )
+    
     return parser.parse_args()
 
 
@@ -220,7 +235,8 @@ async def start_servers(
     tools: List[ToolMetadata],
     port_manager: PortManager,
     server_manager: ServerManager,
-    config: Config
+    config: Config,
+    service_registry: Optional[ServiceRegistry] = None
 ) -> List[ToolMetadata]:
     """
     Start all MCP tool servers.
@@ -265,10 +281,13 @@ async def start_servers(
             logging.error(f"No port allocated for {tool.name}")
             return None
         
+        # Allocate management port if service registry is available
+        mgmt_port = port_manager.allocate_port(f"{tool.name}_mgmt") if service_registry else None
+        
         try:
             # Apply startup timeout to prevent indefinite hangs
             instance = await asyncio.wait_for(
-                server_manager.start_server(tool, port),
+                server_manager.start_server(tool, port, mgmt_port),
                 timeout=SERVER_STARTUP_TIMEOUT
             )
             logging.info(f"Server for {tool.name} started on port {port}")
@@ -476,8 +495,70 @@ async def start_metrics_server(shutdown_event: asyncio.Event) -> None:
         logging.info("Metrics server stopped")
 
 
+async def start_management_api_server(
+    shutdown_event: asyncio.Event,
+    port: int = 9091,
+    service_registry: Optional[ServiceRegistry] = None
+) -> None:
+    """
+    Start the centralized management API server.
+    
+    Args:
+        shutdown_event: Event to signal shutdown
+        port: Port for the management server
+        service_registry: Optional existing service registry to use
+    """
+    global _service_registry
+    
+    try:
+        # Use existing registry or create new one
+        if service_registry is None:
+            service_registry = ServiceRegistry()
+            await service_registry.start()
+            logging.info("Service registry started")
+        else:
+            logging.info("Using existing service registry")
+        
+        _service_registry = service_registry
+        
+        # Create management server
+        management_server = ManagementServer(
+            service_registry=service_registry,
+            port=port,
+            host="0.0.0.0"
+        )
+        
+        logging.info(f"Starting management API server on port {port}")
+        
+        # Start management server
+        config = uvicorn.Config(
+            management_server.app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+            access_log=True
+        )
+        
+        server = uvicorn.Server(config)
+        
+        # Run the server
+        await server.serve()
+        
+    except Exception as e:
+        logging.error(f"Management API server error: {e}", exc_info=True)
+    finally:
+        if _service_registry and service_registry is None:
+            # Only stop if we created it
+            await _service_registry.stop()
+        logging.info("Management API server stopped")
+
+
 # Module-level global for shutdown state
 _shutdown_in_progress = False
+
+# Management server task
+_management_server_task: Optional[asyncio.Task] = None
+_service_registry: Optional[ServiceRegistry] = None
 
 
 async def main() -> int:
@@ -572,10 +653,20 @@ async def main() -> int:
         manual_ports=config.get_manual_ports()
     )
     
+    # Create service registry if management is enabled (default)
+    # Management server is enabled by default, use --no-management to disable
+    service_registry: Optional[ServiceRegistry] = None
+    if not args.no_management:
+        service_registry = ServiceRegistry()
+        await service_registry.start()
+        logging.info("Service registry started for centralized management")
+    
     # Initialize server manager
     server_manager = ServerManager(
         host=config.get_server_host(),
-        log_level=config.get_server_log_level()
+        log_level=config.get_server_log_level(),
+        service_registry=service_registry,
+        enable_management=bool(service_registry)  # Enable management if we have a registry
     )
     
     # Set up signal handlers for graceful shutdown
@@ -597,7 +688,7 @@ async def main() -> int:
     # Start servers
     started_tools = []  # Track successfully started tools
     try:
-        started_tools = await start_servers(tools, port_manager, server_manager, config)
+        started_tools = await start_servers(tools, port_manager, server_manager, config, service_registry)
         
         # Print server information - only for successfully started servers
         print("\n" + "=" * 60)
@@ -624,6 +715,14 @@ async def main() -> int:
             metrics_task = asyncio.create_task(start_metrics_server(shutdown_event))
             logging.info("Metrics server started in background")
         
+        # Start management API server if enabled (default)
+        management_task = None
+        if not args.no_management:
+            management_task = asyncio.create_task(
+                start_management_api_server(shutdown_event, args.management_port, service_registry)
+            )
+            logging.info(f"Management API server will start on port {args.management_port}")
+        
         # Wait for shutdown signal
         await shutdown_event.wait()
         
@@ -639,6 +738,14 @@ async def main() -> int:
             metrics_task.cancel()
             try:
                 await metrics_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Cancel management API server task
+        if management_task:
+            management_task.cancel()
+            try:
+                await management_task
             except asyncio.CancelledError:
                 pass
         

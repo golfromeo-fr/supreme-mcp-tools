@@ -1849,14 +1849,166 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
 # Create the transport instance
 transport = WebMCPStreamableHttp()
 
+# Global FEF V3 variables (initialized lazily)
+fef_manager = None
+fef_registry = None
+fef_http_server = None
+fef_setup_done = False
+
+
+def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
+    """
+    Set up FEF V3 extensions for webmcp.
+    
+    This function can be called by the launcher after creating a registry,
+    or it will be called lazily during lifespan startup.
+    
+    Args:
+        registry: Optional existing registry to use (from launcher)
+    """
+    global fef_manager, fef_registry, fef_http_server, fef_setup_done
+    
+    if fef_setup_done:
+        logger.info("FEF V3 extensions already set up")
+        return
+    
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        fef_setup_done = True
+        return
+    
+    custom_extensions = [
+        Extension(
+            name="search_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_searches": {"type": "integer"},
+                        "search_errors": {"type": "integer"},
+                        "avg_search_time_ms": {"type": "number"},
+                        "config": {"type": "object"}
+                    }
+                }
+            },
+            handler=get_search_stats,
+            metadata={"description": "Search engine statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="fetch_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_fetches": {"type": "integer"},
+                        "fetch_errors": {"type": "integer"},
+                        "avg_fetch_time_ms": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_fetch_stats,
+            metadata={"description": "URL fetch statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="search_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "safe_search": {"type": "string", "enum": ["off", "moderate", "active"]},
+                        "country": {"type": "string"},
+                        "language": {"type": "string"}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
+            },
+            handler=set_search_config,
+            metadata={"description": "Update search engine configuration", "category": "configuration"}
+        ),
+        Extension(
+            name="search_history",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "recent_searches": {"type": "array", "items": {"type": "string"}},
+                        "total": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_search_history,
+            metadata={"description": "Recent search queries", "category": "metrics"}
+        ),
+        Extension(
+            name="fetch_cache_hits",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "cache_hits": {"type": "integer"},
+                        "cache_misses": {"type": "integer"},
+                        "hit_ratio": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_fetch_cache_hits,
+            metadata={"description": "Fetch cache hit ratio", "category": "metrics"}
+        ),
+    ]
+    
+    # If a registry is provided (from launcher), use it
+    if registry is not None:
+        fef_registry = registry
+        fef_manager = ToolExtensionManager("webmcp")
+        
+        # Register common extensions
+        register_common_extensions("webmcp", fef_registry, fef_manager)
+        
+        # Register custom extensions
+        for ext in custom_extensions:
+            fef_registry.register("webmcp", ext)
+            logger.info(f"[webmcp] Registered custom extension: {ext.name}")
+        
+        # No HTTP server needed - launcher already has one
+        fef_http_server = None
+        logger.info("[webmcp] FEF V3 extensions registered with launcher's registry")
+    else:
+        # Standalone mode - create our own registry and server
+        mgmt_port = int(os.environ.get("MCP_MGMT_PORT", "9001"))
+        fef_manager, fef_registry, fef_http_server = setup_tool_extensions(
+            tool_name="webmcp",
+            mgmt_port=mgmt_port,
+            custom_extensions=custom_extensions
+        )
+        logger.info(f"[webmcp] FEF V3 standalone mode on port {mgmt_port}")
+    
+    fef_setup_done = True
+
+
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application lifespan events."""
+    global fef_http_server
+    
     # Startup
     logger.info("Web MCP Streamable HTTP server starting up...")
     
-    # Start FEF V3 management server if available
+    # Set up FEF V3 extensions if not already done by launcher
+    if not fef_setup_done:
+        setup_extensions(registry=None)
+    
+    # Start FEF V3 management server if we have one (standalone mode)
     if FEF_V3_AVAILABLE and fef_http_server:
         try:
             await fef_http_server.start()
@@ -2026,131 +2178,6 @@ def set_search_config(params: Dict[str, Any]) -> Dict[str, Any]:
         "previous": previous,
         "new": search_config.copy()
     }
-
-
-def setup_fef_v3():
-    """Set up FEF V3 extensions for webmcp."""
-    if not FEF_V3_AVAILABLE:
-        logger.warning("FEF V3 not available, skipping extension setup")
-        return None, None, None
-    
-    custom_extensions = [
-        Extension(
-            name="search_stats",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "total_searches": {"type": "integer"},
-                        "search_errors": {"type": "integer"},
-                        "avg_search_time_ms": {"type": "number"}
-                    }
-                }
-            },
-            handler=get_search_stats,
-            metadata={
-                "description": "Search engine statistics",
-                "category": "metrics"
-            }
-        ),
-        Extension(
-            name="fetch_stats",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "total_fetches": {"type": "integer"},
-                        "fetch_errors": {"type": "integer"},
-                        "avg_fetch_time_ms": {"type": "number"}
-                    }
-                }
-            },
-            handler=get_fetch_stats,
-            metadata={
-                "description": "URL fetch statistics",
-                "category": "metrics"
-            }
-        ),
-        Extension(
-            name="search_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
-                        "safe_search": {"type": "string", "enum": ["off", "moderate", "active"]},
-                        "country": {"type": "string"},
-                        "language": {"type": "string"}
-                    }
-                },
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "success": {"type": "boolean"},
-                        "message": {"type": "string"}
-                    }
-                }
-            },
-            handler=set_search_config,
-            metadata={
-                "description": "Update search engine configuration",
-                "category": "configuration"
-            }
-        ),
-        Extension(
-            name="search_history",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
-                    }
-                },
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "recent_searches": {"type": "array", "items": {"type": "string"}},
-                        "total": {"type": "integer"}
-                    }
-                }
-            },
-            handler=get_search_history,
-            metadata={"description": "Recent search queries", "category": "metrics"}
-        ),
-        Extension(
-            name="fetch_cache_hits",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "cache_hits": {"type": "integer"},
-                        "cache_misses": {"type": "integer"},
-                        "hit_ratio": {"type": "number"}
-                    }
-                }
-            },
-            handler=get_fetch_cache_hits,
-            metadata={"description": "Fetch cache hit ratio", "category": "metrics"}
-        ),
-    ]
-    
-    return setup_tool_extensions(
-        tool_name="webmcp",
-        mgmt_port=9001,
-        custom_extensions=custom_extensions
-    )
-
-
-# Initialize FEF V3
-fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")

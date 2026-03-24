@@ -505,14 +505,177 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
 # Create the transport instance
 transport = ConverterMCPStreamableHttp()
 
+# Global FEF V3 variables (initialized lazily)
+fef_manager = None
+fef_registry = None
+fef_http_server = None
+fef_setup_done = False
+
+
+def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
+    """
+    Set up FEF V3 extensions for convertermcp.
+    
+    This function can be called by the launcher after creating a registry,
+    or it will be called lazily during lifespan startup.
+    
+    Args:
+        registry: Optional existing registry to use (from launcher)
+    """
+    global fef_manager, fef_registry, fef_http_server, fef_setup_done
+    
+    if fef_setup_done:
+        logger.info("FEF V3 extensions already set up")
+        return
+    
+    if not FEF_V3_AVAILABLE:
+        logger.warning("FEF V3 not available, skipping extension setup")
+        fef_setup_done = True
+        return
+    
+    custom_extensions = [
+        Extension(
+            name="conversion_stats",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_conversions": {"type": "integer"},
+                        "total_bytes_processed": {"type": "integer"},
+                        "errors": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_conversion_stats,
+            metadata={"description": "Conversion operation statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="format_usage",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "formats": {"type": "object"}
+                    }
+                }
+            },
+            handler=get_format_usage,
+            metadata={"description": "Format usage breakdown", "category": "metrics"}
+        ),
+        Extension(
+            name="output_config",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "default_format": {"type": "string"},
+                        "max_file_size_mb": {"type": "integer", "minimum": 1},
+                        "preserve_formatting": {"type": "boolean"}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
+            },
+            handler=set_output_config,
+            metadata={"description": "Update output configuration", "category": "configuration"}
+        ),
+        Extension(
+            name="conversion_queue",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "pending_conversions": {"type": "integer"},
+                        "active_conversions": {"type": "integer"},
+                        "completed_today": {"type": "integer"}
+                    }
+                }
+            },
+            handler=get_conversion_queue,
+            metadata={"description": "Conversion queue status", "category": "metrics"}
+        ),
+        Extension(
+            name="storage_usage",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "total_bytes_processed": {"type": "integer"},
+                        "estimated_disk_usage_mb": {"type": "number"}
+                    }
+                }
+            },
+            handler=get_storage_usage,
+            metadata={"description": "Storage usage by output", "category": "metrics"}
+        ),
+        Extension(
+            name="parallel_limit",
+            ext_type=ExtensionType.MUTATOR,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "parallel_limit": {"type": "integer", "minimum": 1, "maximum": 16}
+                    }
+                },
+                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
+            },
+            handler=set_parallel_limit,
+            metadata={"description": "Set max parallel conversions", "category": "configuration"}
+        ),
+    ]
+    
+    # If a registry is provided (from launcher), use it
+    if registry is not None:
+        fef_registry = registry
+        fef_manager = ToolExtensionManager("convertermcp")
+        
+        # Register common extensions
+        register_common_extensions("convertermcp", fef_registry, fef_manager)
+        
+        # Register custom extensions
+        for ext in custom_extensions:
+            fef_registry.register("convertermcp", ext)
+            logger.info(f"[convertermcp] Registered custom extension: {ext.name}")
+        
+        # No HTTP server needed - launcher already has one
+        fef_http_server = None
+        logger.info("[convertermcp] FEF V3 extensions registered with launcher's registry")
+    else:
+        # Standalone mode - create our own registry and server
+        mgmt_port = int(os.environ.get("MCP_MGMT_PORT", "9013"))
+        fef_manager, fef_registry, fef_http_server = setup_tool_extensions(
+            tool_name="convertermcp",
+            mgmt_port=mgmt_port,
+            custom_extensions=custom_extensions
+        )
+        logger.info(f"[convertermcp] FEF V3 standalone mode on port {mgmt_port}")
+    
+    fef_setup_done = True
+
+
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application lifespan events."""
+    global fef_http_server
+    
     # Startup
     logger.info("Converter MCP Streamable HTTP server starting up...")
     
-    # Start FEF V3 management server if available
+    # Set up FEF V3 extensions if not already done by launcher
+    if not fef_setup_done:
+        setup_extensions(registry=None)
+    
+    # Start FEF V3 management server if we have one (standalone mode)
     if FEF_V3_AVAILABLE and fef_http_server:
         try:
             await fef_http_server.start()
@@ -676,123 +839,6 @@ def set_parallel_limit(params: Dict[str, Any]) -> Dict[str, Any]:
         "previous": previous,
         "new": converter_metrics.get("parallel_limit", 4)
     }
-
-
-def setup_fef_v3():
-    """Set up FEF V3 extensions for convertermcp."""
-    if not FEF_V3_AVAILABLE:
-        logger.warning("FEF V3 not available, skipping extension setup")
-        return None, None, None
-    
-    custom_extensions = [
-        Extension(
-            name="conversion_stats",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "total_conversions": {"type": "integer"},
-                        "total_bytes_processed": {"type": "integer"},
-                        "errors": {"type": "integer"}
-                    }
-                }
-            },
-            handler=get_conversion_stats,
-            metadata={"description": "Conversion operation statistics", "category": "metrics"}
-        ),
-        Extension(
-            name="format_usage",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "formats": {"type": "object"}
-                    }
-                }
-            },
-            handler=get_format_usage,
-            metadata={"description": "Format usage breakdown", "category": "metrics"}
-        ),
-        Extension(
-            name="output_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_format": {"type": "string"},
-                        "max_file_size_mb": {"type": "integer", "minimum": 1},
-                        "preserve_formatting": {"type": "boolean"}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_output_config,
-            metadata={"description": "Update output configuration", "category": "configuration"}
-        ),
-        Extension(
-            name="conversion_queue",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "pending_conversions": {"type": "integer"},
-                        "active_conversions": {"type": "integer"},
-                        "completed_today": {"type": "integer"}
-                    }
-                }
-            },
-            handler=get_conversion_queue,
-            metadata={"description": "Conversion queue status", "category": "metrics"}
-        ),
-        Extension(
-            name="storage_usage",
-            ext_type=ExtensionType.DATA_SOURCE,
-            schema={
-                "input": {"type": "object", "properties": {}},
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "total_bytes_processed": {"type": "integer"},
-                        "estimated_disk_usage_mb": {"type": "number"}
-                    }
-                }
-            },
-            handler=get_storage_usage,
-            metadata={"description": "Storage usage by output", "category": "metrics"}
-        ),
-        Extension(
-            name="parallel_limit",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "parallel_limit": {"type": "integer", "minimum": 1, "maximum": 16}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_parallel_limit,
-            metadata={"description": "Set max parallel conversions", "category": "configuration"}
-        ),
-    ]
-    
-    return setup_tool_extensions(
-        tool_name="convertermcp",
-        mgmt_port=9013,
-        custom_extensions=custom_extensions
-    )
-
-
-# Initialize FEF V3
-fef_manager, fef_registry, fef_http_server = setup_fef_v3()
 
 
 @app.get("/")
