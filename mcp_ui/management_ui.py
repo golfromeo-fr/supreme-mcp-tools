@@ -155,13 +155,18 @@ async def main_page() -> None:
     await content_area()
 
 
-async def _render_sidebar(state: AppState, content_refresh: callable = None) -> None:
+async def _render_sidebar(state: AppState, content_refresh: callable = None, initial_load: bool = True) -> None:
     """Render the sidebar with tool list."""
     logger.debug("_render_sidebar called")
     
-    # Only refresh if we haven't tried yet and aren't currently loading
-    if not state.tools and not state.tools_loading:
-        await _refresh_tools()
+    # DEFERRING API CALL: Don't block page render with initial API call
+    # Instead, trigger refresh after page loads using a timer
+    # This prevents NiceGUI's 3-second timeout from cancelling the request
+    if initial_load and not state.tools and not state.tools_loading:
+        # Schedule the refresh to happen after page renders
+        async def schedule_refresh():
+            await _refresh_tools()
+        ui.timer(0.1, schedule_refresh, once=True)
     
     def on_select(tool_name: str) -> None:
         state = get_state()
@@ -271,13 +276,11 @@ async def _refresh_tools() -> None:
         tools = await get_api_client().get_tools()
         state.tools = tools
         state.connection_status = 'connected'
+        logger.debug(f"_refresh_tools got {len(tools)} tools")
         
-        for tool in tools:
-            try:
-                extensions = await get_api_client().get_extensions(tool.name)
-                state.extensions[tool.name] = extensions
-            except APIError:
-                pass
+        # NOTE: Extensions are now fetched on-demand when a tool is selected,
+        # not during initial load. This prevents blocking the page render.
+        # See _render_content() for on-demand extension fetching.
     except APIError as e:
         state.connection_status = 'error'
         state.error_message = str(e)
@@ -288,6 +291,10 @@ async def _refresh_tools() -> None:
     finally:
         state.tools_loading = False
     logger.debug(f"_refresh_tools completed, tools: {len(state.tools)}")
+    
+    # Trigger UI refresh to update the tool list after loading completes
+    # This is needed when refresh is triggered by the deferred timer
+    ui.update()
 
 
 # =============================================================================

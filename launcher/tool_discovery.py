@@ -379,3 +379,4 @@ class ToolDiscovery:
             List of all tool metadata
         """
         return list(self.discovered_tools.values())
+
