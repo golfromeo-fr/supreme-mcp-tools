@@ -44,9 +44,9 @@ class ExporterConfig:
     def __post_init__(self):
         """Validate exporter configuration."""
         if self.type == StorageBackend.PROMETHEUS:
-            # Set defaults for Prometheus
+            # Set defaults for Prometheus (port must come from ports.json or be set explicitly)
             self.config.setdefault("endpoint", "/metrics")
-            self.config.setdefault("port", 9090)
+            # Do NOT set default port - it must come from ports.json
         elif self.type == StorageBackend.ELASTICSEARCH:
             # Set defaults for Elasticsearch
             self.config.setdefault("url", "http://localhost:9200")
@@ -359,13 +359,15 @@ def generate_example_config() -> Dict[str, Any]:
     config.collectors[MetricType.SYSTEM.value]["enabled"] = True
     
     # Add multiple exporters
+    # NOTE: Port should NOT be set here - it comes from config/ports.json
+    # Example: "port": 8300  # from ports.json reserved.metrics_server
     config.metrics["exporters"] = [
         asdict(ExporterConfig(
             type=StorageBackend.PROMETHEUS,
             enabled=True,
             config={
-                "endpoint": "/metrics",
-                "port": 9090
+                "endpoint": "/metrics"
+                # port comes from ports.json: reserved.metrics_server
             }
         )),
         asdict(ExporterConfig(

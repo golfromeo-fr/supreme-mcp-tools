@@ -11,8 +11,7 @@
         "type": "prometheus",
         "enabled": true,
         "config": {
-          "endpoint": "/metrics",
-          "port": 9090
+          "endpoint": "/metrics"
         }
       }
     ]

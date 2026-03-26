@@ -508,14 +508,26 @@ def setup_tool_extensions(
     else:
         # No management port specified - create everything
         registry = ExtensionRegistry()
-        # Use default port if none specified
-        default_port = 9012
+        # Get port from ports.json or raise error
+        from launcher.launcher_config import load_ports_config
+        try:
+            ports_config = load_ports_config()
+            port = ports_config.get("assignments", {}).get("mgmt", {}).get(tool_name)
+            if port is None:
+                raise ValueError(
+                    f"Port for {tool_name} not found in ports.json assignments.mgmt"
+                )
+        except Exception as e:
+            raise ValueError(
+                f"Could not determine management port for {tool_name}: {e}. "
+                "Please configure ports.json with the tool's management port."
+            )
         http_server = ExtensionHTTPServer(
             tool_name=tool_name,
             registry=registry,
-            port=default_port
+            port=port
         )
-        logger.info(f"[{tool_name}] FEF V3 standalone mode on port {default_port}")
+        logger.info(f"[{tool_name}] FEF V3 standalone mode on port {port}")
     
     # Register common extensions
     register_common_extensions(tool_name, registry, manager)

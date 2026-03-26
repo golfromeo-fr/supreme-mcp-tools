@@ -188,14 +188,14 @@ Examples:
     parser.add_argument(
         "--no-management",
         action="store_true",
-        help="Disable the centralized management API server (enabled by default on port 9091)"
+        help="Disable the centralized management API server (enabled by default, port from ports.json)"
     )
     
     parser.add_argument(
         "--management-port",
         type=int,
-        default=9091,
-        help="Port for the management server (default: 9091)"
+        default=None,
+        help="Port for the management server (default: from ports.json)"
     )
     
     return parser.parse_args()
@@ -282,7 +282,9 @@ async def start_servers(
             return None
         
         # Allocate management port if service registry is available
-        mgmt_port = port_manager.allocate_port(f"{tool.name}_mgmt") if service_registry else None
+        # Use port_type="mgmt" to allocate from the management port range (8100-8199)
+        from launcher.port_manager import PortType
+        mgmt_port = port_manager.allocate_port(f"{tool.name}_mgmt", port_type=PortType.MANAGEMENT) if service_registry else None
         
         try:
             # Apply startup timeout to prevent indefinite hangs
@@ -457,16 +459,29 @@ async def start_metrics_server(shutdown_event: asyncio.Event) -> None:
         return
     
     try:
-        # Get port from config or use default
-        exporters_config = _monitoring_config.metrics.get("exporters", [])
-        port = 9090
+        # Get port from ports.json (metrics_server) or config
+        port = None
         
+        # First try ports.json
+        try:
+            from launcher.launcher_config import load_ports_config
+            ports_config = load_ports_config()
+            port = ports_config.get("reserved", {}).get("metrics_server")
+        except Exception:
+            pass
+        
+        # Then try monitoring config exporters
+        exporters_config = _monitoring_config.metrics.get("exporters", [])
         for exporter in exporters_config:
             if exporter.get("type") == "prometheus" and exporter.get("enabled", False):
-                port = exporter.get("config", {}).get("port", 9090)
+                port = exporter.get("config", {}).get("port", port)
                 break
         
-        # Get the collector
+        if port is None:
+            logging.warning("Metrics server port not configured, skipping metrics server")
+            return
+        
+        # Get or create the default collector
         registry = MetricsRegistry.get_instance()
         collector = registry.get_default_collector()
         
@@ -495,9 +510,19 @@ async def start_metrics_server(shutdown_event: asyncio.Event) -> None:
         logging.info("Metrics server stopped")
 
 
+def _get_management_port_from_config() -> int:
+    """Get the management port from ports.json."""
+    try:
+        from launcher.launcher_config import load_ports_config
+        ports_config = load_ports_config()
+        return ports_config.get("reserved", {}).get("central_management")
+    except Exception:
+        return None
+
+
 async def start_management_api_server(
     shutdown_event: asyncio.Event,
-    port: int = 9091,
+    port: int = None,
     service_registry: Optional[ServiceRegistry] = None
 ) -> None:
     """
@@ -505,9 +530,16 @@ async def start_management_api_server(
     
     Args:
         shutdown_event: Event to signal shutdown
-        port: Port for the management server
+        port: Port for the management server (default: from ports.json)
         service_registry: Optional existing service registry to use
     """
+    if port is None:
+        port = _get_management_port_from_config()
+    if port is None:
+        raise ValueError(
+            "Management port not configured. Create config/ports.json with "
+            "reserved.central_management port or pass --management-port."
+        )
     global _service_registry
     
     try:
@@ -645,12 +677,19 @@ async def main() -> int:
         logging.info(f"Would launch: {[t.name for t in tools]}")
         return 0
     
-    # Initialize port manager
+    # Initialize port manager with typed port ranges from config
+    # config.config["portAllocation"] was populated from ports.json by _ensure_port_defaults()
+    # Transform to ports_config format that PortManager expects
+    port_alloc = config.config.get("portAllocation", {})
+    ports_config = {
+        "ranges": port_alloc.get("ranges", {}),
+        "reserved": port_alloc.get("reservedPorts", {}),
+        "assignments": port_alloc.get("manualPorts", {})
+    }
     port_manager = PortManager(
+        ports_config=ports_config,
         mode=config.get_port_mode(),
         base_port=config.get_base_port(),
-        port_range=config.get_port_range(),
-        manual_ports=config.get_manual_ports()
     )
     
     # Create service registry if management is enabled (default)
@@ -718,10 +757,20 @@ async def main() -> int:
         # Start management API server if enabled (default)
         management_task = None
         if not args.no_management:
+            # Get port from CLI override or config (ports.json)
+            mgmt_port = args.management_port
+            if mgmt_port is None:
+                mgmt_port = config.get_reserved_ports().get("central_management")
+            if mgmt_port is None:
+                logging.error(
+                    "Management port not configured. Set --management-port or "
+                    "create config/ports.json with reserved.central_management port."
+                )
+                return 1
             management_task = asyncio.create_task(
-                start_management_api_server(shutdown_event, args.management_port, service_registry)
+                start_management_api_server(shutdown_event, mgmt_port, service_registry)
             )
-            logging.info(f"Management API server will start on port {args.management_port}")
+            logging.info(f"Management API server will start on port {mgmt_port}")
         
         # Wait for shutdown signal
         await shutdown_event.wait()

@@ -3,11 +3,18 @@ Port allocation manager for the MCP launcher system.
 
 This module provides functionality to allocate and manage ports
 for multiple MCP tools running concurrently.
+
+Port Types:
+    - mcp: MCP tool endpoints (default range: 8000-8099)
+    - mgmt: Tool management servers (default range: 8100-8199)
+    - system: Central system services (default range: 8200-8299)
+    - metrics: Monitoring/metrics endpoints (default range: 8300-8399)
+    - ui: Web UI services (default range: 8400-8499)
 """
 
 import logging
 import socket
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .errors import PortConflictError
 
@@ -15,132 +22,118 @@ from .errors import PortConflictError
 logger = logging.getLogger(__name__)
 
 
+class PortType:
+    """Port type constants for categorizing port allocations."""
+    MCP = "mcp"              # MCP tool endpoints
+    MANAGEMENT = "mgmt"       # Tool management servers
+    SYSTEM = "system"         # Central system services
+    MONITORING = "metrics"    # Monitoring/metrics endpoints
+    UI = "ui"                 # Web UI services
+    CUSTOM = "custom"         # Tool-specific needs
+
+
 class PortManager:
-    """Manage port allocation for MCP tools."""
+    """Manage port allocation for all service types with type-aware ranges."""
     
     def __init__(
         self,
+        ports_config: Dict[str, Any],
         mode: str = "auto",
-        base_port: int = 8000,
+        base_port: Optional[int] = None,
         port_range: Optional[List[int]] = None,
-        manual_ports: Optional[Dict[str, int]] = None
+        manual_ports: Optional[Dict[str, int]] = None,
+        port_ranges: Optional[Dict[str, Tuple[int, int]]] = None,
+        reserved_ports: Optional[Dict[str, int]] = None,
+        manual_ports_by_type: Optional[Dict[str, Dict[str, int]]] = None
     ):
         """
         Initialize the port manager.
         
         Args:
+            ports_config: Port configuration from ports.json (required)
             mode: Port allocation mode ("auto" or "manual")
-            base_port: Starting port for auto allocation
-            port_range: Port range for allocation [min, max]
-            manual_ports: Dictionary of tool name -> port for manual allocation
+            base_port: Starting port for auto allocation (for backward compatibility, 
+                      should be configured in launcher_config.json or ports.json)
+            port_range: Legacy port range for allocation [min, max] (for backward compatibility)
+            manual_ports: Legacy dictionary of tool name -> port (for backward compatibility)
+            port_ranges: Port ranges per type {port_type: (min, max)} - overrides ports_config
+            reserved_ports: Pre-assigned system ports {service_name: port} - overrides ports_config
+            manual_ports_by_type: Manual assignments per type {port_type: {name: port}} - overrides ports_config
         """
         self.mode = mode
-        self.base_port = base_port
-        self.port_range = port_range or [8000, 9000]
-        self.manual_ports = manual_ports or {}
+        
+        # Use provided base_port or derive from mcp range for legacy support
+        if base_port is not None:
+            self.base_port = base_port
+        elif PortType.MCP in self.port_ranges:
+            self.base_port = self.port_ranges[PortType.MCP][0]  # Start of mcp range
+        else:
+            raise ValueError(
+                "base_port is required. Either provide it explicitly or ensure "
+                "ports.json contains an mcp range."
+            )
+        
+        # Primary source: ranges and reserved from ports_config
+        if port_ranges:
+            # Override from constructor parameter
+            self.port_ranges = port_ranges
+        else:
+            # From ports_config (convert lists to tuples)
+            self.port_ranges = {
+                k: tuple(v) for k, v in ports_config.get("ranges", {}).items()
+            }
+        
+        if reserved_ports:
+            self.reserved_ports = reserved_ports
+        else:
+            self.reserved_ports = ports_config.get("reserved", {}).copy()
+        
+        if manual_ports_by_type:
+            self.manual_ports_by_type = manual_ports_by_type
+        else:
+            self.manual_ports_by_type = ports_config.get("assignments", {}).copy()
+        
+        # Legacy support: convert old format to new format
+        if manual_ports and not manual_ports_by_type:
+            # Old format: manual_ports = {"tool": 8000}
+            # Convert to new format assuming MCP type
+            self.manual_ports_by_type[PortType.MCP] = manual_ports
+        
+        # Legacy port_range for backward compatibility
+        self.legacy_port_range = port_range or [8000, 9000]
         
         self.allocated_ports: Set[int] = set()
         self.tool_ports: Dict[str, int] = {}
-        self.next_port = base_port
+        # Track next available port per type for auto-allocation
+        self._next_port_by_type: Dict[str, int] = {
+            ptype: ranges[0] for ptype, ranges in self.port_ranges.items()
+        }
+        self.next_port = self.base_port  # Legacy support
     
-    def allocate_port(
-        self,
-        tool_name: str,
-        preferred_port: Optional[int] = None
-    ) -> int:
-        """
-        Allocate a port for a tool.
+    def _get_range_for_type(self, port_type: str) -> Tuple[int, int]:
+        """Get the port range for a given port type.
         
-        Args:
-            tool_name: Name of the tool
-            preferred_port: Optional preferred port number
-            
-        Returns:
-            Allocated port number
-            
         Raises:
-            PortConflictError: If port allocation fails
+            ValueError: If port_type is not recognized
         """
-        # Check if tool already has a port allocated
-        if tool_name in self.tool_ports:
-            logger.info(f"Tool {tool_name} already has port {self.tool_ports[tool_name]}")
-            return self.tool_ports[tool_name]
-        
-        port = None
-        
-        # Try preferred port first
-        if preferred_port is not None:
-            if self._is_port_available(preferred_port):
-                port = preferred_port
-            else:
-                logger.warning(f"Preferred port {preferred_port} not available for {tool_name}")
-        
-        # Try manual port assignment
-        if port is None and self.mode == "manual":
-            if tool_name in self.manual_ports:
-                manual_port = self.manual_ports[tool_name]
-                if self._is_port_available(manual_port):
-                    port = manual_port
-                else:
-                    raise PortConflictError(
-                        f"Manual port {manual_port} for {tool_name} is not available",
-                        port=manual_port,
-                        tool_name=tool_name
-                    )
-            else:
-                logger.warning(f"No manual port configured for {tool_name}, using auto allocation")
-        
-        # Auto allocate a port
-        if port is None:
-            port = self._allocate_auto_port()
-        
-        # Register the port
-        self.allocated_ports.add(port)
-        self.tool_ports[tool_name] = port
-        
-        logger.info(f"Allocated port {port} for tool {tool_name}")
-        return port
+        if port_type not in self.port_ranges:
+            raise ValueError(
+                f"Unknown port type: '{port_type}'. "
+                f"Valid types: {list(self.port_ranges.keys())}"
+            )
+        return self.port_ranges[port_type]
     
-    def _allocate_auto_port(self) -> int:
-        """
-        Automatically allocate a port from the range.
-        
-        Returns:
-            Allocated port number
-            
-        Raises:
-            PortConflictError: If no ports available in range
-        """
-        min_port, max_port = self.port_range
-        
-        # Try starting from next_port
-        port = self.next_port
-        
-        # Find next available port
-        while port <= max_port:
-            if self._is_port_available(port):
-                self.next_port = port + 1
-                return port
-            port += 1
-        
-        # Wrap around to base port if needed
-        port = min_port
-        while port < self.next_port:
-            if self._is_port_available(port):
-                self.next_port = port + 1
-                return port
-            port += 1
-        
-        raise PortConflictError(
-            f"No available ports in range {self.port_range}"
-        )
+    def _get_manual_ports_for_type(self, port_type: str) -> Dict[str, int]:
+        """Get manual ports for a given type."""
+        return self.manual_ports_by_type.get(port_type, {})
     
-    def _is_port_available(self, port: int) -> bool:
+    def _is_port_available(self, port: int, port_type: Optional[str] = None) -> bool:
         """
         Check if a port is available for use.
         
         Args:
             port: Port number to check
+            port_type: Optional port type for range validation
             
         Returns:
             True if port is available, False otherwise
@@ -149,10 +142,11 @@ class PortManager:
         if port in self.allocated_ports:
             return False
         
-        # Check if port is in range
-        min_port, max_port = self.port_range
-        if not (min_port <= port <= max_port):
-            return False
+        # Check if port is in range for its type
+        if port_type:
+            min_port, max_port = self._get_range_for_type(port_type)
+            if not (min_port <= port <= max_port):
+                return False
         
         # Check if port is actually available on the system
         try:
@@ -161,6 +155,171 @@ class PortManager:
                 return True
         except (OSError, socket.error):
             return False
+    
+    def validate_ranges(self) -> List[str]:
+        """
+        Validate that port ranges don't overlap.
+        
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        errors = []
+        ranges_list = list(self.port_ranges.items())
+        
+        for i, (type1, (min1, max1)) in enumerate(ranges_list):
+            for type2, (min2, max2) in ranges_list[i+1:]:
+                # Check for overlap
+                if not (max1 < min2 or max2 < min1):
+                    errors.append(
+                        f"Port range overlap: {type1} [{min1}, {max1}] and {type2} [{min2}, {max2}]"
+                    )
+        
+        return errors
+    
+    def validate_reserved_ports_in_ranges(self) -> List[str]:
+        """
+        Validate that reserved ports fall within their appropriate ranges.
+        
+        Uses the configured port_ranges from ports.json instead of hardcoded values.
+        
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        errors = []
+        
+        # Reserved ports should be in system, metrics, or ui ranges
+        # Get these ranges from the configured port_ranges (loaded from ports.json)
+        valid_types = {PortType.SYSTEM, PortType.MONITORING, PortType.UI}
+        
+        for service_name, port in self.reserved_ports.items():
+            # Check if port falls within any valid range
+            in_valid_range = False
+            for ptype in valid_types:
+                if ptype in self.port_ranges:
+                    min_port, max_port = self.port_ranges[ptype]
+                    if min_port <= port <= max_port:
+                        in_valid_range = True
+                        break
+            
+            if not in_valid_range:
+                # Build a descriptive message with the actual configured ranges
+                valid_ranges_desc = []
+                for ptype in valid_types:
+                    if ptype in self.port_ranges:
+                        min_port, max_port = self.port_ranges[ptype]
+                        valid_ranges_desc.append(f"{ptype} [{min_port}, {max_port}]")
+                
+                errors.append(
+                    f"Reserved port {port} for {service_name} not in valid ranges: {', '.join(valid_ranges_desc)}"
+                )
+        
+        return errors
+    
+    def allocate_port(
+        self,
+        name: str,
+        port_type: str = PortType.MCP,
+        preferred_port: Optional[int] = None
+    ) -> int:
+        """
+        Allocate a port for a service.
+        
+        Args:
+            name: Name of the service/tool
+            port_type: Type of port (mcp, mgmt, system, metrics, ui)
+            preferred_port: Optional preferred port number
+            
+        Returns:
+            Allocated port number
+            
+        Raises:
+            PortConflictError: If port allocation fails
+        """
+        # Check if service already has a port allocated
+        if name in self.tool_ports:
+            logger.info(f"Service {name} already has port {self.tool_ports[name]}")
+            return self.tool_ports[name]
+        
+        port = None
+        range_min, range_max = self._get_range_for_type(port_type)
+        manual_ports = self._get_manual_ports_for_type(port_type)
+        
+        # Try preferred port first
+        if preferred_port is not None:
+            if self._is_port_available(preferred_port, port_type):
+                port = preferred_port
+            else:
+                logger.warning(f"Preferred port {preferred_port} not available for {name}")
+        
+        # Try manual port assignment
+        if port is None and self.mode == "manual":
+            if name in manual_ports:
+                manual_port = manual_ports[name]
+                if self._is_port_available(manual_port, port_type):
+                    port = manual_port
+                else:
+                    raise PortConflictError(
+                        f"Manual port {manual_port} for {name} is not available",
+                        port=manual_port,
+                        tool_name=name
+                    )
+            else:
+                logger.debug(f"No manual port configured for {name} in {port_type} type, using auto allocation")
+        
+        # Auto allocate a port
+        if port is None:
+            port = self._allocate_auto_port(port_type)
+        
+        # Register the port
+        self.allocated_ports.add(port)
+        self.tool_ports[name] = port
+        
+        logger.info(f"Allocated port {port} for service {name} (type: {port_type})")
+        return port
+    
+    def _allocate_auto_port(self, port_type: str = PortType.MCP) -> int:
+        """
+        Automatically allocate a port from the type's range.
+        
+        Args:
+            port_type: The type of port to allocate
+            
+        Returns:
+            Allocated port number
+            
+        Raises:
+            PortConflictError: If no ports available in range
+        """
+        min_port, max_port = self._get_range_for_type(port_type)
+        
+        # Try starting from next available port for this type
+        port = self._next_port_by_type.get(port_type, min_port)
+        
+        # Find next available port
+        while port <= max_port:
+            if self._is_port_available(port, port_type):
+                self._next_port_by_type[port_type] = port + 1
+                return port
+            port += 1
+        
+        # Wrap around to base port if needed
+        port = min_port
+        while port < self._next_port_by_type.get(port_type, min_port):
+            if self._is_port_available(port, port_type):
+                self._next_port_by_type[port_type] = port + 1
+                return port
+            port += 1
+        
+        raise PortConflictError(
+            f"No available ports in range for type {port_type}: [{min_port}, {max_port}]"
+        )
+    
+    def _get_port_type_for_port(self, port: int) -> Optional[str]:
+        """Infer the port type from the port number."""
+        for ptype, (min_port, max_port) in self.port_ranges.items():
+            if min_port <= port <= max_port:
+                return ptype
+        return None
     
     def release_port(self, tool_name: str) -> Optional[int]:
         """
@@ -180,6 +339,11 @@ class PortManager:
         self.allocated_ports.discard(port)
         del self.tool_ports[tool_name]
         
+        # Update next_port tracking if this port is lower than current next for its type
+        port_type = self._get_port_type_for_port(port)
+        if port_type and port < self._next_port_by_type.get(port_type, float('inf')):
+            self._next_port_by_type[port_type] = port
+        
         logger.info(f"Released port {port} for tool {tool_name}")
         return port
     
@@ -187,7 +351,9 @@ class PortManager:
         """Release all allocated ports."""
         self.allocated_ports.clear()
         self.tool_ports.clear()
-        self.next_port = self.base_port
+        self._next_port_by_type = {
+            ptype: ranges[0] for ptype, ranges in self.port_ranges.items()
+        }
         logger.info("Released all allocated ports")
     
     def get_port(self, tool_name: str) -> Optional[int]:
@@ -202,14 +368,59 @@ class PortManager:
         """
         return self.tool_ports.get(tool_name)
     
-    def get_all_ports(self) -> Dict[str, int]:
+    def get_all_ports(self, port_type: Optional[str] = None) -> Dict[str, int]:
         """
-        Get all tool port allocations.
+        Get all port allocations, optionally filtered by type.
         
+        Args:
+            port_type: Optional port type to filter by (mcp, mgmt, system, metrics, ui)
+            
         Returns:
-            Dictionary of tool name -> port
+            Dictionary of service name -> port
         """
-        return self.tool_ports.copy()
+        if port_type is None:
+            return self.tool_ports.copy()
+        
+        # Filter by port type based on which range they fall into
+        result = {}
+        type_min, type_max = self._get_range_for_type(port_type)
+        for name, port in self.tool_ports.items():
+            if type_min <= port <= type_max:
+                result[name] = port
+        return result
+    
+    def get_ports_by_type(self, port_type: str) -> Dict[str, int]:
+        """
+        Get all ports for a specific type.
+        
+        Args:
+            port_type: Type of ports to retrieve
+            
+        Returns:
+            Dictionary of service name -> port for the specified type
+        """
+        return self.get_all_ports(port_type=port_type)
+    
+    def reserve_system_port(self, name: str, port: int) -> bool:
+        """
+        Reserve a specific port for a system service.
+        
+        Args:
+            name: Name of the system service
+            port: Port number to reserve
+            
+        Returns:
+            True if port was reserved, False if already in use
+        """
+        if not self._is_port_available(port, PortType.SYSTEM):
+            logger.warning(f"Cannot reserve port {port} for {name}: already in use")
+            return False
+        
+        self.allocated_ports.add(port)
+        self.tool_ports[name] = port
+        self.reserved_ports[name] = port
+        logger.info(f"Reserved system port {port} for {name}")
+        return True
     
     def get_allocated_ports(self) -> Set[int]:
         """
@@ -232,21 +443,22 @@ class PortManager:
         """
         return port in self.allocated_ports
     
-    def reserve_port(self, port: int) -> bool:
+    def reserve_port(self, port: int, port_type: str = PortType.MCP) -> bool:
         """
-        Reserve a port without assigning it to a tool.
+        Reserve a port without assigning it to a service.
         
         Args:
             port: Port number to reserve
+            port_type: Type of port for range validation
             
         Returns:
             True if port was reserved, False if already in use
         """
-        if not self._is_port_available(port):
+        if not self._is_port_available(port, port_type):
             return False
         
         self.allocated_ports.add(port)
-        logger.info(f"Reserved port {port}")
+        logger.info(f"Reserved port {port} (type: {port_type})")
         return True
     
     def unreserve_port(self, port: int) -> bool:
@@ -265,18 +477,21 @@ class PortManager:
             return True
         return False
     
-    def get_next_available_port(self) -> Optional[int]:
+    def get_next_available_port(self, port_type: str = PortType.MCP) -> Optional[int]:
         """
         Get the next available port without allocating it.
         
+        Args:
+            port_type: Type of port to find
+            
         Returns:
             Next available port number, or None if none available
         """
-        min_port, max_port = self.port_range
-        port = self.next_port
+        min_port, max_port = self._get_range_for_type(port_type)
+        port = self._next_port_by_type.get(port_type, min_port)
         
         while port <= max_port:
-            if self._is_port_available(port):
+            if self._is_port_available(port, port_type):
                 return port
             port += 1
         
@@ -289,16 +504,24 @@ class PortManager:
         Returns:
             Dictionary with port allocation status
         """
-        min_port, max_port = self.port_range
-        total_ports = max_port - min_port + 1
-        available_ports = total_ports - len(self.allocated_ports)
+        # Calculate status per type
+        type_status = {}
+        for ptype, (min_port, max_port) in self.port_ranges.items():
+            total = max_port - min_port + 1
+            allocated = sum(1 for p in self.allocated_ports if min_port <= p <= max_port)
+            type_status[ptype] = {
+                "range": (min_port, max_port),
+                "total": total,
+                "allocated": allocated,
+                "available": total - allocated
+            }
         
         return {
             "mode": self.mode,
             "base_port": self.base_port,
-            "port_range": self.port_range,
+            "port_ranges": self.port_ranges,
+            "reserved_ports": self.reserved_ports.copy(),
             "allocated_ports": len(self.allocated_ports),
-            "available_ports": available_ports,
-            "total_ports": total_ports,
-            "tools": self.tool_ports.copy()
+            "tools": self.tool_ports.copy(),
+            "by_type": type_status
         }

@@ -13,6 +13,38 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _get_port_from_config(key: str, subkey: str = None) -> int:
+    """
+    Get a port from ports.json configuration.
+    
+    Args:
+        key: Top-level key in ports.json (e.g., "reserved", "assignments")
+        subkey: Second-level key (e.g., "central_management", "mcp")
+        
+    Returns:
+        Port number from config
+        
+    Raises:
+        ConfigError: If ports.json is missing or key not found
+    """
+    from launcher.launcher_config import load_ports_config, ConfigError
+    ports_config = load_ports_config()
+    
+    value = ports_config.get(key, {})
+    if subkey:
+        value = value.get(subkey)
+    
+    if value is None:
+        raise ConfigError(f"Port not found in ports.json: {key}.{subkey}")
+    
+    return int(value)
+
+
+def _get_central_management_port() -> int:
+    """Get the central management port from ports.json."""
+    return _get_port_from_config("reserved", "central_management")
+
+
 @dataclass
 class ToolEndpoint:
     """Configuration for a remote tool endpoint."""
@@ -32,11 +64,16 @@ class ToolEndpoint:
         return f"{self.protocol}://{self.host}:{self.mcp_port}"
 
 
+def _default_management_server_config() -> "ManagementServerConfig":
+    """Factory function to create ManagementServerConfig with port from ports.json."""
+    return ManagementServerConfig(port=_get_central_management_port())
+
+
 @dataclass
 class ManagementServerConfig:
     """Configuration for the management server."""
     host: str = "0.0.0.0"
-    port: int = 9091
+    port: int = field(default_factory=_get_central_management_port)
     advertised_url: Optional[str] = None
     api_key: Optional[str] = None
     
@@ -192,15 +229,41 @@ class DistributedConfig:
         return config
 
 
-# Default distributed configuration
-DEFAULT_DISTRIBUTED_CONFIG = DistributedConfig(
-    management_server=ManagementServerConfig(
-        host="0.0.0.0",
-        port=9091
-    ),
-    tools={
-        "webmcp": ToolEndpoint(host="localhost", mcp_port=8001, mgmt_port=9001),
-        "simplemcp": ToolEndpoint(host="localhost", mcp_port=8002, mgmt_port=9002),
-        "ragmcp": ToolEndpoint(host="localhost", mcp_port=8004, mgmt_port=9004),
-    }
-)
+def _build_default_distributed_config() -> DistributedConfig:
+    """
+    Build default distributed configuration from ports.json.
+    
+    All ports are loaded from config/ports.json - no hardcoded ports.
+    """
+    config = DistributedConfig()
+    
+    # Management server port from ports.json
+    config.management_server = ManagementServerConfig()
+    
+    # Tool endpoints from ports.json assignments
+    try:
+        mcp_assignments = _get_port_from_config("assignments", "mcp")
+        mgmt_assignments = _get_port_from_config("assignments", "mgmt")
+        
+        for tool_name in mcp_assignments:
+            if tool_name in mgmt_assignments:
+                config.tools[tool_name] = ToolEndpoint(
+                    host="localhost",
+                    mcp_port=mcp_assignments[tool_name],
+                    mgmt_port=mgmt_assignments[tool_name]
+                )
+    except Exception as e:
+        logger.warning(f"Could not load tool ports from ports.json: {e}")
+    
+    return config
+
+
+# Default distributed configuration - built lazily from ports.json
+DEFAULT_DISTRIBUTED_CONFIG = None
+
+def get_default_distributed_config() -> DistributedConfig:
+    """Get the default distributed configuration, building it if needed."""
+    global DEFAULT_DISTRIBUTED_CONFIG
+    if DEFAULT_DISTRIBUTED_CONFIG is None:
+        DEFAULT_DISTRIBUTED_CONFIG = _build_default_distributed_config()
+    return DEFAULT_DISTRIBUTED_CONFIG

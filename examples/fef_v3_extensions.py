@@ -369,10 +369,40 @@ def register_tool_extensions(tool_name: str, registry: ExtensionRegistry) -> Non
 # Example: Running a Tool with Management Server
 # ============================================================================
 
+def _get_example_mgmt_port(tool_name: str) -> int:
+    """Get management port for example tool from ports.json.
+    
+    Args:
+        tool_name: Name of the tool
+        
+    Returns:
+        Port number
+        
+    Raises:
+        ValueError: If port not found in ports.json
+    """
+    try:
+        from launcher.launcher_config import load_ports_config
+        ports_config = load_ports_config()
+        assignments = ports_config.get("assignments", {})
+        mgmt_ports = assignments.get("mgmt", {})
+        port = mgmt_ports.get(tool_name)
+        if port is None:
+            raise ValueError(
+                f"Port for {tool_name} not found in ports.json assignments.mgmt"
+            )
+        return port
+    except Exception as e:
+        raise ValueError(
+            f"Could not load port from ports.json: {e}. "
+            "Please ensure ports.json is properly configured."
+        )
+
+
 async def run_example():
     """Run an example tool with management server."""
     tool_name = "example_tool"
-    mgmt_port = 9099
+    mgmt_port = _get_example_mgmt_port(tool_name)
     
     # Create extension registry
     registry = ExtensionRegistry()

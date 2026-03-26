@@ -1,0 +1,30 @@
+{
+  "ranges": {
+    "mcp": [8000, 8099],
+    "mgmt": [8100, 8199],
+    "system": [8200, 8299],
+    "metrics": [8300, 8399],
+    "ui": [8400, 8499]
+  },
+  "reserved": {
+    "central_management": 8200,
+    "metrics_server": 8300,
+    "management_ui": 8400
+  },
+  "assignments": {
+    "mcp": {
+      "oraclemcp": 8000,
+      "webmcp": 8001,
+      "simplemcp": 8002,
+      "convertermcp": 8003,
+      "ragmcp": 8004
+    },
+    "mgmt": {
+      "oraclemcp": 8100,
+      "webmcp": 8101,
+      "simplemcp": 8102,
+      "convertermcp": 8103,
+      "ragmcp": 8104
+    }
+  }
+}

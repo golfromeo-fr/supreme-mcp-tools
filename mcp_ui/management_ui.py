@@ -6,7 +6,9 @@ NiceGUI-based web interface for managing MCP tools.
 Run with:
     python -m mcp_ui.management_ui
     # OR
-    uvicorn mcp_ui:app --host 0.0.0.0 --port 9092
+    uvicorn mcp_ui:app --host 0.0.0.0 --port 8400
+    # OR with custom port via environment variable:
+    # MCP_UI_PORT=8400 uvicorn mcp_ui:app --host 0.0.0.0 --port 8400
 """
 
 import os
@@ -23,6 +25,36 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def _get_ui_port_from_config() -> int:
+    """Get the UI port from ports.json."""
+    try:
+        from launcher.launcher_config import load_ports_config
+        ports_config = load_ports_config()
+        return ports_config.get("reserved", {}).get("management_ui")
+    except Exception:
+        return None
+
+
+# Default UI port from ports.json, or environment variable, or error
+def _get_default_ui_port() -> int:
+    """Get default UI port from config or environment."""
+    # First check environment variable
+    env_port = os.environ.get("MCP_UI_PORT")
+    if env_port:
+        return int(env_port)
+    
+    # Then check ports.json
+    port = _get_ui_port_from_config()
+    if port:
+        return port
+    
+    # No fallback - require configuration
+    raise ValueError(
+        "UI port not configured. Set MCP_UI_PORT environment variable or "
+        "create config/ports.json with reserved.management_ui port."
+    )
 
 
 # =============================================================================
@@ -321,4 +353,6 @@ logger.debug("NiceGUI initialization complete")
 
 if __name__ in {'__main__', '__mp_main__'}:
     import uvicorn
-    uvicorn.run('mcp_ui.management_ui:app', host='0.0.0.0', port=9092, log_level='info')
+    # Get port from config (ports.json or environment variable)
+    port = _get_default_ui_port()
+    uvicorn.run('mcp_ui.management_ui:app', host='0.0.0.0', port=port, log_level='info')

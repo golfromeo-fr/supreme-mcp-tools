@@ -30,14 +30,42 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 
+def _get_default_management_url() -> str:
+    """Get the default management server URL from ports.json.
+    
+    Returns:
+        Management server URL
+        
+    Raises:
+        ValueError: If ports.json is not configured properly
+    """
+    try:
+        from launcher.launcher_config import load_ports_config
+        ports_config = load_ports_config()
+        port = ports_config.get("reserved", {}).get("central_management")
+        if port is None:
+            raise ValueError(
+                "central_management port not found in ports.json reserved section"
+            )
+        return f"http://localhost:{port}"
+    except Exception as e:
+        raise ValueError(
+            f"Could not load management URL from ports.json: {e}. "
+            "Please ensure ports.json is properly configured."
+        )
+
+
 class DiagnosticTool:
     """Diagnostic tool for FEF V3 troubleshooting."""
     
     def __init__(
         self,
-        management_url: str = "http://localhost:9091",
+        management_url: Optional[str] = None,
         tools_dir: str = "tools"
     ):
+        # Get management URL from ports.json if not provided
+        if management_url is None:
+            management_url = _get_default_management_url()
         self.management_url = management_url
         self.tools_dir = Path(tools_dir)
         self._session: Optional[aiohttp.ClientSession] = None
@@ -338,8 +366,8 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--management-url",
         type=str,
-        default="http://localhost:9091",
-        help="Management server URL"
+        default=None,
+        help="Management server URL (default: from ports.json)"
     )
     
     parser.add_argument(

@@ -37,6 +37,18 @@ class ManagementAPIClient:
     extension operations.
     """
     
+    def _get_default_base_url() -> str:
+        """Get the default base URL from ports.json."""
+        try:
+            from launcher.launcher_config import load_ports_config
+            ports_config = load_ports_config()
+            port = ports_config.get("reserved", {}).get("central_management")
+            if port:
+                return f"http://localhost:{port}"
+        except Exception:
+            pass
+        return None
+    
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -49,13 +61,22 @@ class ManagementAPIClient:
         Initialize the API client.
         
         Args:
-            base_url: Base URL for the Management API (default: MCP_API_URL env var).
+            base_url: Base URL for the Management API (default: from ports.json or MCP_API_URL env var).
             api_key: API key for authentication (default: MCP_API_KEY env var).
             timeout: Request timeout in seconds.
             max_retries: Maximum number of retry attempts.
             retry_delay: Delay between retries in seconds.
         """
-        self.base_url = base_url or os.environ.get("MCP_API_URL", "http://localhost:9091")
+        if base_url is None:
+            base_url = os.environ.get("MCP_API_URL")
+        if base_url is None:
+            base_url = self._get_default_base_url()
+        if base_url is None:
+            raise ValueError(
+                "API base URL not configured. Set MCP_API_URL environment variable or "
+                "create config/ports.json with reserved.central_management port."
+            )
+        self.base_url = base_url
         self.api_key = api_key or os.environ.get("MCP_API_KEY")
         self.timeout = timeout
         self.max_retries = max_retries

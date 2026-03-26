@@ -49,12 +49,32 @@ class ExtensionHTTPServer:
     - WebSocket event streaming
     """
     
+    @staticmethod
+    def _get_default_mgmt_port(tool_name: str) -> Optional[int]:
+        """Get the default management port for a tool from ports.json.
+        
+        Args:
+            tool_name: Name of the tool
+            
+        Returns:
+            Port number if found, None otherwise
+        """
+        try:
+            from launcher.launcher_config import load_ports_config
+            ports_config = load_ports_config()
+            # Look in assignments.mgmt.<tool_name>
+            assignments = ports_config.get("assignments", {})
+            mgmt_ports = assignments.get("mgmt", {})
+            return mgmt_ports.get(tool_name)
+        except Exception:
+            return None
+    
     def __init__(
         self,
         tool_name: str,
         registry: ExtensionRegistry,
         config_manager: Optional[Any] = None,
-        port: int = 9001,
+        port: Optional[int] = None,
         host: str = "0.0.0.0",
         api_key: Optional[str] = None
     ):
@@ -65,13 +85,26 @@ class ExtensionHTTPServer:
             tool_name: Name of the tool this server belongs to
             registry: Extension registry instance
             config_manager: Optional configuration manager
-            port: Port to listen on
+            port: Port to listen on (required, loaded from ports.json if not provided)
             host: Host to bind to
             api_key: Optional API key for authentication
+            
+        Raises:
+            ValueError: If port is not provided and cannot be loaded from ports.json
         """
         self.tool_name = tool_name
         self.registry = registry
         self.config_manager = config_manager
+        
+        # Get port from ports.json if not specified
+        if port is None:
+            port = self._get_default_mgmt_port(tool_name)
+            if port is None:
+                raise ValueError(
+                    f"Port not specified for {tool_name} and not found in ports.json. "
+                    f"Please configure ports.json with a management port for {tool_name}."
+                )
+        
         self.port = port
         self.host = host
         self.api_key = api_key
@@ -86,7 +119,7 @@ class ExtensionHTTPServer:
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=True,
+            allow_credentials=False,  # Not using cookies; header-based auth only
             allow_methods=["*"],
             allow_headers=["*"],
         )

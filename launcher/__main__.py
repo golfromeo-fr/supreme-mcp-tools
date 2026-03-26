@@ -9,7 +9,7 @@ Usage:
 
 Examples:
     # Start management server only
-    python -m launcher --management-port 9091
+    python -m launcher --management-port 8200
 
     # Start with specific tools
     python -m launcher --tools webmcp,simplemcp
@@ -33,7 +33,7 @@ from .launcher_config import Config
 from .server_manager import ServerManager
 from .service_registry import ServiceRegistry
 from .management_server import ManagementServer
-from .port_manager import PortManager
+from .port_manager import PortManager, PortType
 from .tool_discovery import ToolDiscovery
 
 
@@ -57,7 +57,7 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --management-port 9091
+  %(prog)s --management-port 8200
   %(prog)s --tools webmcp,simplemcp
   %(prog)s --config /path/to/config.json
   %(prog)s --debug
@@ -67,8 +67,8 @@ Examples:
     parser.add_argument(
         "--management-port",
         type=int,
-        default=9091,
-        help="Port for the management server (default: 9091)"
+        default=None,
+        help="Port for the management server (default: from ports.json)"
     )
     
     parser.add_argument(
@@ -148,13 +148,26 @@ class Launcher:
         
         # Load configuration
         if args.config:
-            self.config = Config.from_file(args.config)
+            self.config = Config(config_path=args.config)
         else:
             self.config = Config()
         
         # Initialize components
         self.service_registry = ServiceRegistry()
-        self.port_manager = PortManager()
+        
+        # Build ports_config from self.config (following the pattern in launchmcp.py)
+        port_alloc = self.config.config.get("portAllocation", {})
+        ports_config = {
+            "ranges": port_alloc.get("ranges", {}),
+            "reserved": port_alloc.get("reservedPorts", {}),
+            "assignments": port_alloc.get("manualPorts", {})
+        }
+        
+        self.port_manager = PortManager(
+            ports_config=ports_config,
+            mode=self.config.get_port_mode(),
+            base_port=self.config.get_base_port(),
+        )
         self.server_manager = ServerManager(
             host=args.host,
             service_registry=self.service_registry,
@@ -182,16 +195,27 @@ class Launcher:
         
         # Start management server
         if not self.args.no_management:
+            # Get port from CLI arg, config, or ports.json
+            mgmt_port = self.args.management_port
+            if mgmt_port is None:
+                try:
+                    mgmt_port = self.config.get_reserved_ports().get("central_management")
+                    if mgmt_port is None:
+                        raise ValueError("central_management port not found in ports.json")
+                except Exception as e:
+                    logger.error(f"Could not get management port: {e}")
+                    raise
+            
             self.management_server = ManagementServer(
                 service_registry=self.service_registry,
-                port=self.args.management_port,
+                port=mgmt_port,
                 host=self.args.management_host,
                 api_key=self.args.api_key
             )
             await self.management_server.start()
             logger.info(
                 f"Management server started on "
-                f"{self.args.management_host}:{self.args.management_port}"
+                f"{self.args.management_host}:{mgmt_port}"
             )
         
         # Discover tools
@@ -208,8 +232,8 @@ class Launcher:
         for tool_name, tool_metadata in tools.items():
             try:
                 # Allocate ports
-                mcp_port = self.port_manager.allocate()
-                mgmt_port = self.port_manager.allocate() if not self.args.no_management else None
+                mcp_port = self.port_manager.allocate_port(tool_name, port_type=PortType.MCP)
+                mgmt_port = self.port_manager.allocate_port(f"{tool_name}_mgmt", port_type=PortType.MANAGEMENT) if not self.args.no_management else None
                 
                 # Start server
                 await self.server_manager.start_server(
@@ -272,9 +296,9 @@ class Launcher:
         print("=" * 60)
         
         if not self.args.no_management:
-            print(f"\nManagement Server: http://{self.args.management_host}:{self.args.management_port}")
-            print(f"  Health: http://{self.args.management_host}:{self.args.management_port}/health")
-            print(f"  Tools:  http://{self.args.management_host}:{self.args.management_port}/api/tools")
+            print(f"\nManagement Server: http://{self.args.management_host}:{self.management_server.port}")
+            print(f"  Health: http://{self.args.management_host}:{self.management_server.port}/health")
+            print(f"  Tools:  http://{self.args.management_host}:{self.management_server.port}/api/tools")
         
         instances = self.server_manager.get_all_instances()
         if instances:

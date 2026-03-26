@@ -40,6 +40,17 @@ class ExecuteRequest(BaseModel):
     params: Optional[Dict[str, Any]] = None
 
 
+def _get_default_management_port() -> int:
+    """Get the default management port from ports.json."""
+    try:
+        from launcher.launcher_config import load_ports_config
+        ports_config = load_ports_config()
+        return ports_config.get("reserved", {}).get("central_management")
+    except Exception as e:
+        logger.debug(f"Could not load ports.json: {e}")
+        return None
+
+
 class ManagementServer:
     """
     Main management server for the Flexible Extensibility Framework V3.
@@ -56,21 +67,46 @@ class ManagementServer:
     def __init__(
         self,
         service_registry: ServiceRegistry,
-        port: int = 9091,
+        port: int = None,
         host: str = "0.0.0.0",
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        port_manager: Optional[Any] = None
     ):
         """
         Initialize the management server.
         
         Args:
             service_registry: Service registry for tool discovery
-            port: Port to listen on
+            port: Port to listen on (default: from ports.json reserved.central_management)
             host: Host to bind to
             api_key: Optional API key for authentication
+            port_manager: Optional PortManager for port reservation
         """
         self.service_registry = service_registry
         self.registry = DistributedExtensionRegistry(service_registry)
+        
+        # Get port from ports.json if not specified
+        if port is None:
+            port = _get_default_management_port()
+            if port is None:
+                raise ValueError(
+                    "Management port not specified and ports.json not found. "
+                    "Please create config/ports.json with reserved.central_management port."
+                )
+        
+        # Try to reserve port with PortManager, fall back to specified port
+        if port_manager:
+            reserved = port_manager.reserve_system_port("central_management", port)
+            if not reserved:
+                # Port already in use or couldn't reserve, try to get an available one
+                actual_port = port_manager.allocate_port("central_management", port_type="system")
+                if actual_port != port:
+                    logger.warning(
+                        f"Requested port {port} unavailable, using {actual_port} instead. "
+                        f"Update ports.json reserved.central_management to match."
+                    )
+                port = actual_port
+        
         self.port = port
         self.host = host
         self.api_key = api_key
@@ -85,7 +121,7 @@ class ManagementServer:
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=True,
+            allow_credentials=False,  # Not using cookies; header-based auth only
             allow_methods=["*"],
             allow_headers=["*"],
         )

@@ -8,13 +8,58 @@ configuration from JSON files and environment variables.
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 
 from .errors import ConfigError
 
 
 logger = logging.getLogger(__name__)
+
+# Default config directory
+_DEFAULT_CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+
+def load_ports_config(config_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    Load ports configuration from ports.json.
+    
+    This is the ONLY source of truth for port configuration.
+    Fails with clear error if ports.json is missing.
+    
+    Args:
+        config_dir: Optional directory containing ports.json
+        
+    Returns:
+        Dictionary with ranges, reserved, and assignments
+        
+    Raises:
+        ConfigError: If ports.json is missing or invalid
+    """
+    if config_dir is None:
+        config_dir = _DEFAULT_CONFIG_DIR
+    
+    ports_path = config_dir / "ports.json"
+    if not ports_path.exists():
+        raise ConfigError(
+            f"ports.json not found at {ports_path}. "
+            "This is the ONLY source of truth for port configuration. "
+            "Please create it from ports.example.json."
+        )
+    
+    try:
+        with open(ports_path, 'r') as f:
+            config = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"Invalid ports.json: {e}")
+    
+    # Validate required sections exist
+    if "ranges" not in config:
+        raise ConfigError("ports.json missing 'ranges' section")
+    if "reserved" not in config:
+        raise ConfigError("ports.json missing 'reserved' section")
+    
+    return config
 
 
 class Config:
@@ -32,13 +77,35 @@ class Config:
             "tools/ragmcp"
         ],
         "portAllocation": {
-            "mode": "auto",
+            "mode": "manual",
+            # Legacy format for backward compatibility
             "basePort": 8000,
-            "portRange": [8000, 10000],
+            "portRange": [8000, 8099],
             "ports": {
                 "oraclemcp": 8000,
                 "webmcp": 8001,
-                "simplemcp": 8002
+                "simplemcp": 8002,
+                "convertermcp": 8003,
+                "ragmcp": 8004
+            },
+            "managementPorts": {
+                "oraclemcp": 8100,
+                "webmcp": 8101,
+                "simplemcp": 8102,
+                "convertermcp": 8103,
+                "ragmcp": 8104
+            },
+            # New format (preferred) - populated lazily from port_config.json
+            "ranges": None,  # Populated by _ensure_port_defaults()
+            "reservedPorts": None,  # Populated by _ensure_port_defaults()
+            "manualPorts": {
+                "mcp": {
+                    "oraclemcp": 8000,
+                    "webmcp": 8001,
+                    "simplemcp": 8002,
+                    "convertermcp": 8003,
+                    "ragmcp": 8004
+                }
             }
         },
         "server": {
@@ -72,6 +139,9 @@ class Config:
         # Start with defaults
         self.config = self.DEFAULT_CONFIG.copy()
         
+        # Ensure port defaults are loaded from port_config.json
+        self._ensure_port_defaults()
+        
         # Load from file if provided
         if self.config_path:
             self._load_from_file(self.config_path)
@@ -87,6 +157,27 @@ class Config:
         self._validate_config()
         
         logger.info(f"Configuration loaded from {self.config_path or 'defaults'}")
+    
+    def _ensure_port_defaults(self) -> None:
+        """Ensure port allocation defaults are loaded from ports.json."""
+        port_alloc = self.config.get("portAllocation", {})
+        
+        # Load from ports.json - this is the ONLY source of truth
+        ports_config = load_ports_config()
+        
+        # Set ranges from ports.json
+        if port_alloc.get("ranges") is None:
+            port_alloc["ranges"] = {k: tuple(v) for k, v in ports_config.get("ranges", {}).items()}
+        
+        # Set reserved ports from ports.json
+        if port_alloc.get("reservedPorts") is None:
+            port_alloc["reservedPorts"] = ports_config.get("reserved", {})
+        
+        # Set assignments from ports.json
+        if port_alloc.get("manualPorts") is None:
+            port_alloc["manualPorts"] = ports_config.get("assignments", {})
+        
+        self.config["portAllocation"] = port_alloc
     
     def _load_from_file(self, config_path: str) -> None:
         """
@@ -121,6 +212,9 @@ class Config:
                         resolved_dirs.append(str(resolved))
                 file_config["toolDirectories"] = resolved_dirs
             
+            # Migrate legacy port allocation config to new format
+            self._migrate_port_config(file_config)
+            
             # Merge file config with defaults
             self._merge_config(self.config, file_config)
             logger.info(f"Loaded configuration from {config_path}")
@@ -129,6 +223,56 @@ class Config:
             raise ConfigError(f"Invalid JSON in config file: {e}")
         except Exception as e:
             raise ConfigError(f"Failed to load config file: {e}")
+    
+    def _migrate_port_config(self, config: Dict[str, Any]) -> None:
+        """
+        Migrate legacy port allocation config to new format.
+        
+        Args:
+            config: Configuration dictionary (modified in place)
+        """
+        port_alloc = config.get("portAllocation", {})
+        
+        # Check if already using new format
+        if "ranges" in port_alloc and "manualPorts" in port_alloc:
+            return
+        
+        # Migrate legacy format to new format
+        logger.info("Migrating legacy port allocation config to new format")
+        
+        # Load from ports.json - this is the ONLY source of truth
+        try:
+            ports_config = load_ports_config()
+        except ConfigError:
+            logger.warning("ports.json not found, using legacy defaults")
+            ports_config = {"ranges": {}, "reserved": {}, "assignments": {}}
+        
+        # Set ranges from ports.json
+        if ports_config.get("ranges"):
+            port_alloc.setdefault("ranges", {k: tuple(v) for k, v in ports_config["ranges"].items()})
+        port_alloc.setdefault("reservedPorts", ports_config.get("reserved", {}))
+        port_alloc.setdefault("manualPorts", ports_config.get("assignments", {}))
+        
+        # Convert legacy ports to new manualPorts format
+        legacy_ports = port_alloc.get("ports", {})
+        if legacy_ports and "manualPorts" not in port_alloc:
+            port_alloc["manualPorts"] = {"mcp": legacy_ports.copy()}
+        
+        # Convert legacy managementPorts to new format (mgmt type)
+        legacy_mgmt = port_alloc.get("managementPorts", {})
+        if legacy_mgmt:
+            mgmt_manual = {}
+            for tool_name, port in legacy_mgmt.items():
+                mgmt_manual[f"{tool_name}_mgmt"] = port
+            
+            # Merge into existing manualPorts if present
+            if "manualPorts" not in port_alloc:
+                port_alloc["manualPorts"] = {}
+            if "mgmt" not in port_alloc["manualPorts"]:
+                port_alloc["manualPorts"]["mgmt"] = {}
+            port_alloc["manualPorts"]["mgmt"].update(mgmt_manual)
+        
+        config["portAllocation"] = port_alloc
     
     def _resolve_tool_directories(self) -> None:
         """
@@ -167,7 +311,16 @@ class Config:
             "LAUNCHER_LOG_LEVEL": ("server.logLevel", "string"),
             "LAUNCHER_LOGGING_LEVEL": ("logging.level", "string"),
             "LAUNCHER_CONTINUE_ON_ERROR": ("errorHandling.continueOnError", "bool"),
-            "LAUNCHER_FAIL_FAST": ("errorHandling.failFast", "bool")
+            "LAUNCHER_FAIL_FAST": ("errorHandling.failFast", "bool"),
+            # New port type environment variables
+            "LAUNCHER_CENTRAL_MGMT_PORT": ("portAllocation.reservedPorts.central_management", "int"),
+            "LAUNCHER_METRICS_PORT": ("portAllocation.reservedPorts.metrics_server", "int"),
+            "LAUNCHER_UI_PORT": ("portAllocation.reservedPorts.management_ui", "int"),
+            "LAUNCHER_MCP_RANGE": ("portAllocation.ranges.mcp", "list"),
+            "LAUNCHER_MGMT_RANGE": ("portAllocation.ranges.mgmt", "list"),
+            "LAUNCHER_SYSTEM_RANGE": ("portAllocation.ranges.system", "list"),
+            "LAUNCHER_METRICS_RANGE": ("portAllocation.ranges.metrics", "list"),
+            "LAUNCHER_UI_RANGE": ("portAllocation.ranges.ui", "list"),
         }
         
         for env_var, (config_path, value_type) in env_mappings.items():
@@ -307,23 +460,75 @@ class Config:
         return self.config.get("portAllocation", {}).get("mode", "auto")
     
     def get_base_port(self) -> int:
-        """Get base port for auto allocation."""
-        return self.config.get("portAllocation", {}).get("basePort", 8000)
+        """Get base port for auto allocation.
+        
+        Returns:
+            Base port number
+            
+        Raises:
+            ConfigError: If basePort is not configured in ports.json
+        """
+        port_alloc = self.config.get("portAllocation", {})
+        base_port = port_alloc.get("basePort") if port_alloc else None
+        if base_port is None:
+            raise ConfigError(
+                "basePort not configured. Please set portAllocation.basePort in config/launcher_config.json "
+                "or ensure ports.json is properly configured."
+            )
+        return base_port
     
     def get_port_range(self) -> List[int]:
-        """Get port range for allocation."""
-        return self.config.get("portAllocation", {}).get("portRange", [8000, 10000])
+        """Get port range for allocation.
+        
+        Returns:
+            List of [min_port, max_port]
+            
+        Raises:
+            ConfigError: If portRange is not configured in ports.json
+        """
+        port_alloc = self.config.get("portAllocation", {})
+        port_range = port_alloc.get("portRange") if port_alloc else None
+        if port_range is None:
+            raise ConfigError(
+                "portRange not configured. Please set portAllocation.portRange in config/launcher_config.json "
+                "or ensure ports.json is properly configured."
+            )
+        return port_range
     
     def get_manual_ports(self) -> Dict[str, int]:
-        """Get manual port assignments for MCP endpoints and management ports.
+        """Get manual port assignments for backward compatibility.
+        
+        Returns a flat dictionary with MCP endpoint ports.
+        For type-aware allocation, use get_manual_ports_by_type() instead.
+        
+        Returns:
+            Dictionary of tool_name -> port for MCP endpoints
+        """
+        # Try new format first
+        manual_by_type = self.get_manual_ports_by_type()
+        if "mcp" in manual_by_type:
+            return manual_by_type["mcp"].copy()
+        
+        # Fallback to legacy format
+        return self.config.get("portAllocation", {}).get("ports", {}).copy()
+    
+    def get_all_manual_ports(self) -> Dict[str, int]:
+        """Get all manual port assignments with type suffixes.
         
         Returns a dictionary with both MCP endpoint ports and management ports.
         Management port names are suffixed with '_mgmt' (e.g., 'simplemcp_mgmt').
+        
+        Returns:
+            Dictionary of service_name -> port (all types)
         """
-        ports = self.config.get("portAllocation", {}).get("ports", {}).copy()
+        ports = {}
+        
+        # Get MCP ports
+        mcp_ports = self.get_manual_ports()
+        ports.update(mcp_ports)
         
         # Add management ports with _mgmt suffix
-        management_ports = self.config.get("portAllocation", {}).get("managementPorts", {})
+        management_ports = self.get_management_ports()
         for tool_name, port in management_ports.items():
             ports[f"{tool_name}_mgmt"] = port
         
@@ -336,6 +541,47 @@ class Config:
         actual management ports auto-allocated by the port manager.
         """
         return self.config.get("portAllocation", {}).get("managementPorts", {}).copy()
+    
+    def get_port_ranges(self) -> Dict[str, Tuple[int, int]]:
+        """Get port ranges per type.
+        
+        Returns:
+            Dictionary mapping port type to (min, max) tuple
+        """
+        ranges = self.config.get("portAllocation", {}).get("ranges")
+        if ranges is None:
+            # This should never happen if _ensure_port_defaults was called
+            raise ConfigError("Port ranges not configured. Ensure ports.json exists.")
+        return ranges
+    
+    def get_reserved_ports(self) -> Dict[str, int]:
+        """Get reserved system service ports.
+        
+        Returns:
+            Dictionary mapping service name to port number
+        """
+        ports = self.config.get("portAllocation", {}).get("reservedPorts")
+        if ports is None:
+            # This should never happen if _ensure_port_defaults was called
+            raise ConfigError("Reserved ports not configured. Ensure ports.json exists.")
+        return ports
+    
+    def get_manual_ports_by_type(self) -> Dict[str, Dict[str, int]]:
+        """Get manual port assignments organized by type.
+        
+        Returns:
+            Dictionary mapping port type to {service_name: port}
+        """
+        manual_ports = self.config.get("portAllocation", {}).get("manualPorts", {})
+        if manual_ports:
+            return manual_ports
+        
+        # Backward compatibility: convert legacy format
+        legacy_ports = self.config.get("portAllocation", {}).get("ports", {})
+        if legacy_ports:
+            return {"mcp": legacy_ports}
+        
+        return {}
     
     def get_server_host(self) -> str:
         """Get server host address."""

@@ -6,25 +6,6 @@
     "tools/convertermcp",
     "tools/ragmcp"
   ],
-  "portAllocation": {
-    "mode": "manual",
-    "basePort": 8000,
-    "portRange": [8000, 10000],
-    "ports": {
-      "oraclemcp": 8000,
-      "webmcp": 8001,
-      "simplemcp": 8002,
-      "convertermcp": 8003,
-      "ragmcp": 8004
-    },
-    "managementPorts": {
-      "oraclemcp": 9000,
-      "webmcp": 9001,
-      "simplemcp": 9002,
-      "convertermcp": 9003,
-      "ragmcp": 9004
-    }
-  },
   "fefV3": {
     "enabled": true,
     "managementServer": {
