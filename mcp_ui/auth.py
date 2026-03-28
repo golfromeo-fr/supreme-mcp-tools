@@ -6,8 +6,10 @@ Handles user authentication and session management.
 
 import os
 import logging
+import json
+from pathlib import Path
 from functools import wraps
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Tuple
 
 from nicegui import ui, app
 
@@ -18,9 +20,41 @@ logger = logging.getLogger(__name__)
 ENV_USERNAME = "MCP_UI_USERNAME"
 ENV_PASSWORD = "MCP_UI_PASSWORD"
 
-# Default credentials (for development only)
-DEFAULT_USERNAME = "admin"
-DEFAULT_PASSWORD = "admin"
+
+def _load_ui_config() -> dict:
+    """Load UI configuration from ports.json."""
+    possible_paths = [
+        Path(__file__).parent.parent / "config" / "ports.json",
+        Path(__file__).parent.parent / "ports.json",
+    ]
+    for path in possible_paths:
+        if path.exists():
+            try:
+                with open(path) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return {}
+
+
+def _get_default_username() -> str:
+    """Get default username from environment or config."""
+    # Environment takes priority
+    default_username = os.environ.get("MCP_UI_DEFAULT_USERNAME")
+    if default_username:
+        return default_username
+
+    # Fall back to config
+    config = _load_ui_config()
+    return config.get("auth", {}).get("default_username", "admin")
+
+
+# Default password is only from environment (never from config file)
+_DEFAULT_PASSWORD = os.environ.get("MCP_UI_PASSWORD", "admin")
+
+
+# Default username for development
+_DEFAULT_USERNAME = _get_default_username()
 
 
 def get_credentials() -> tuple[Optional[str], Optional[str]]:
@@ -60,14 +94,12 @@ def verify_credentials(username: str, password: str) -> bool:
         True if credentials are valid, False otherwise.
     """
     stored_username, stored_password = get_credentials()
-    
-    # If no credentials are configured, use defaults for development
-    if stored_username is None and stored_password is None:
-        stored_username = DEFAULT_USERNAME
-        stored_password = DEFAULT_PASSWORD
-    
-    if stored_username is None or stored_password is None:
-        return False
+
+    # Fill in defaults for any missing credential
+    if stored_username is None:
+        stored_username = _DEFAULT_USERNAME
+    if stored_password is None:
+        stored_password = _DEFAULT_PASSWORD
     
     return username == stored_username and password == stored_password
 

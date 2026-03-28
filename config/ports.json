@@ -11,6 +11,20 @@
     "metrics_server": 8300,
     "management_ui": 8400
   },
+  "timeouts": {
+    "api_request": 30.0
+  },
+  "ui": {
+    "theme": "dark"
+  },
+  "auth": {
+    "default_username": "admin"
+  },
+  "notifications": {
+    "success_duration": 3.0,
+    "warning_duration": 5.0,
+    "info_duration": 3.0
+  },
   "assignments": {
     "mcp": {
       "oraclemcp": 8000,

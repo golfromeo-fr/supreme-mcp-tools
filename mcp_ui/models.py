@@ -21,6 +21,10 @@ class ToolStatus(str, Enum):
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
 
+    def is_active(self) -> bool:
+        """Check if tool is in an active state."""
+        return self in (ToolStatus.RUNNING, ToolStatus.HEALTHY, ToolStatus.DEGRADED)
+
 
 class ExtensionType(str, Enum):
     """Extension type enum."""
@@ -35,7 +39,7 @@ class ToolInfo(BaseModel):
     status: ToolStatus
     management_url: Optional[str] = None
     mcp_port: Optional[int] = None
-    capabilities: Optional[Dict[str, Any]] = None  # Can be dict with extensions_count, etc.
+    capabilities: Optional[Dict[str, Any]] = None
     last_check: Optional[float] = None  # Timestamp as float
 
 
@@ -56,7 +60,7 @@ class Extension(BaseModel):
     # Map metadata.description to description field
     description: Optional[str] = None
     data: Optional[Dict[str, Any]] = None  # For data sources
-    
+
     @model_validator(mode='before')
     @classmethod
     def extract_metadata_fields(cls, data):
@@ -76,10 +80,32 @@ class ToolDetail(BaseModel):
     status: ToolStatus
     management_url: Optional[str] = None
     mcp_port: Optional[int] = None
-    capabilities: Optional[Dict[str, Any]] = None  # Can be dict with extensions_count, etc.
+    capabilities: Optional[Dict[str, Any]] = None
     last_check: Optional[float] = None  # Timestamp as float
     registered_at: Optional[float] = None  # Timestamp as float
     extensions: List[Extension] = []
+
+    @property
+    def is_active(self) -> bool:
+        """Check if tool is in an active state."""
+        return self.status.is_active()
+
+    @property
+    def extension_count(self) -> int:
+        """Total number of extensions."""
+        return len(self.extensions)
+
+    def get_extension_summary(self) -> Dict[str, int]:
+        """Get summary of extension counts by type."""
+        counts = {"data_sources": 0, "mutators": 0, "actions": 0}
+        for ext in self.extensions:
+            if ext.type == ExtensionType.DATA_SOURCE:
+                counts["data_sources"] += 1
+            elif ext.type == ExtensionType.MUTATOR:
+                counts["mutators"] += 1
+            elif ext.type == ExtensionType.ACTION:
+                counts["actions"] += 1
+        return counts
 
 
 class APIResponse(BaseModel):
@@ -87,6 +113,16 @@ class APIResponse(BaseModel):
     success: bool
     data: Optional[Any] = None
     error: Optional[str] = None
+
+    @classmethod
+    def ok(cls, data: Any = None) -> "APIResponse":
+        """Create a successful response."""
+        return cls(success=True, data=data)
+
+    @classmethod
+    def fail(cls, error: str) -> "APIResponse":
+        """Create a failed response."""
+        return cls(success=False, error=error)
 
 
 class UIState(BaseModel):
