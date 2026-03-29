@@ -100,15 +100,16 @@ def _tool_list_item(
             on_select(tool_name)
 
     # Button styling based on selection
-    button_classes = "w-full justify-between items-center"
+    button_classes = "w-full"
     if is_selected:
         button_classes += " bg-blue-100 dark:bg-blue-900 border-l-4 border-blue-500"
 
     with ui.button(
         on_click=handle_click
     ).props("flat no-caps").classes(button_classes):
-        with ui.row().classes("items-center gap-2"):
+        with ui.element("div").classes(
+            "w-full grid items-center"
+        ).style("grid-template-columns: auto 1fr auto"):
             ui.icon(_get_tool_icon(tool.status)).classes("text-gray-500")
             ui.label(tool.name).classes("font-medium")
-
-        _status_badge(tool.status)
+            _status_badge(tool.status)
