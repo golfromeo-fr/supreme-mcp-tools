@@ -12,6 +12,7 @@ Port is read from config/ports.json (reserved.management_ui) or
 via MCP_UI_PORT environment variable.
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -267,7 +268,28 @@ async def main_page() -> None:
 
 async def _open_tool_settings(state) -> None:
     """Open the global tool settings dialog."""
+    from .components.tool_settings import _load_tools_config, _save_tools_config
+    from launcher.tools_config import discover_tools_from_server
+
     servers = [tool.name for tool in state.tools]
+
+    # Discover tools for servers that have empty tool lists in config
+    config = _load_tools_config()
+    needs_update = False
+    for tool_info in state.tools:
+        server_name = tool_info.name
+        if not config.get("tools", {}).get(server_name) and tool_info.mcp_port:
+            mcp_url = f"http://localhost:{tool_info.mcp_port}/mcp"
+            discovered = await discover_tools_from_server(mcp_url)
+            if discovered:
+                if "tools" not in config:
+                    config["tools"] = {}
+                config["tools"][server_name] = discovered
+                needs_update = True
+
+    if needs_update:
+        _save_tools_config(config)
+
     await show_global_tool_settings(servers)
 
 
@@ -275,11 +297,57 @@ async def _render_sidebar(state, content_refresh: callable = None, initial_load:
     """Render the sidebar with tool list."""
     logger.debug("_render_sidebar called")
 
+    async def _fetch_tool_detail(tool_name: str) -> None:
+        """Background task to fetch tool detail and extensions in parallel."""
+        client = get_api_client()
+        state = get_state()
+
+        # Fetch tool detail and extensions concurrently
+        tool_task = asyncio.create_task(client.get_tool(tool_name))
+        ext_task = asyncio.create_task(client.get_extensions(tool_name))
+
+        # Show tool detail as soon as it's ready
+        tool_response = await tool_task
+        if tool_response.success:
+            state.selected_tool_detail = tool_response.data
+            if content_refresh:
+                content_refresh()
+
+        # Wait for extensions and attach
+        ext_response = await ext_task
+        if ext_response.success and state.selected_tool_detail:
+            state.selected_tool_detail.extensions = ext_response.data
+
+        if not tool_response.success:
+            state.selected_tool_detail = None
+            show_error(f"Error loading tool: {tool_response.error}")
+        elif state.selected_tool_detail:
+            # Cache for instant re-selection
+            state.tool_detail_cache[tool_name] = state.selected_tool_detail
+
+        state.loading_detail = False
+        # Refresh UI with final state
+        if content_refresh:
+            content_refresh()
+
     def on_select(tool_name: str) -> None:
         state = get_state()
         state.select_tool(tool_name)
+        # Check cache for previously fetched detail
+        cached = state.tool_detail_cache.get(tool_name)
+        if cached:
+            state.selected_tool_detail = cached
+            state.loading_detail = False
+            if content_refresh:
+                content_refresh()
+            return
+        # Immediately show loading state
+        state.loading_detail = True
+        state.selected_tool_detail = None
         if content_refresh:
             content_refresh()
+        # Fetch in background
+        asyncio.create_task(_fetch_tool_detail(tool_name))
 
     async def on_refresh() -> None:
         await _refresh_tools()
@@ -300,25 +368,8 @@ async def _render_content(state) -> None:
     """Render the main content area."""
     logger.debug("_render_content called")
 
-    selected_tool_detail: Optional[ToolDetail] = None
-    extensions_error: Optional[str] = None
-    if state.selected_tool:
-        # Fetch tool detail
-        client = get_api_client()
-        response = await client.get_tool(state.selected_tool)
-
-        if response.success:
-            selected_tool_detail = response.data
-            # Fetch extensions separately
-            ext_response = await client.get_extensions(state.selected_tool)
-            if ext_response.success:
-                selected_tool_detail.extensions = ext_response.data
-            else:
-                extensions_error = ext_response.error
-                logger.warning(f"Failed to load extensions for {state.selected_tool}: {extensions_error}")
-                show_error(f"Extensions unavailable: {extensions_error}")
-        else:
-            show_error(f"Error loading tool: {response.error}")
+    # Use cached tool detail from background fetch
+    selected_tool_detail = state.selected_tool_detail
 
     async def on_query(ext_name: str, params: Optional[Dict[str, Any]] = None) -> None:
         state = get_state()
@@ -382,6 +433,7 @@ async def _refresh_tools() -> None:
     state = get_state()
     state.loading_tools = True
     state.last_error = None
+    state.tool_detail_cache.clear()
 
     try:
         client = get_api_client()

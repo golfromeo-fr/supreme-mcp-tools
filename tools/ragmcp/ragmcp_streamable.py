@@ -487,38 +487,54 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         logger.info(f"Tool called: {tool_name} with arguments: {arguments}")
-        
+
+        # Track timing
+        import time
+        start_time = time.perf_counter()
+
+        # Categorize tools
+        is_search = tool_name in ("search_code", "search_code_sparse", "get_copilot_context")
+        is_index_op = tool_name in ("start_indexing", "clear_index")
+
+        tool_succeeded = False
         try:
             if tool_name == "search_code":
                 async for response in self._handle_search_code_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             elif tool_name == "search_code_sparse":
                 async for response in self._handle_search_code_sparse_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             elif tool_name == "get_copilot_context":
                 async for response in self._handle_get_copilot_context_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             elif tool_name == "start_indexing":
                 async for response in self._handle_start_indexing_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             elif tool_name == "check_indexing_progress":
                 async for response in self._handle_check_indexing_progress_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             elif tool_name == "clear_index":
                 async for response in self._handle_clear_index_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             elif tool_name == "list_collections":
                 async for response in self._handle_list_collections_tool(arguments, request_id):
                     yield response
-            
+                tool_succeeded = True
+
             else:
                 yield {
                     "jsonrpc": "2.0",
@@ -528,9 +544,49 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
                         "message": f"Unknown tool: {tool_name}"
                     }
                 }
-        
+
+            # Update metrics after successful tool execution
+            if tool_succeeded:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                is_search_type = tool_name in ("search_code", "search_code_sparse", "get_copilot_context", "list_collections", "check_indexing_progress")
+                if tool_name == "search_code":
+                    ragmcp_metrics["semantic_searches"] += 1
+                    ragmcp_metrics["total_search_time_ms"] += elapsed_ms
+                elif tool_name == "search_code_sparse":
+                    ragmcp_metrics["sparse_searches"] += 1
+                    ragmcp_metrics["total_search_time_ms"] += elapsed_ms
+                elif tool_name in ("start_indexing", "clear_index"):
+                    ragmcp_metrics["index_operations"] += 1
+                elif tool_name in ("get_copilot_context", "list_collections", "check_indexing_progress"):
+                    # These are lookups, count as searches
+                    ragmcp_metrics["total_search_time_ms"] += elapsed_ms
+
+                if is_search_type:
+                    if elapsed_ms < ragmcp_metrics["min_search_time_ms"]:
+                        ragmcp_metrics["min_search_time_ms"] = elapsed_ms
+                    if elapsed_ms > ragmcp_metrics["max_search_time_ms"]:
+                        ragmcp_metrics["max_search_time_ms"] = elapsed_ms
+
+                # Also record in FEF manager for common extensions
+                if fef_manager is not None:
+                    fef_manager.metrics.record_request(
+                        endpoint="tools/call",
+                        tool_name=tool_name,
+                        success=True,
+                        duration_ms=elapsed_ms
+                    )
+
         except ValueError as e:
             logger.error(f"Value error in tool call '{tool_name}': {e}")
+            ragmcp_metrics["search_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -540,11 +596,20 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except Exception as e:
             logger.error(f"Error in tool call '{tool_name}': {e}")
             import traceback
             logger.error(traceback.format_exc())
+            ragmcp_metrics["search_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -1780,6 +1845,8 @@ ragmcp_metrics = {
     "embedding_calls": 0,
     "total_search_time_ms": 0.0,
     "search_errors": 0,
+    "min_search_time_ms": float("inf"),
+    "max_search_time_ms": 0.0,
 }
 
 # Collection configuration

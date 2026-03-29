@@ -10,6 +10,41 @@ from typing import List, Dict, Any, Callable, Optional
 from ..models import Extension
 
 
+def _get_extension_status(ext: Extension) -> tuple[str, str]:
+    """
+    Get the status and note for an extension.
+
+    Returns (status_label, status_note) tuple.
+    status_label is: "✅ Working", "⚠ Warning", or "❌ Not implemented"
+    """
+    if not ext.data:
+        return "❓ Not queried", "Query to see data"
+
+    # Check for cache_stats - if all hits/misses are 0, cache not implemented
+    if ext.name == "cache_stats":
+        hits = ext.data.get("hits", 0)
+        misses = ext.data.get("misses", 0)
+        if hits == 0 and misses == 0:
+            return "⚠ No cache", "Cache not implemented (hits=0, misses=0)"
+
+    # Check for request_stats - if no requests recorded
+    if ext.name == "request_stats":
+        total = ext.data.get("total_requests", 0)
+        if total == 0:
+            return "⚠ No requests", "No requests recorded yet"
+
+    # Check for api_response_times - if min/max/avg are all 0
+    if ext.name == "api_response_times":
+        min_t = ext.data.get("min_time_ms", 0)
+        max_t = ext.data.get("max_time_ms", 0)
+        avg_t = ext.data.get("avg_time_ms", 0)
+        if min_t == 0 and max_t == 0 and avg_t == 0:
+            return "⚠ No timing", "No timing data (all values 0)"
+
+    # All other extensions with data are considered implemented
+    return "✅ Working", ""
+
+
 def DataSourcesBox(
     extensions: List[Extension],
     on_query: Optional[Callable[[str], None]] = None,
@@ -17,7 +52,7 @@ def DataSourcesBox(
 ) -> None:
     """
     Render read-only data sources box with inline metrics.
-    
+
     Args:
         extensions: List of Extension objects (data sources).
         on_query: Callback when querying a data source.
@@ -25,18 +60,24 @@ def DataSourcesBox(
     """
     with ui.card().classes('w-full'):
         ui.label('Data Sources').classes('text-h6 mb-2')
-        
+
         if not extensions:
             ui.label('No data sources available').classes('text-grey')
             return
-        
+
         for ext in extensions:
             # Build summary text for the expansion header
             summary = _build_summary(ext)
-            with ui.expansion(summary, icon='storage').classes('w-full'):
+            status_label, status_note = _get_extension_status(ext)
+
+            with ui.expansion(f"{summary} [{status_label}]", icon='storage').classes('w-full'):
+                # Show status note below header
+                if status_note:
+                    ui.label(status_note).classes('text-caption mb-2')
+
                 if ext.description:
                     ui.label(ext.description).classes('text-grey mb-2')
-                
+
                 if ext.data:
                     # Show inline summary cards for key metrics
                     _inline_metrics(ext.data)
@@ -45,7 +86,7 @@ def DataSourcesBox(
                     _data_table(ext.data)
                 else:
                     ui.label('No data available').classes('text-grey')
-                
+
                 with ui.row().classes('gap-2 mt-2'):
                     if on_query:
                         ui.button(

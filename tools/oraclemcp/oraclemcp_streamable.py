@@ -454,37 +454,55 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         logger.info(f"Tool called: {tool_name} with arguments: {arguments}")
-        
+
+        # Track timing
+        import time
+        start_time = time.perf_counter()
+
+        # Categorize tools
+        is_query = tool_name in ("query", "execute_sql")
+        is_schema = tool_name in ("schemas", "list_user_tables_with_descriptions")
+
+        tool_succeeded = False
         try:
             if tool_name == "schemas":
                 async for response in self._handle_schemas_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "query":
                 async for response in self._handle_query_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "execute_sql":
                 async for response in self._handle_execute_sql_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "get_valid_languages":
                 async for response in self._handle_get_valid_languages_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "list_user_tables_with_descriptions":
                 async for response in self._handle_list_user_tables_with_descriptions_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "get_sql_optimization_rules":
                 async for response in self._handle_get_sql_optimization_rules_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "explain_plan":
                 async for response in self._handle_explain_plan_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "optimize_sql_with_ai":
                 async for response in self._handle_optimize_sql_with_ai_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "get_proc_rules":
                 async for response in self._handle_get_pro_c_rules_tool(arguments, request_id):
                     yield response
+                tool_succeeded = True
             else:
                 yield {
                     "jsonrpc": "2.0",
@@ -494,9 +512,41 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
                         "message": f"Unknown tool: {tool_name}"
                     }
                 }
-        
+
+            # Update metrics after successful tool execution
+            if tool_succeeded:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                if is_query:
+                    oraclemcp_metrics["query_count"] += 1
+                    oraclemcp_metrics["total_query_time_ms"] += elapsed_ms
+                    if elapsed_ms < oraclemcp_metrics["min_query_time_ms"]:
+                        oraclemcp_metrics["min_query_time_ms"] = elapsed_ms
+                    if elapsed_ms > oraclemcp_metrics["max_query_time_ms"]:
+                        oraclemcp_metrics["max_query_time_ms"] = elapsed_ms
+                elif is_schema:
+                    oraclemcp_metrics["schema_lookups"] += 1
+
+                # Also record in FEF manager for common extensions
+                if fef_manager is not None:
+                    fef_manager.metrics.record_request(
+                        endpoint="tools/call",
+                        tool_name=tool_name,
+                        success=True,
+                        duration_ms=elapsed_ms
+                    )
+
         except ValueError as e:
             logger.error(f"Value error in tool call '{tool_name}': {e}")
+            if is_query:
+                oraclemcp_metrics["query_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -506,10 +556,20 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except oracledb.DatabaseError as e:
             logger.error(f"Oracle database error in tool call '{tool_name}': {e}")
             error_details = format_oracle_error(e)
+            if is_query:
+                oraclemcp_metrics["query_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -519,9 +579,19 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": error_details
                 }
             }
-        
+
         except Exception as e:
             logger.error(f"Error in tool call '{tool_name}': {e}")
+            if is_query:
+                oraclemcp_metrics["query_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -1180,6 +1250,8 @@ oraclemcp_metrics = {
     "query_count": 0,
     "query_errors": 0,
     "total_query_time_ms": 0.0,
+    "min_query_time_ms": float("inf"),
+    "max_query_time_ms": 0.0,
     "connection_count": 0,
     "connection_errors": 0,
     "schema_lookups": 0,

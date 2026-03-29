@@ -47,7 +47,10 @@ def ToolCard(
     logger.debug(f"component: ToolCard tool={tool.name if tool else None} loading={loading}")
 
     if tool is None:
-        _render_empty_state()
+        if loading:
+            _render_loading_state()
+        else:
+            _render_empty_state()
         return
 
     with ui.card().classes("w-full") as card:
@@ -57,8 +60,9 @@ def ToolCard(
             _status_badge(tool.status)
 
         if loading:
-            with ui.row().classes("w-full justify-center p-4"):
+            with ui.row().classes("w-full justify-center items-center gap-4 p-4"):
                 ui.spinner()
+                ui.label(f"Loading {tool.name}...").classes("text-grey")
             return card
 
         # Tool info section
@@ -82,6 +86,13 @@ def _render_empty_state() -> None:
     with ui.column().classes("w-full items-center justify-center p-8"):
         ui.icon("info", size="48px").classes("text-gray-400 mb-2")
         ui.label("Select a tool from the sidebar").classes("text-gray-500")
+
+
+def _render_loading_state() -> None:
+    """Render loading state while tool data is being fetched."""
+    with ui.column().classes("w-full items-center justify-center p-8"):
+        ui.spinner("dots", size="48px").classes("text-primary mb-4")
+        ui.label("Loading tool details...").classes("text-gray-500")
 
 
 def _status_badge(status: ToolStatus) -> None:

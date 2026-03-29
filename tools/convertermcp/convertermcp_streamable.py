@@ -300,13 +300,19 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         logger.info(f"Tool called: {tool_name} with arguments: {arguments}")
-        
+
+        # Track timing
+        import time
+        start_time = time.perf_counter()
+
+        tool_succeeded = False
         try:
             if tool_name == "convert_docx_to_text":
                 async for response in self._handle_convert_docx_to_text(arguments, request_id):
                     yield response
+                tool_succeeded = True
             else:
                 yield {
                     "jsonrpc": "2.0",
@@ -316,9 +322,42 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
                         "message": f"Unknown tool: {tool_name}"
                     }
                 }
-        
+
+            # Update metrics after successful tool execution
+            if tool_succeeded:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                converter_metrics["conversions"] += 1
+                converter_metrics["total_time_ms"] += elapsed_ms
+                if elapsed_ms < converter_metrics["min_time_ms"]:
+                    converter_metrics["min_time_ms"] = elapsed_ms
+                if elapsed_ms > converter_metrics["max_time_ms"]:
+                    converter_metrics["max_time_ms"] = elapsed_ms
+                # Track bytes processed if available in arguments
+                source = arguments.get("source", "")
+                if isinstance(source, str) and len(source) > 0:
+                    # Estimate bytes from source string
+                    converter_metrics["total_bytes_processed"] += len(source.encode())
+
+                # Also record in FEF manager for common extensions
+                if fef_manager is not None:
+                    fef_manager.metrics.record_request(
+                        endpoint="tools/call",
+                        tool_name=tool_name,
+                        success=True,
+                        duration_ms=elapsed_ms
+                    )
+
         except ValueError as e:
             logger.error(f"Value error in tool call '{tool_name}': {e}")
+            converter_metrics["errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -328,9 +367,18 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except httpx.HTTPError as e:
             logger.error(f"HTTP error in tool call '{tool_name}': {e}")
+            converter_metrics["errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -340,9 +388,18 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except Exception as e:
             logger.error(f"Error in tool call '{tool_name}': {e}")
+            converter_metrics["errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -774,6 +831,9 @@ converter_metrics = {
     "total_bytes_processed": 0,
     "format_counts": {},
     "errors": 0,
+    "total_time_ms": 0.0,
+    "min_time_ms": float("inf"),
+    "max_time_ms": 0.0,
 }
 
 # Output configuration

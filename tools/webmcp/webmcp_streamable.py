@@ -609,25 +609,39 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         logger.info(f"Tool called: {tool_name} with arguments: {arguments}")
-        
+
+        # Track timing
+        import time
+        start_time = time.perf_counter()
+
+        # Track which category this tool belongs to
+        is_search = tool_name in ("brave_search_web", "brave_search_api", "google_search_api")
+        is_fetch = tool_name in ("fetch_url", "post_url")
+
+        tool_succeeded = False
         try:
             if tool_name == "brave_search_web":
                 async for response in self._handle_brave_search_web(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "brave_search_api":
                 async for response in self._handle_brave_search_api(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "google_search_api":
                 async for response in self._handle_google_search_api(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "fetch_url":
                 async for response in self._handle_fetch_url(arguments, request_id):
                     yield response
+                tool_succeeded = True
             elif tool_name == "post_url":
                 async for response in self._handle_post_url(arguments, request_id):
                     yield response
+                tool_succeeded = True
             else:
                 yield {
                     "jsonrpc": "2.0",
@@ -637,9 +651,47 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                         "message": f"Unknown tool: {tool_name}"
                     }
                 }
-        
+
+            # Update metrics after successful tool execution
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if is_search:
+                webmcp_metrics["search_count"] += 1
+                webmcp_metrics["total_search_time_ms"] += elapsed_ms
+                if elapsed_ms < webmcp_metrics["min_search_time_ms"]:
+                    webmcp_metrics["min_search_time_ms"] = elapsed_ms
+                if elapsed_ms > webmcp_metrics["max_search_time_ms"]:
+                    webmcp_metrics["max_search_time_ms"] = elapsed_ms
+            elif is_fetch:
+                webmcp_metrics["fetch_count"] += 1
+                webmcp_metrics["total_fetch_time_ms"] += elapsed_ms
+                if elapsed_ms < webmcp_metrics["min_fetch_time_ms"]:
+                    webmcp_metrics["min_fetch_time_ms"] = elapsed_ms
+                if elapsed_ms > webmcp_metrics["max_fetch_time_ms"]:
+                    webmcp_metrics["max_fetch_time_ms"] = elapsed_ms
+
+            # Also record in FEF manager for common extensions
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=True,
+                    duration_ms=elapsed_ms
+                )
+
         except ValueError as e:
             logger.error(f"Value error in tool call '{tool_name}': {e}")
+            if is_search:
+                webmcp_metrics["search_errors"] += 1
+            elif is_fetch:
+                webmcp_metrics["fetch_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -649,9 +701,21 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except httpx.HTTPError as e:
             logger.error(f"HTTP error in tool call '{tool_name}': {e}")
+            if is_search:
+                webmcp_metrics["search_errors"] += 1
+            elif is_fetch:
+                webmcp_metrics["fetch_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -661,9 +725,69 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except Exception as e:
             logger.error(f"Error in tool call '{tool_name}': {e}")
+            if is_search:
+                webmcp_metrics["search_errors"] += 1
+            elif is_fetch:
+                webmcp_metrics["fetch_errors"] += 1
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
+            yield {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32603,
+                    "message": "Internal error",
+                    "data": str(e)
+                }
+            }
+
+        except ValueError as e:
+            logger.error(f"Value error in tool call '{tool_name}': {e}")
+            if is_search:
+                webmcp_metrics["search_errors"] += 1
+            elif is_fetch:
+                webmcp_metrics["fetch_errors"] += 1
+            yield {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid params",
+                    "data": str(e)
+                }
+            }
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error in tool call '{tool_name}': {e}")
+            if is_search:
+                webmcp_metrics["search_errors"] += 1
+            elif is_fetch:
+                webmcp_metrics["fetch_errors"] += 1
+            yield {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32603,
+                    "message": "HTTP error",
+                    "data": str(e)
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error in tool call '{tool_name}': {e}")
+            if is_search:
+                webmcp_metrics["search_errors"] += 1
+            elif is_fetch:
+                webmcp_metrics["fetch_errors"] += 1
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -2112,6 +2236,10 @@ webmcp_metrics = {
     "fetch_errors": 0,
     "total_search_time_ms": 0.0,
     "total_fetch_time_ms": 0.0,
+    "min_search_time_ms": float("inf"),
+    "max_search_time_ms": 0.0,
+    "min_fetch_time_ms": float("inf"),
+    "max_fetch_time_ms": 0.0,
 }
 
 # Search configuration

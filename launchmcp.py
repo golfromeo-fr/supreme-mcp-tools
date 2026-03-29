@@ -762,9 +762,27 @@ async def main() -> int:
                     if port:
                         server_urls[tool.name] = f"http://localhost:{port}/mcp"
                 if server_urls:
+                    # Wait for servers to be ready before syncing
+                    import httpx
+                    max_retries = 5
+                    for attempt in range(max_retries):
+                        ready = 0
+                        for name, url in server_urls.items():
+                            try:
+                                async with httpx.AsyncClient(timeout=2.0) as c:
+                                    r = await c.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
+                                    if r.status_code == 200:
+                                        ready += 1
+                            except Exception:
+                                pass
+                        if ready == len(server_urls):
+                            break
+                        logging.info(f"Waiting for servers to be ready ({ready}/{len(server_urls)}), attempt {attempt + 1}/{max_retries}...")
+                        await asyncio.sleep(2)
+
                     logging.info(f"Syncing tools config from {len(server_urls)} servers...")
                     validate_and_cleanup_config()
-                    discovered = update_config_with_discovered_tools(server_urls, timeout=5.0)
+                    discovered = update_config_with_discovered_tools(server_urls, timeout=10.0)
                     for name, tools in discovered.items():
                         logging.info(f"  {name}: {len(tools)} tools")
                     logging.info("Tools config synced")

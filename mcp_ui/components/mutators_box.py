@@ -10,6 +10,25 @@ from typing import List, Dict, Any, Callable, Optional
 from ..models import Extension
 
 
+def _get_mutator_status(ext: Extension) -> tuple[str, str]:
+    """
+    Get status for a mutator extension.
+
+    Returns (status_label, status_note) tuple.
+    """
+    input_props = ext.json_schema.get('input', {}).get('properties', {})
+
+    # If no input properties, it's likely a read-only/default mutator
+    if not input_props:
+        return "ℹ️ Default only", "No configuration parameters"
+
+    # Check if it has description - lack of description might mean not fully implemented
+    if not ext.description:
+        return "⚠️ Unknown", "No description - may not be implemented"
+
+    return "✅ Configurable", ""
+
+
 def MutatorsBox(
     extensions: List[Extension],
     on_submit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
@@ -17,7 +36,7 @@ def MutatorsBox(
 ) -> None:
     """
     Render editable mutators box with dynamic forms.
-    
+
     Args:
         extensions: List of Extension objects (mutators).
         on_submit: Callback when submitting a mutator.
@@ -25,19 +44,25 @@ def MutatorsBox(
     """
     with ui.card().classes('w-full'):
         ui.label('Configuration').classes('text-h6 mb-2')
-        
+
         if not extensions:
             ui.label('No configuration options available').classes('text-grey')
             return
-        
+
         for ext in extensions:
-            with ui.expansion(ext.name, icon='settings').classes('w-full'):
+            status_label, status_note = _get_mutator_status(ext)
+
+            with ui.expansion(f"{ext.name} [{status_label}]", icon='settings').classes('w-full'):
+                # Show status note
+                if status_note:
+                    ui.label(status_note).classes('text-caption mb-2')
+
                 if ext.description:
                     ui.label(ext.description).classes('text-grey mb-2')
-                
+
                 # Generate form from schema
                 form_values = _generate_form(ext.json_schema)
-                
+
                 # Submit button
                 submit_btn = ui.button(
                     'Apply Changes',

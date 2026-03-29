@@ -208,19 +208,22 @@ class GlobalToolSettingsDialog:
         # Clear container
         self._settings_container.clear()
 
-        # Get tools from config
+        # Get tools from config (only enabled ones are discovered via tools/list)
         tools = get_server_tools(server_name)
 
         # Get disabled tools from config
         disabled = get_disabled_tools(server_name)
 
+        # Merge both lists to show all known tools (including disabled ones)
+        all_tools = sorted(set(tools) | set(disabled))
+
         with self._settings_container:
-            if not tools:
+            if not all_tools:
                 ui.label("No tool information available.").classes("text-grey mb-4")
                 ui.label("(Add tools to config file or server may be offline)").classes("text-grey text-caption")
             else:
                 ui.label("Enable or disable tools:").classes("text-body2 text-grey mb-2")
-                for tool_name in sorted(tools):
+                for tool_name in all_tools:
                     is_disabled = tool_name in disabled
                     with ui.row().classes("w-full justify-between items-center"):
                         ui.label(tool_name).classes("font-mono text-sm")

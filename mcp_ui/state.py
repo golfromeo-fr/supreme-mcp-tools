@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Any
 
 from .logging_config import get_logger, get_trace_id
 
@@ -29,6 +29,7 @@ class AppState:
     Attributes:
         tools: List of registered tools
         selected_tool: Currently selected tool (if any)
+        selected_tool_detail: Cached tool detail for selected tool
         loading_tools: Whether tools list is being loaded
         loading_detail: Whether tool detail is being loaded
         last_error: Last error message (if any)
@@ -37,8 +38,8 @@ class AppState:
     # Data state
     tools: list = field(default_factory=list)
     selected_tool: Optional[str] = None
-
-    # Loading state (for non-blocking UI)
+    selected_tool_detail: Optional[Any] = None  # ToolDetail or similar
+    tool_detail_cache: dict = field(default_factory=dict)  # tool_name -> ToolDetail
     loading_tools: bool = False
     loading_detail: bool = False
 
@@ -95,6 +96,8 @@ class AppState:
         """Reset state."""
         self.tools = []
         self.selected_tool = None
+        self.selected_tool_detail = None
+        self.tool_detail_cache.clear()
         self.loading_tools = False
         self.loading_detail = False
         self.last_error = None

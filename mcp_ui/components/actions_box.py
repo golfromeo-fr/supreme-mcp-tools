@@ -11,6 +11,25 @@ from ..models import Extension
 from .mutators_box import _generate_form
 
 
+def _get_action_status(ext: Extension) -> tuple[str, str]:
+    """
+    Get status for an action extension.
+
+    Returns (status_label, status_note) tuple.
+    """
+    input_props = ext.json_schema.get('input', {}).get('properties', {})
+
+    # If no input properties, action may not need parameters
+    if not input_props:
+        return "✅ Ready", "No parameters required"
+
+    # Check if it has description - lack of description might mean not fully implemented
+    if not ext.description:
+        return "⚠️ Unknown", "No description - may not be implemented"
+
+    return "✅ Ready", ""
+
+
 def ActionsBox(
     extensions: List[Extension],
     on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
@@ -18,7 +37,7 @@ def ActionsBox(
 ) -> None:
     """
     Render actions box with execute buttons.
-    
+
     Args:
         extensions: List of Extension objects (actions).
         on_execute: Callback when executing an action.
@@ -26,19 +45,25 @@ def ActionsBox(
     """
     with ui.card().classes('w-full'):
         ui.label('Actions').classes('text-h6 mb-2')
-        
+
         if not extensions:
             ui.label('No actions available').classes('text-grey')
             return
-        
+
         for ext in extensions:
-            with ui.expansion(ext.name, icon='play_arrow').classes('w-full'):
+            status_label, status_note = _get_action_status(ext)
+
+            with ui.expansion(f"{ext.name} [{status_label}]", icon='play_arrow').classes('w-full'):
+                # Show status note
+                if status_note:
+                    ui.label(status_note).classes('text-caption mb-2')
+
                 if ext.description:
                     ui.label(ext.description).classes('text-grey mb-2')
-                
+
                 # Generate form from schema
                 form_values = _generate_form(ext.json_schema)
-                
+
                 # Execute button with confirmation
                 execute_btn = ui.button(
                     'Execute',

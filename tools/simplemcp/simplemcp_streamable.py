@@ -202,9 +202,13 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         logger.info(f"Tool call: {tool_name} with arguments: {arguments}")
-        
+
+        # Track timing
+        import time
+        start_time = time.perf_counter()
+
         try:
             if tool_name == "double":
                 value = float(arguments.get("value", 0))
@@ -222,7 +226,8 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                         ]
                     }
                 }
-            
+                simplemcp_metrics["double_count"] += 1
+
             elif tool_name == "square":
                 value = float(arguments.get("value", 0))
                 result = value ** 2
@@ -239,7 +244,8 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                         ]
                     }
                 }
-            
+                simplemcp_metrics["square_count"] += 1
+
             elif tool_name == "greet":
                 name_arg = arguments.get("name", "World")
                 greeting = arguments.get("greeting", "Hello")
@@ -257,7 +263,8 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                         ]
                     }
                 }
-            
+                simplemcp_metrics["greet_count"] += 1
+
             else:
                 yield {
                     "jsonrpc": "2.0",
@@ -267,9 +274,35 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                         "message": f"Unknown tool: {tool_name}"
                     }
                 }
-        
+
+            # Update metrics after successful call
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            simplemcp_metrics["total_tool_calls"] += 1
+            simplemcp_metrics["total_time_ms"] += elapsed_ms
+            if elapsed_ms < simplemcp_metrics["min_time_ms"]:
+                simplemcp_metrics["min_time_ms"] = elapsed_ms
+            if elapsed_ms > simplemcp_metrics["max_time_ms"]:
+                simplemcp_metrics["max_time_ms"] = elapsed_ms
+
+            # Also record in FEF manager for common extensions
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=True,
+                    duration_ms=elapsed_ms
+                )
+
         except ValueError as e:
             logger.error(f"Value error in tool call '{tool_name}': {e}")
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -279,9 +312,17 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                     "data": str(e)
                 }
             }
-        
+
         except Exception as e:
             logger.error(f"Error in tool call '{tool_name}': {e}")
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call",
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=elapsed_ms
+                )
             yield {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -512,6 +553,8 @@ simplemcp_metrics = {
     "greet_count": 0,
     "total_tool_calls": 0,
     "total_time_ms": 0.0,
+    "min_time_ms": float("inf"),
+    "max_time_ms": 0.0,
 }
 
 # Timeout configuration
@@ -537,12 +580,13 @@ def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
     """Data source: Get API response time statistics."""
+    has_calls = simplemcp_metrics["total_tool_calls"] > 0
     return {
-        "min_time_ms": 0,
-        "max_time_ms": round(simplemcp_metrics["total_time_ms"], 2) if simplemcp_metrics["total_tool_calls"] > 0 else 0,
+        "min_time_ms": round(simplemcp_metrics["min_time_ms"], 2) if has_calls else 0,
+        "max_time_ms": round(simplemcp_metrics["max_time_ms"], 2) if has_calls else 0,
         "avg_time_ms": round(
             simplemcp_metrics["total_time_ms"] / simplemcp_metrics["total_tool_calls"]
-            if simplemcp_metrics["total_tool_calls"] > 0 else 0.0, 2
+            if has_calls else 0.0, 2
         )
     }
 
