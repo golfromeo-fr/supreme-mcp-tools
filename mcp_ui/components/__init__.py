@@ -9,6 +9,7 @@ from .mutators_box import MutatorsBox
 from .actions_box import ActionsBox
 from .loading import loading_skeleton, loading_spinner, loading_overlay
 from .error_display import show_error, show_success, show_warning, show_info
+from .tool_settings import show_tool_settings, show_global_tool_settings, ToolSettingsDialog
 
 __all__ = [
     "ToolList",
@@ -23,4 +24,7 @@ __all__ = [
     "show_success",
     "show_warning",
     "show_info",
+    "show_tool_settings",
+    "show_global_tool_settings",
+    "ToolSettingsDialog",
 ]

@@ -330,6 +330,38 @@ class APIClient:
         """Restart a tool."""
         return await self._request("POST", f"/api/tools/{name}/restart")
 
+    # === Disabled Tools Configuration ===
+
+    async def get_disabled_tools(self) -> APIResponse:
+        """Get all disabled tools configuration."""
+        return await self._request("GET", "/api/disabled-tools")
+
+    async def get_server_disabled_tools(self, server_name: str) -> APIResponse:
+        """Get disabled tools for a specific server."""
+        return await self._request("GET", f"/api/disabled-tools/{server_name}")
+
+    async def set_server_disabled_tools(self, server_name: str, disabled_list: list) -> APIResponse:
+        """Set disabled tools for a specific server."""
+        return await self._request(
+            "PUT",
+            f"/api/disabled-tools/{server_name}",
+            json=disabled_list,
+        )
+
+    async def disable_tool(self, server_name: str, tool_name: str) -> APIResponse:
+        """Disable a specific tool for a server."""
+        return await self._request(
+            "POST",
+            f"/api/disabled-tools/{server_name}/{tool_name}/disable",
+        )
+
+    async def enable_tool(self, server_name: str, tool_name: str) -> APIResponse:
+        """Enable a specific tool for a server."""
+        return await self._request(
+            "POST",
+            f"/api/disabled-tools/{server_name}/{tool_name}/enable",
+        )
+
 
 # For backwards compatibility
 APIError = Exception

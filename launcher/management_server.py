@@ -18,6 +18,13 @@ import uvicorn
 
 from .service_registry import ServiceRegistry
 from .distributed_registry import DistributedExtensionRegistry
+from .tools_config import (
+    get_all_disabled_tools,
+    get_disabled_tools,
+    set_disabled_tools,
+    enable_tool,
+    disable_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -330,7 +337,54 @@ class ManagementServer:
             """Get persisted configuration for a tool."""
             config = self.registry.config_persistence.load(tool_name)
             return {"config": config}
-    
+
+        # === Disabled Tools Configuration ===
+
+        @self.app.get("/api/disabled-tools")
+        async def get_all_disabled_tools_endpoint(
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Get all disabled tools configuration."""
+            return {"disabled_tools": get_all_disabled_tools()}
+
+        @self.app.get("/api/disabled-tools/{server_name}")
+        async def get_disabled_tools_endpoint(
+            server_name: str,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Get disabled tools for a specific server."""
+            return {"server": server_name, "disabled": get_disabled_tools(server_name)}
+
+        @self.app.put("/api/disabled-tools/{server_name}")
+        async def set_disabled_tools_endpoint(
+            server_name: str,
+            disabled_list: List[str],
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Set disabled tools for a specific server."""
+            set_disabled_tools(server_name, disabled_list)
+            return {"server": server_name, "disabled": disabled_list}
+
+        @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/disable")
+        async def disable_tool_endpoint(
+            server_name: str,
+            tool_name: str,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Disable a specific tool for a server."""
+            disable_tool(tool_name, server_name)
+            return {"server": server_name, "tool": tool_name, "disabled": True}
+
+        @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/enable")
+        async def enable_tool_endpoint(
+            server_name: str,
+            tool_name: str,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Enable a specific tool for a server."""
+            enable_tool(tool_name, server_name)
+            return {"server": server_name, "tool": tool_name, "disabled": False}
+
     @property
     def event_aggregator(self):
         """Get the event aggregator from the distributed registry."""

@@ -143,7 +143,7 @@ from .auth import is_auth_enabled, verify_credentials
 from .api_client import get_client, close_client
 from .models import ToolInfo, ToolDetail, ExtensionType
 from .state import get_state
-from .components import ToolList, ToolCard, show_success, show_error
+from .components import ToolList, ToolCard, show_success, show_error, show_global_tool_settings
 from .logging_config import generate_trace_id, set_trace_id
 
 
@@ -236,6 +236,12 @@ async def main_page() -> None:
                     "text-green-400" if state.connection_status == "connected" else "text-red-400"
                 )
 
+                ui.button(
+                    "Settings",
+                    icon="settings",
+                    on_click=lambda: _open_tool_settings(state),
+                ).props("flat color=white")
+
                 ui.button("Logout", icon="logout", on_click=logout).props("flat color=white")
 
     # === CONTENT ROW with refreshable ===
@@ -257,6 +263,12 @@ async def main_page() -> None:
         content_area.refresh()
 
     await content_area()
+
+
+async def _open_tool_settings(state) -> None:
+    """Open the global tool settings dialog."""
+    servers = [tool.name for tool in state.tools]
+    await show_global_tool_settings(servers)
 
 
 async def _render_sidebar(state, content_refresh: callable = None, initial_load: bool = True) -> None:

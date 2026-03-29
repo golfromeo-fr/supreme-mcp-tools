@@ -65,6 +65,14 @@ except ImportError as e:
     print("Try running from the supreme-mcp-tools directory: python tools/oraclemcp/oraclemcp_streamable.py", file=sys.stderr)
     sys.exit(1)
 
+# Import tools config for filtering disabled tools
+try:
+    from launcher.tools_config import filter_tools_by_disabled
+    TOOLS_CONFIG_AVAILABLE = True
+except ImportError:
+    TOOLS_CONFIG_AVAILABLE = False
+    filter_tools_by_disabled = None
+
 from dotenv import load_dotenv
 
 # Configure logging with file and console output
@@ -424,7 +432,12 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
                 }
             }
         ]
-        
+
+        # Filter out disabled tools based on config
+        if TOOLS_CONFIG_AVAILABLE and filter_tools_by_disabled is not None:
+            tools = filter_tools_by_disabled(tools, self.server_name)
+            logger.info(f"Returning {len(tools)} tools after filtering disabled")
+
         return {
             "jsonrpc": "2.0",
             "result": {

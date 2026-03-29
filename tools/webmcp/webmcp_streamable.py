@@ -79,6 +79,16 @@ except ImportError as e:
     print("Try running from the supreme-mcp-tools directory: python tools/webmcp/webmcp_streamable.py", file=sys.stderr)
     sys.exit(1)
 
+# Import tools config for filtering disabled tools
+try:
+    from launcher.tools_config import filter_tools_by_disabled
+    TOOLS_CONFIG_AVAILABLE = True
+except ImportError as e:
+    print(f"WARNING: Cannot import tools_config: {e}", file=sys.stderr)
+    print("Tool filtering based on disabled_tools config will not be available.", file=sys.stderr)
+    TOOLS_CONFIG_AVAILABLE = False
+    filter_tools_by_disabled = None
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -578,6 +588,11 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             }
         ]
         
+        # Filter out disabled tools based on config
+        if TOOLS_CONFIG_AVAILABLE and filter_tools_by_disabled is not None:
+            tools = filter_tools_by_disabled(tools, self.server_name)
+            logger.info(f"Returning {len(tools)} tools after filtering disabled")
+
         return {
             "jsonrpc": "2.0",
             "result": {

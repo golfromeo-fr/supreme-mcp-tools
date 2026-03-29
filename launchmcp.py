@@ -197,7 +197,13 @@ Examples:
         default=None,
         help="Port for the management server (default: from ports.json)"
     )
-    
+
+    parser.add_argument(
+        "--no-sync-tools",
+        action="store_true",
+        help="Disable automatic tools config sync after server startup"
+    )
+
     return parser.parse_args()
 
 
@@ -744,7 +750,27 @@ async def main() -> int:
                     print(f"  {tool.name}: FAILED (status: {status})")
         print("=" * 60)
         print("Press Ctrl+C to stop all servers\n")
-        
+
+        # Sync tools config from running servers (unless disabled)
+        if not args.no_sync_tools:
+            try:
+                from launcher.tools_config import update_config_with_discovered_tools, validate_and_cleanup_config
+                # Build server URLs from allocated ports
+                server_urls = {}
+                for tool in started_tools:
+                    port = port_manager.get_port(tool.name)
+                    if port:
+                        server_urls[tool.name] = f"http://localhost:{port}/mcp"
+                if server_urls:
+                    logging.info(f"Syncing tools config from {len(server_urls)} servers...")
+                    validate_and_cleanup_config()
+                    discovered = update_config_with_discovered_tools(server_urls, timeout=5.0)
+                    for name, tools in discovered.items():
+                        logging.info(f"  {name}: {len(tools)} tools")
+                    logging.info("Tools config synced")
+            except Exception as e:
+                logging.warning(f"Failed to sync tools config: {e}")
+
         # Start monitoring task
         monitor_task = asyncio.create_task(monitor_servers(server_manager, shutdown_event))
         
