@@ -32,6 +32,11 @@ import openai
 SCRIPT_DIR = Path(__file__).parent.absolute()
 LOG_FILE = SCRIPT_DIR / "oraclemcp.log"
 
+# Load configuration from root .env
+root_env = SCRIPT_DIR.parent.parent / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+
 # Configure root logger first
 logging.basicConfig(
     level=logging.DEBUG,

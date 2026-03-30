@@ -84,6 +84,11 @@ except ImportError:
     filter_tools_by_disabled = None
 
 # Import optional dependencies
+# Ensure the tool's directory is on sys.path for sibling imports
+_this_dir = str(Path(__file__).resolve().parent)
+if _this_dir not in sys.path:
+    sys.path.insert(0, _this_dir)
+
 try:
     from indexer.sparse_vector_gen import generate_sparse_vector, get_global_generator
     SPARSE_VECTORS_AVAILABLE = True
@@ -121,11 +126,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ragmcp_streamable")
 
-# Load configuration from .env file
-env_path = SCRIPT_DIR / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
-    logger.info(f"Loaded configuration from {env_path}")
+# Load configuration from root .env
+root_env = SCRIPT_DIR.parent.parent / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+    logger.info(f"Loaded configuration from {root_env}")
 
 # Read embedding configuration
 EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'azure').lower()

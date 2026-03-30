@@ -99,9 +99,10 @@ logger = logging.getLogger("webmcp_streamable")
 # Add protocol version compatibility
 SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2025-11-25"]
 
-# Load environment variables from .env file
-env_path = Path(__file__).parent / ".env"
-load_dotenv(env_path)
+# Load environment variables from root .env
+root_env = Path(__file__).resolve().parent.parent.parent / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
 
