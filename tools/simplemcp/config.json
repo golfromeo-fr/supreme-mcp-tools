@@ -70,6 +70,14 @@
       }
     }
   },
+  "environment_variables": {
+    "SIMPLEMCP_SECRET": {
+      "description": "Test secret value - update via WebUI then call get_secret to verify hot-reload",
+      "required": false,
+      "secret": true,
+      "default": ""
+    }
+  },
   "server_info": {
     "name": "simplemcp",
     "version": "1.0.0",

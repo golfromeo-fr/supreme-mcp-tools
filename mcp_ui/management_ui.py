@@ -145,6 +145,7 @@ from .api_client import get_client, close_client
 from .models import ToolInfo, ToolDetail, ExtensionType
 from .state import get_state
 from .components import ToolList, ToolCard, show_success, show_error, show_global_tool_settings
+from .components.env_var_editor import parse_env_vars_from_api
 from .logging_config import generate_trace_id, set_trace_id
 
 
@@ -298,13 +299,14 @@ async def _render_sidebar(state, content_refresh: callable = None, initial_load:
     logger.debug("_render_sidebar called")
 
     async def _fetch_tool_detail(tool_name: str) -> None:
-        """Background task to fetch tool detail and extensions in parallel."""
+        """Background task to fetch tool detail, extensions, and env vars in parallel."""
         client = get_api_client()
         state = get_state()
 
-        # Fetch tool detail and extensions concurrently
+        # Fetch tool detail, extensions, and env vars concurrently
         tool_task = asyncio.create_task(client.get_tool(tool_name))
         ext_task = asyncio.create_task(client.get_extensions(tool_name))
+        env_task = asyncio.create_task(client.get_tool_env(tool_name))
 
         # Show tool detail as soon as it's ready
         tool_response = await tool_task
@@ -317,6 +319,15 @@ async def _render_sidebar(state, content_refresh: callable = None, initial_load:
         ext_response = await ext_task
         if ext_response.success and state.selected_tool_detail:
             state.selected_tool_detail.extensions = ext_response.data
+
+        # Wait for env vars and attach to state
+        env_response = await env_task
+        if env_response.success and env_response.data:
+            env_vars = parse_env_vars_from_api(env_response.data)
+            state.env_variables = env_vars
+            state.env_cache[tool_name] = env_vars
+        else:
+            state.env_variables = state.env_cache.get(tool_name, [])
 
         if not tool_response.success:
             state.selected_tool_detail = None
@@ -371,6 +382,29 @@ async def _render_content(state) -> None:
     # Use cached tool detail from background fetch
     selected_tool_detail = state.selected_tool_detail
 
+    # Always fetch env vars directly to guarantee they're available for rendering.
+    # Background fetch in _fetch_tool_detail updates the cache, but we can't rely
+    # on it completing before this render fires.
+    # Always fetch env vars for current tool to get latest values (e.g. from .env changes)
+    env_variables = state.env_cache.get(selected_tool_detail.name, []) if selected_tool_detail else []
+    if selected_tool_detail:
+        client = get_api_client()
+        env_response = await client.get_tool_env(selected_tool_detail.name)
+        if env_response.success and env_response.data:
+            env_variables = parse_env_vars_from_api(env_response.data)
+            state.env_variables = env_variables
+            state.env_cache[selected_tool_detail.name] = env_variables
+        elif not env_variables:
+            env_variables = state.env_cache.get(selected_tool_detail.name, [])
+
+    # Fetch current mutator values (e.g. api_key_info) for display in forms
+    current_mutator_values: Dict[str, Dict[str, Any]] = {}
+    if selected_tool_detail:
+        client = get_api_client()
+        key_response = await client.query_extension(selected_tool_detail.name, "api_key_info", {})
+        if key_response.success and key_response.data:
+            current_mutator_values["api_key"] = key_response.data
+
     async def on_query(ext_name: str, params: Optional[Dict[str, Any]] = None) -> None:
         state = get_state()
         if not state.selected_tool:
@@ -416,12 +450,58 @@ async def _render_content(state) -> None:
         finally:
             state.loading_detail = False
 
+    async def on_env_update(tool_name: str, var_name: str, value: str) -> None:
+        """Handle environment variable update."""
+        state.loading_detail = True
+        try:
+            client = get_api_client()
+            response = await client.update_tool_env(tool_name, {var_name: value})
+            if response.success:
+                show_success(f"Updated {var_name}")
+                # Refresh env vars
+                env_response = await client.get_tool_env(tool_name)
+                if env_response.success and env_response.data:
+                    from .components.env_var_editor import parse_env_vars_from_api
+                    state.env_variables = parse_env_vars_from_api(env_response.data)
+                    state.env_cache[tool_name] = state.env_variables
+                if content_refresh:
+                    content_refresh()
+            else:
+                show_error(f"Failed to update {var_name}: {response.error}")
+        finally:
+            state.loading_detail = False
+
+    async def on_env_delete(tool_name: str, var_name: str) -> None:
+        """Handle environment variable deletion."""
+        state.loading_detail = True
+        try:
+            client = get_api_client()
+            response = await client.delete_tool_env(tool_name, var_name)
+            if response.success:
+                show_success(f"Removed {var_name}")
+                # Refresh env vars
+                env_response = await client.get_tool_env(tool_name)
+                if env_response.success and env_response.data:
+                    from .components.env_var_editor import parse_env_vars_from_api
+                    state.env_variables = parse_env_vars_from_api(env_response.data)
+                    state.env_cache[tool_name] = state.env_variables
+                if content_refresh:
+                    content_refresh()
+            else:
+                show_error(f"Failed to delete {var_name}: {response.error}")
+        finally:
+            state.loading_detail = False
+
     ToolCard(
         tool=selected_tool_detail,
         on_query=on_query,
         on_mutate=on_mutate,
         on_execute=on_execute,
         loading=state.loading_detail,
+        env_variables=env_variables,
+        on_env_update=on_env_update,
+        on_env_delete=on_env_delete,
+        current_mutator_values=current_mutator_values,
     )
     logger.debug("_render_content completed")
 
@@ -481,6 +561,9 @@ logger.info("NiceGUI initialization complete")
 def run_ui() -> None:
     """Run the UI server."""
     import uvicorn
+    import signal
+    import os
+    import sys
 
     port = _get_default_ui_port()
     theme = _get_ui_theme()
@@ -497,6 +580,26 @@ def run_ui() -> None:
     }
     if storage_secret:
         run_kwargs["storage_secret"] = storage_secret
+
+    # NiceGUI/uvicorn install their own signal handlers.
+    # Use os._exit(0) to bypass NiceGUI's cleanup and ensure exit code 0.
+    def _sigint_handler(signum, frame):
+        logger.info("Received SIGINT, shutting down")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+    # Install handler before NiceGUI starts
+    signal.signal(signal.SIGINT, _sigint_handler)
+
+    # Also handle SIGTERM
+    def _sigterm_handler(signum, frame):
+        logger.info("Received SIGTERM, shutting down")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
 
     ui.run(**run_kwargs)
 

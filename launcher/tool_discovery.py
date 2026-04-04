@@ -60,7 +60,16 @@ class ToolDiscovery:
         self.search_paths = [Path(p) for p in search_paths]
         self.discovered_tools: Dict[str, ToolMetadata] = {}
         self.loaded_modules: Dict[str, Any] = {}
-    
+
+    def discover(self) -> Dict[str, ToolMetadata]:
+        """Discover all tools and return as a dict.
+
+        Returns:
+            Dictionary mapping tool name to ToolMetadata.
+        """
+        self.discover_tools()
+        return self.discovered_tools
+
     def discover_tools(
         self,
         tool_names: Optional[List[str]] = None,
@@ -93,28 +102,28 @@ class ToolDiscovery:
                 continue
             
             logger.info(f"Searching for MCP tools in: {search_path}")
-            
-            # Find all Python files in the directory
-            for py_file in search_path.glob("*.py"):
+
+            # Find all Python files in the directory (including subdirectories)
+            for py_file in search_path.rglob("*.py"):
                 # Skip __init__.py and test files
                 if py_file.name.startswith("_") or py_file.name.startswith("test_"):
                     continue
-                
+
                 # Skip excluded patterns
                 if any(pattern in py_file.name for pattern in exclude_set):
                     logger.debug(f"Skipping excluded file: {py_file}")
                     continue
-                
+
                 try:
                     metadata = self._discover_tool(py_file)
-                    
+
                     # Filter by tool names if specified
                     if tool_names is None or metadata.name in tool_names:
                         self.discovered_tools[metadata.name] = metadata
                         logger.info(f"Discovered tool: {metadata.name} from {py_file}")
                     else:
                         logger.debug(f"Skipping tool not in list: {metadata.name}")
-                
+
                 except ValidationError as e:
                     logger.warning(f"Tool validation failed for {py_file}: {e}")
                 except Exception as e:

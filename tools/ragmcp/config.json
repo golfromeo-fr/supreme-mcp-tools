@@ -209,14 +209,20 @@
   "environment_variables": {
     "QDRANT_HOST": {
       "description": "Qdrant server hostname",
+      "required": false,
+      "secret": false,
       "default": "qdrant"
     },
     "QDRANT_PORT": {
       "description": "Qdrant server port",
+      "required": false,
+      "secret": false,
       "default": "6333"
     },
     "EMBEDDING_PROVIDER": {
       "description": "Embedding provider (azure or local)",
+      "required": false,
+      "secret": false,
       "default": "azure",
       "options": [
         "azure",
@@ -225,6 +231,8 @@
     },
     "LOCAL_EMBEDDING_MODEL": {
       "description": "Local embedding model (small or base)",
+      "required": false,
+      "secret": false,
       "default": "base",
       "options": [
         "small",
@@ -233,15 +241,21 @@
     },
     "AZURE_EMBEDDING_API_URL": {
       "description": "Azure OpenAI embeddings API URL",
+      "required": false,
+      "secret": false,
       "default": "https://put.your.API.gateway.ai/v1/embeddings"
     },
     "AZURE_EMBEDDING_MODEL": {
       "description": "Azure OpenAI embeddings model name",
+      "required": false,
+      "secret": false,
       "default": "text-embedding-3-large"
     },
     "AI_API_KEY": {
       "description": "API key for Azure OpenAI embeddings",
-      "required": true
+      "required": true,
+      "secret": true,
+      "default": ""
     }
   }
 }

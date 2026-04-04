@@ -40,6 +40,8 @@ class AppState:
     selected_tool: Optional[str] = None
     selected_tool_detail: Optional[Any] = None  # ToolDetail or similar
     tool_detail_cache: dict = field(default_factory=dict)  # tool_name -> ToolDetail
+    env_variables: list = field(default_factory=list)  # List[EnvVariable] for selected tool
+    env_cache: dict = field(default_factory=dict)  # tool_name -> list[EnvVariable]
     loading_tools: bool = False
     loading_detail: bool = False
 
@@ -98,6 +100,8 @@ class AppState:
         self.selected_tool = None
         self.selected_tool_detail = None
         self.tool_detail_cache.clear()
+        self.env_variables = []
+        self.env_cache.clear()
         self.loading_tools = False
         self.loading_detail = False
         self.last_error = None

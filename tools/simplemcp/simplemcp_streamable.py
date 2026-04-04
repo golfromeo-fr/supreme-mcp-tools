@@ -35,6 +35,15 @@ supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
+# Load environment variables from root .env
+try:
+    from dotenv import load_dotenv
+    root_env = Path(__file__).resolve().parent.parent.parent / ".env"
+    if root_env.exists():
+        load_dotenv(root_env)
+except ImportError:
+    pass
+
 # Import monitoring components (optional - tool should work without monitoring)
 try:
     from monitoring.middleware import add_metrics_middleware
@@ -178,6 +187,15 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                         }
                     }
                 }
+            },
+            {
+                "name": "get_secret",
+                "description": "Returns the current value of SIMPLEMCP_SECRET env var. Use this to test hot-reload: update the value via the WebUI and call this tool to verify the change takes effect immediately without restart.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": [],
+                    "properties": {}
+                }
             }
         ]
 
@@ -264,6 +282,36 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
                     }
                 }
                 simplemcp_metrics["greet_count"] += 1
+
+            elif tool_name == "get_secret":
+                # Read from os.environ per-request for hot-reload testing
+                import time as _time
+                secret_value = os.environ.get("SIMPLEMCP_SECRET", "")
+                is_set = bool(secret_value)
+                ts = _time.strftime("%H:%M:%S")
+                msg = (
+                    f"SIMPLEMCP_SECRET value (read at {ts}):\n"
+                    f"  Value: {secret_value if is_set else '(not set)'}\n"
+                    f"  Length: {len(secret_value)}\n"
+                    f"  Is Set: {is_set}\n\n"
+                    f"To test hot-reload:\n"
+                    f"1. Update SIMPLEMCP_SECRET via the WebUI\n"
+                    f"2. Call get_secret again\n"
+                    f"3. Verify the new value appears without restart"
+                )
+                logger.info(f"get_secret: is_set={is_set} length={len(secret_value)}")
+                yield {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": msg
+                            }
+                        ]
+                    }
+                }
 
             else:
                 yield {
@@ -412,8 +460,8 @@ def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
                 "input": {
                     "type": "object",
                     "properties": {
-                        "default_timeout_ms": {"type": "integer", "minimum": 1000},
-                        "max_timeout_ms": {"type": "integer", "minimum": 5000}
+                        "default_timeout_ms": {"type": "integer", "minimum": 1000, "default": timeout_config["default_timeout_ms"]},
+                        "max_timeout_ms": {"type": "integer", "minimum": 5000, "default": timeout_config["max_timeout_ms"]}
                     }
                 },
                 "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}

@@ -25,6 +25,14 @@ from .tools_config import (
     enable_tool,
     disable_tool,
 )
+from .env_manager import (
+    get_env_values,
+    get_all_env_values,
+    set_env_value,
+    delete_env_value,
+    load_env_schema,
+    get_tool_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +53,11 @@ class MutateRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     """Request model for executing actions."""
     params: Optional[Dict[str, Any]] = None
+
+
+class EnvVarUpdate(BaseModel):
+    """Request model for updating environment variables."""
+    variables: Dict[str, str]
 
 
 def _get_default_management_port() -> int:
@@ -384,6 +397,94 @@ class ManagementServer:
             """Enable a specific tool for a server."""
             enable_tool(tool_name, server_name)
             return {"server": server_name, "tool": tool_name, "disabled": False}
+
+        # === Environment Variable Management ===
+
+        @self.app.get("/api/tools/{tool_name}/env")
+        async def get_tool_env(
+            tool_name: str,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Get environment variables for a specific tool."""
+            schema = load_env_schema(tool_name)
+            if not schema:
+                # Check if tool exists at all
+                if tool_name not in get_tool_names():
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Tool '{tool_name}' not found"
+                    )
+                return {"tool_name": tool_name, "variables": {}}
+
+            values = get_env_values(tool_name)
+            return {"tool_name": tool_name, "variables": values}
+
+        @self.app.put("/api/tools/{tool_name}/env")
+        async def update_tool_env(
+            tool_name: str,
+            request: EnvVarUpdate,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Update environment variables for a specific tool."""
+            schema = load_env_schema(tool_name)
+            if not schema:
+                if tool_name not in get_tool_names():
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Tool '{tool_name}' not found"
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Tool '{tool_name}' has no environment variables configured"
+                )
+
+            # Validate that all requested variables are declared in the schema
+            unknown_vars = set(request.variables.keys()) - set(schema.keys())
+            if unknown_vars:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown environment variables: {', '.join(unknown_vars)}"
+                )
+
+            # Set each variable
+            for var_name, value in request.variables.items():
+                set_env_value(var_name, value, persist=True)
+
+            # Return updated masked values
+            updated = get_env_values(tool_name)
+            return {
+                "tool_name": tool_name,
+                "variables": updated,
+                "updated_count": len(request.variables)
+            }
+
+        @self.app.delete("/api/tools/{tool_name}/env/{var_name}")
+        async def delete_tool_env(
+            tool_name: str,
+            var_name: str,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Remove an environment variable for a specific tool."""
+            schema = load_env_schema(tool_name)
+            if var_name not in schema:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Variable '{var_name}' not found in tool '{tool_name}'"
+                )
+
+            delete_env_value(var_name, persist=True)
+            return {
+                "tool_name": tool_name,
+                "variable": var_name,
+                "deleted": True
+            }
+
+        @self.app.get("/api/env")
+        async def get_all_env(
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Get environment variables for all tools."""
+            return {"tools": get_all_env_values()}
 
     @property
     def event_aggregator(self):

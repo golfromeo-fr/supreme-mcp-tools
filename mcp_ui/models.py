@@ -144,3 +144,16 @@ class MutatorForm(BaseModel):
     """Dynamic mutator form data."""
     extension_name: str
     values: Dict[str, Any] = {}
+
+
+class EnvVariable(BaseModel):
+    """An environment variable for a tool."""
+    name: str
+    description: str = ""
+    required: bool = False
+    secret: bool = True
+    value_masked: str = ""
+    value_raw: str = ""
+    is_set: bool = False
+    default: str = ""
+    options: List[str] = []

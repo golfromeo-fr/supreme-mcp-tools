@@ -7,11 +7,12 @@ Renders tool detail card with extensions in a two-column layout.
 from nicegui import ui
 from typing import List, Dict, Any, Callable, Optional
 
-from ..models import ToolDetail, ToolStatus, Extension, ExtensionType
+from ..models import ToolDetail, ToolStatus, Extension, ExtensionType, EnvVariable
 from ..logging_config import get_logger
 from .data_sources_box import DataSourcesBox
 from .mutators_box import MutatorsBox
 from .actions_box import ActionsBox
+from .env_var_editor import EnvVarEditor
 
 logger = get_logger(__name__)
 
@@ -32,7 +33,11 @@ def ToolCard(
     on_query: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_mutate: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    loading: bool = False
+    loading: bool = False,
+    env_variables: Optional[List[EnvVariable]] = None,
+    on_env_update: Optional[Callable[[str, str, str], None]] = None,
+    on_env_delete: Optional[Callable[[str, str], None]] = None,
+    current_mutator_values: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> None:
     """
     Render tool detail card with extensions.
@@ -43,6 +48,10 @@ def ToolCard(
         on_mutate: Callback when submitting a mutator.
         on_execute: Callback when executing an action.
         loading: Whether to show loading spinner.
+        env_variables: List of environment variables.
+        on_env_update: Callback when updating an env var.
+        on_env_delete: Callback when deleting an env var.
+        current_mutator_values: Current values for mutators (e.g. api_key_info).
     """
     logger.debug(f"component: ToolCard tool={tool.name if tool else None} loading={loading}")
 
@@ -78,7 +87,17 @@ def ToolCard(
             return card
 
         # Extensions in collapsible sections
-        _render_extensions(tool, on_query, on_mutate, on_execute)
+        _render_extensions(
+            tool,
+            on_query,
+            on_mutate,
+            on_execute,
+            current_mutator_values,
+            env_variables,
+            tool.name,
+            on_env_update,
+            on_env_delete,
+        )
 
 
 def _render_empty_state() -> None:
@@ -140,7 +159,12 @@ def _render_extensions(
     tool: ToolDetail,
     on_query: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_mutate: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None
+    on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    current_mutator_values: Optional[Dict[str, Dict[str, Any]]] = None,
+    env_variables: Optional[List[EnvVariable]] = None,
+    tool_name: Optional[str] = None,
+    on_env_update: Optional[Callable[[str, str, str], None]] = None,
+    on_env_delete: Optional[Callable[[str, str], None]] = None,
 ) -> None:
     """Render collapsible extension sections."""
     # Separate extensions by type
@@ -151,7 +175,7 @@ def _render_extensions(
     with ui.column().classes("w-full gap-4"):
         # Data Sources (READ) - wrap in expansion for grouping
         if data_sources:
-            with ui.expansion("Data Sources (READ)", icon="storage", value=True).classes("w-full"):
+            with ui.expansion("Data Sources (READ)", icon="storage", value=False).classes("w-full"):
                 DataSourcesBox(
                     extensions=data_sources,
                     on_query=on_query,
@@ -160,15 +184,20 @@ def _render_extensions(
 
         # Mutators (WRITE) - wrap in expansion for grouping
         if mutators:
-            with ui.expansion("Configuration (WRITE)", icon="edit", value=True).classes("w-full"):
+            with ui.expansion("Configuration (WRITE)", icon="edit", value=False).classes("w-full"):
                 MutatorsBox(
                     extensions=mutators,
-                    on_submit=on_mutate
+                    on_submit=on_mutate,
+                    current_values=current_mutator_values,
+                    env_variables=env_variables,
+                    tool_name=tool_name,
+                    on_env_update=on_env_update,
+                    on_env_delete=on_env_delete,
                 )
 
         # Actions - wrap in expansion for grouping
         if actions:
-            with ui.expansion("Actions", icon="bolt", value=True).classes("w-full"):
+            with ui.expansion("Actions", icon="bolt", value=False).classes("w-full"):
                 ActionsBox(
                     extensions=actions,
                     on_execute=on_execute

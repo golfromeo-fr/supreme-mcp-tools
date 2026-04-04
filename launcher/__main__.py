@@ -29,6 +29,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from dotenv import load_dotenv
+
+# Load .env at startup so env vars are available to all tools
+_root_env = Path(__file__).resolve().parent.parent / ".env"
+if _root_env.exists():
+    load_dotenv(_root_env)
+
 from .launcher_config import Config
 from .server_manager import ServerManager
 from .service_registry import ServiceRegistry
@@ -179,7 +186,7 @@ class Launcher:
         
         # Tool discovery
         self.tool_discovery = ToolDiscovery(
-            tools_dir=Path(args.tools_dir)
+            search_paths=[str(Path(args.tools_dir).resolve())]
         )
         
         # Shutdown event

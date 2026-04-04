@@ -40,10 +40,17 @@
     }
   ],
   "environment_variables": {
-    "required": [],
-    "optional": [
-      "BRAVE_SEARCH_API_KEY",
-      "SERPAPI_API_KEY"
-    ]
+    "BRAVE_SEARCH_API_KEY": {
+      "description": "Brave Search API key for structured web search results",
+      "required": false,
+      "secret": true,
+      "default": ""
+    },
+    "SERPAPI_API_KEY": {
+      "description": "SerpAPI key for Google Search API results",
+      "required": false,
+      "secret": true,
+      "default": ""
+    }
   }
 }

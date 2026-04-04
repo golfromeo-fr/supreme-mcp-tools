@@ -242,6 +242,18 @@ class ToolExtensionManager:
             "cache_config": self.cache_config.to_dict()
         }
 
+    def get_api_key(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Data source: Get current API key (masked)."""
+        key = self._api_key or ""
+        is_set = bool(key)
+        # Show last 4 chars if set
+        masked = f"****{key[-4:]}" if is_set else "(not set)"
+        return {
+            "is_set": is_set,
+            "value_masked": masked,
+            "length": len(key) if is_set else 0,
+        }
+
 
 def register_common_extensions(
     tool_name: str,
@@ -329,7 +341,28 @@ def register_common_extensions(
             "category": "info"
         }
     ))
-    
+
+    registry.register(tool_name, Extension(
+        name="api_key_info",
+        ext_type=ExtensionType.DATA_SOURCE,
+        schema={
+            "input": {"type": "object", "properties": {}},
+            "output": {
+                "type": "object",
+                "properties": {
+                    "is_set": {"type": "boolean"},
+                    "value_masked": {"type": "string"},
+                    "length": {"type": "integer"}
+                }
+            }
+        },
+        handler=manager.get_api_key,
+        metadata={
+            "description": "Current API key value (masked)",
+            "category": "configuration"
+        }
+    ))
+
     # Mutators
     registry.register(tool_name, Extension(
         name="cache_config",
@@ -338,9 +371,9 @@ def register_common_extensions(
             "input": {
                 "type": "object",
                 "properties": {
-                    "max_size": {"type": "integer", "minimum": 1},
-                    "ttl": {"type": "integer", "minimum": 0},
-                    "enabled": {"type": "boolean"}
+                    "max_size": {"type": "integer", "minimum": 1, "default": manager.cache_config.max_size},
+                    "ttl": {"type": "integer", "minimum": 0, "default": manager.cache_config.ttl_seconds},
+                    "enabled": {"type": "boolean", "default": manager.cache_config.enabled}
                 }
             },
             "output": {
@@ -365,7 +398,7 @@ def register_common_extensions(
             "input": {
                 "type": "object",
                 "properties": {
-                    "key": {"type": "string"}
+                    "key": {"type": "string", "description": "API key value"}
                 },
                 "required": ["key"]
             },

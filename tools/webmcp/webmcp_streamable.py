@@ -103,12 +103,11 @@ SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2025-11-25"]
 root_env = Path(__file__).resolve().parent.parent.parent / ".env"
 if root_env.exists():
     load_dotenv(root_env)
-BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
-SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
 
 # Log API key status at startup for debugging
-logger.info(f"WebMCP Streamable: BRAVE_SEARCH_API_KEY loaded: {'SET' if BRAVE_SEARCH_API_KEY else 'NOT SET'}")
-logger.info(f"WebMCP Streamable: SERPAPI_API_KEY loaded: {'SET' if SERPAPI_API_KEY else 'NOT SET'}")
+# Note: keys are read per-request via os.environ.get() for runtime hot-reload
+logger.info(f"WebMCP Streamable: BRAVE_SEARCH_API_KEY loaded: {'SET' if os.getenv('BRAVE_SEARCH_API_KEY') else 'NOT SET'}")
+logger.info(f"WebMCP Streamable: SERPAPI_API_KEY loaded: {'SET' if os.getenv('SERPAPI_API_KEY') else 'NOT SET'}")
 
 # ============================================================================
 # Caching System (from html2md-mcp best practices)
@@ -928,7 +927,8 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
         
         llm_mode: When True, returns concise JSON-like structure optimized for LLM consumption.
         """
-        logger.info(f"brave_search_api handler started - BRAVE_SEARCH_API_KEY: {'SET' if BRAVE_SEARCH_API_KEY else 'NOT SET'}")
+        brave_key = os.environ.get("BRAVE_SEARCH_API_KEY", "")
+        logger.info(f"brave_search_api handler started - BRAVE_SEARCH_API_KEY: {'SET' if brave_key else 'NOT SET'}")
         query = arguments.get("query")
         count = int(arguments.get("count", 10))
         timeout = float(arguments.get("timeout", 30.0))
@@ -951,7 +951,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             }
             return
 
-        if not BRAVE_SEARCH_API_KEY:
+        if not brave_key:
             # Log the missing API key for debugging
             logger.warning("brave_search_api called but BRAVE_SEARCH_API_KEY is not set in .env")
             error_details = (
@@ -983,7 +983,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             headers = {
                 "Accept": "application/json",
                 "Accept-Encoding": "gzip",
-                "X-Subscription-Token": BRAVE_SEARCH_API_KEY
+                "X-Subscription-Token": brave_key
             }
 
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -1261,7 +1261,8 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
         
         llm_mode: When True, returns concise JSON-like structure optimized for LLM consumption.
         """
-        logger.info(f"google_search_api handler started - SERPAPI_API_KEY: {'SET' if SERPAPI_API_KEY else 'NOT SET'}")
+        serp_key = os.environ.get("SERPAPI_API_KEY", "")
+        logger.info(f"google_search_api handler started - SERPAPI_API_KEY: {'SET' if serp_key else 'NOT SET'}")
         query = arguments.get("query")
         engine = arguments.get("engine", "google")
         google_domain = arguments.get("google_domain", "google.com")
@@ -1286,7 +1287,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
             }
             return
 
-        if not SERPAPI_API_KEY:
+        if not serp_key:
             # Log the missing API key for debugging
             logger.warning("google_search_api called but SERPAPI_API_KEY is not set in .env")
             error_details = (
@@ -1318,7 +1319,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                 "google_domain": google_domain,
                 "hl": hl,
                 "gl": gl,
-                "api_key": SERPAPI_API_KEY,
+                "api_key": serp_key,
                 "num": min(max(num, 1), 100)  # Ensure num is between 1-100
             }
 

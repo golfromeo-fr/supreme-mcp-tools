@@ -56,15 +56,36 @@
     }
   ],
   "environment_variables": {
-    "required": [
-      "USERID",
-      "DB_HOST",
-      "DB_PORT",
-      "DB_SERVICE_NAME"
-    ],
-    "optional": [
-      "AI_API_KEY"
-    ]
+    "USERID": {
+      "description": "Oracle connection string (format: username/password)",
+      "required": true,
+      "secret": true,
+      "default": ""
+    },
+    "DB_HOST": {
+      "description": "Oracle database hostname",
+      "required": true,
+      "secret": false,
+      "default": ""
+    },
+    "DB_PORT": {
+      "description": "Oracle database port",
+      "required": true,
+      "secret": false,
+      "default": "1521"
+    },
+    "DB_SERVICE_NAME": {
+      "description": "Oracle database service name",
+      "required": true,
+      "secret": false,
+      "default": ""
+    },
+    "AI_API_KEY": {
+      "description": "API key for GPT-4.1 SQL optimization",
+      "required": false,
+      "secret": true,
+      "default": ""
+    }
   },
   "files": {
     "optimization": "optimization.json",

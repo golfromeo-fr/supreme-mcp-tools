@@ -362,6 +362,52 @@ class APIClient:
             f"/api/disabled-tools/{server_name}/{tool_name}/enable",
         )
 
+    # === Environment Variable Management ===
+
+    async def get_tool_env(self, tool_name: str) -> APIResponse:
+        """
+        Get environment variables for a specific tool.
+
+        Returns masked values for secret variables.
+
+        Args:
+            tool_name: Name of the tool
+
+        Returns:
+            APIResponse with env var data
+        """
+        return await self._request("GET", f"/api/tools/{tool_name}/env")
+
+    async def update_tool_env(self, tool_name: str, variables: dict[str, str]) -> APIResponse:
+        """
+        Update environment variables for a specific tool.
+
+        Args:
+            tool_name: Name of the tool
+            variables: Dict of variable names to new values
+
+        Returns:
+            APIResponse with updated (masked) values
+        """
+        return await self._request(
+            "PUT",
+            f"/api/tools/{tool_name}/env",
+            json={"variables": variables},
+        )
+
+    async def delete_tool_env(self, tool_name: str, var_name: str) -> APIResponse:
+        """
+        Remove an environment variable for a tool.
+
+        Args:
+            tool_name: Name of the tool
+            var_name: Variable name to remove
+
+        Returns:
+            APIResponse with deletion confirmation
+        """
+        return await self._request("DELETE", f"/api/tools/{tool_name}/env/{var_name}")
+
 
 # For backwards compatibility
 APIError = Exception

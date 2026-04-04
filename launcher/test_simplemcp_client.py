@@ -6,6 +6,8 @@ Usage:
     python -m launcher.test_simplemcp_client list    # List available tools
     python -m launcher.test_simplemcp_client call     # Call a tool (greet)
     python -m launcher.test_simplemcp_client loop N   # Loop N times to generate traffic
+    python -m launcher.test_simplemcp_client secret   # Read SIMPLEMCP_SECRET value
+    python -m launcher.test_simplemcp_client watch N  # Poll get_secret every N seconds to test hot-reload
 """
 
 import argparse
@@ -84,10 +86,62 @@ async def loop(count: int):
     print("Done!")
 
 
+async def get_secret():
+    """Call get_secret tool to read the current SIMPLEMCP_SECRET value."""
+    result = await call_tool("get_secret", {})
+    if result and "result" in result:
+        content = result["result"].get("content", [])
+        for item in content:
+            if item.get("type") == "text":
+                print(f"\n{item['text']}")
+    return result
+
+
+async def watch(interval: int = 5):
+    """Poll get_secret repeatedly to watch for hot-reload changes.
+
+    Update SIMPLEMCP_SECRET via the WebUI while this runs to see changes appear.
+    Press Ctrl+C to stop.
+    """
+    import time
+    print(f"Watching SIMPLEMCP_SECRET every {interval}s (Ctrl+C to stop)")
+    print("Tip: Update the value via the WebUI while this runs!\n")
+    try:
+        while True:
+            ts = time.strftime("%H:%M:%S")
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": "get_secret", "arguments": {}},
+                    "id": 99,
+                }
+                response = await client.post(SIMPLEMCP_URL, json=payload)
+                data = response.json()
+
+            if "result" in data:
+                content = data["result"].get("content", [])
+                text = content[0]["text"] if content else "(no response)"
+                # Extract just the key info
+                for line in text.split("\n"):
+                    if "Length:" in line or "Is Set:" in line:
+                        print(f"  [{ts}] {line.strip()}")
+            else:
+                print(f"  [{ts}] Error: {data}")
+
+            await asyncio.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nStopped watching.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test client for simplemcp")
-    parser.add_argument("action", choices=["list", "call", "loop"], help="Action to perform")
-    parser.add_argument("count", nargs="?", type=int, default=5, help="Loop count (for 'loop' action)")
+    parser.add_argument(
+        "action",
+        choices=["list", "call", "loop", "secret", "watch"],
+        help="Action to perform",
+    )
+    parser.add_argument("count", nargs="?", type=int, default=5, help="Loop count or watch interval in seconds")
 
     args = parser.parse_args()
 
@@ -97,6 +151,10 @@ def main():
         asyncio.run(call_tool())
     elif args.action == "loop":
         asyncio.run(loop(args.count))
+    elif args.action == "secret":
+        asyncio.run(get_secret())
+    elif args.action == "watch":
+        asyncio.run(watch(args.count))
 
 
 if __name__ == "__main__":
