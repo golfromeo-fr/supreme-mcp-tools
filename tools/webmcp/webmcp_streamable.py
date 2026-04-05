@@ -1078,6 +1078,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                             ]
                         }
                     }
+                    return
 
                 # Verbose mode: Human-readable format
                 formatted_results = []
@@ -1381,6 +1382,7 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                         ]
                     }
                 }
+                return
 
             # Verbose mode: Human-readable format
             formatted_results = []
