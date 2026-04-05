@@ -10,14 +10,19 @@ Supports the Flexible Extensibility Framework V3 with management servers.
 import asyncio
 import logging
 import os
+import secrets
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode, urlparse, parse_qs
 
 import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
+from starlette.routing import Route
 
 from .errors import ServerStartupError, ServerRuntimeError
 from .tool_discovery import ToolMetadata
@@ -30,45 +35,221 @@ logger = logging.getLogger(__name__)
 
 
 class MCPApiKeyMiddleware(BaseHTTPMiddleware):
-    """Middleware to validate API key on MCP endpoints."""
+    """Middleware to validate API key on MCP endpoints with auto-approve OAuth.
 
-    def __init__(self, app, api_key: str):
+    Supports two auth methods:
+    1. X-API-Key header — direct API key (Kilo Code, GitHub Copilot)
+    2. Bearer token via OAuth — Claude Code's MCP SDK requires OAuth flow,
+       so this implements a minimal auto-approve OAuth that returns the API
+       key as the access token.
+    """
+
+    # OAuth paths handled by this middleware
+    _OAUTH_METADATA_PATHS = frozenset({
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/openid-configuration",
+    })
+
+    def __init__(self, app, api_key: str, server_url: str = None):
         super().__init__(app)
         self.api_key = api_key
+        self.server_url = server_url  # e.g. "http://127.0.0.1:8002"
+
+        # In-memory stores for OAuth flow (per-tool, per-server process)
+        self._pending_codes: Dict[str, tuple[str, str]] = {}  # code -> (client_id, redirect_uri)
+        self._registered_clients: Dict[str, dict] = {}  # client_id -> client_info
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/mcp":
+        path = request.url.path
+
+        # --- OAuth Authorization Server Metadata ---
+        if path in self._OAUTH_METADATA_PATHS:
+            return self._handle_oauth_metadata(request)
+
+        # --- Protected Resource Metadata ---
+        if path == "/.well-known/oauth-protected-resource" or path == "/.well-known/oauth-protected-resource/mcp":
+            return self._handle_protected_resource_metadata(request)
+
+        # --- Dynamic Client Registration ---
+        if path == "/register" and request.method == "POST":
+            return await self._handle_register(request)
+
+        # --- Authorization endpoint (browser redirect) ---
+        if path == "/authorize":
+            return await self._handle_authorize(request)
+
+        # --- Token exchange ---
+        if path == "/token" and request.method == "POST":
+            return await self._handle_token(request)
+
+        # --- Other .well-known paths → 404 with parseable error ---
+        if "/.well-known/" in path:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "unsupported_server",
+                    "error_description": "This server does not support this endpoint."
+                }
+            )
+
+        # --- MCP endpoint auth ---
+        if path == "/mcp":
             provided_key = request.headers.get("x-api-key")
-            if not provided_key:
-                logger.warning("[AUTH] MCP request rejected: no X-API-Key header provided")
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "jsonrpc": "2.0",
-                        "id": None,
-                        "error": {
-                            "code": -32001,
-                            "message": "Authentication required",
-                            "data": "Missing X-API-Key header"
-                        }
+            bearer = request.headers.get("authorization", "")
+
+            # Accept X-API-Key header
+            if provided_key:
+                if provided_key != self.api_key:
+                    logger.warning(f"[AUTH] MCP request rejected: invalid API key (got={provided_key[:8]}...)")
+                    return self._jsonrpc_auth_error("Invalid X-API-Key header")
+                logger.info("[AUTH] MCP request authenticated via X-API-Key")
+                return await call_next(request)
+
+            # Accept Bearer token (from OAuth flow)
+            if bearer.lower().startswith("bearer "):
+                token = bearer[7:]
+                if token == self.api_key:
+                    logger.info("[AUTH] MCP request authenticated via Bearer token")
+                    return await call_next(request)
+                logger.warning("[AUTH] MCP request rejected: invalid Bearer token")
+                return self._jsonrpc_auth_error("Invalid Bearer token")
+
+            # No auth provided → return 401 with WWW-Authenticate to trigger OAuth
+            logger.warning("[AUTH] MCP request rejected: no auth header provided")
+            return JSONResponse(
+                status_code=401,
+                headers={"WWW-Authenticate": f'Bearer resource_metadata="{self.server_url}/.well-known/oauth-protected-resource"'},
+                content={
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32001,
+                        "message": "Authentication required",
+                        "data": "Missing X-API-Key header or Bearer token"
                     }
-                )
-            if provided_key != self.api_key:
-                logger.warning(f"[AUTH] MCP request rejected: invalid API key (got={provided_key[:8]}...)")
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "jsonrpc": "2.0",
-                        "id": None,
-                        "error": {
-                            "code": -32001,
-                            "message": "Authentication required",
-                            "data": "Invalid X-API-Key header"
-                        }
-                    }
-                )
-            logger.info(f"[AUTH] MCP request authenticated successfully")
+                }
+            )
+
         return await call_next(request)
+
+    def _get_base_url(self, request: Request) -> str:
+        """Get the base URL for this server."""
+        if self.server_url:
+            return self.server_url
+        return f"{request.url.scheme}://{request.url.netloc}"
+
+    def _handle_oauth_metadata(self, request: Request) -> JSONResponse:
+        """Return valid OAuth Authorization Server metadata."""
+        base = self._get_base_url(request)
+        return JSONResponse({
+            "issuer": base,
+            "authorization_endpoint": f"{base}/authorize",
+            "token_endpoint": f"{base}/token",
+            "registration_endpoint": f"{base}/register",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+            "scopes_supported": ["mcp"],
+        })
+
+    def _handle_protected_resource_metadata(self, request: Request) -> JSONResponse:
+        """Return valid Protected Resource metadata."""
+        base = self._get_base_url(request)
+        return JSONResponse({
+            "resource": f"{base}/mcp",
+            "authorization_servers": [base],
+            "scopes_supported": ["mcp"],
+            "bearer_methods_supported": ["header"],
+        })
+
+    async def _handle_register(self, request: Request) -> JSONResponse:
+        """Auto-approve dynamic client registration."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        client_id = body.get("client_id") or f"mcp-client-{secrets.token_hex(8)}"
+        client_secret = f"mcp-secret-{secrets.token_hex(16)}"
+
+        client_info = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "client_id_issued_at": int(time.time()),
+            "redirect_uris": body.get("redirect_uris", []),
+            "token_endpoint_auth_method": body.get("token_endpoint_auth_method", "client_secret_post"),
+        }
+        self._registered_clients[client_id] = client_info
+        logger.info(f"[AUTH-OAUTH] Client registered: {client_id}")
+        return JSONResponse(client_info, status_code=201)
+
+    async def _handle_authorize(self, request: Request) -> RedirectResponse:
+        """Auto-approve authorization — immediately redirect back with a code."""
+        params = dict(request.query_params) if request.method == "GET" else {}
+        client_id = params.get("client_id", "")
+        redirect_uri = params.get("redirect_uri", "")
+        state = params.get("state", "")
+        code_challenge = params.get("code_challenge", "")
+
+        if not redirect_uri:
+            return JSONResponse({"error": "invalid_request", "error_description": "Missing redirect_uri"}, status_code=400)
+
+        # Generate auth code and store pending exchange
+        code = f"mcp-code-{secrets.token_hex(16)}"
+        self._pending_codes[code] = (client_id, redirect_uri)
+
+        # Redirect back to client with code and state
+        sep = "&" if "?" in redirect_uri else "?"
+        redirect_url = f"{redirect_uri}{sep}code={code}&state={state}"
+        logger.info(f"[AUTH-OAUTH] Auto-approved authorization for client={client_id}")
+        return RedirectResponse(url=redirect_url, status_code=302)
+
+    async def _handle_token(self, request: Request) -> JSONResponse:
+        """Exchange authorization code for access token (returns the API key)."""
+        try:
+            body = await request.json()
+        except Exception:
+            try:
+                form = await request.form()
+                body = dict(form)
+            except Exception:
+                body = {}
+
+        code = body.get("code", "")
+        pending = self._pending_codes.pop(code, None)
+
+        if not pending:
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "Invalid authorization code"},
+                status_code=400
+            )
+
+        client_id, redirect_uri = pending
+        logger.info(f"[AUTH-OAUTH] Token issued for client={client_id}")
+
+        return JSONResponse({
+            "access_token": self.api_key,
+            "token_type": "Bearer",
+            "expires_in": 86400,
+            "scope": "mcp",
+        })
+
+    def _jsonrpc_auth_error(self, message: str) -> JSONResponse:
+        """Return a JSON-RPC auth error with HTTP 401 to trigger OAuth."""
+        return JSONResponse(
+            status_code=401,
+            headers={"WWW-Authenticate": f'Bearer resource_metadata="{self.server_url}/.well-known/oauth-protected-resource"'},
+            content={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32001,
+                    "message": "Authentication required",
+                    "data": message
+                }
+            }
+        )
 
 
 @dataclass
@@ -151,7 +332,8 @@ class ServerManager:
 
             # Add MCP auth middleware if API key is configured
             if api_key:
-                app.add_middleware(MCPApiKeyMiddleware, api_key=api_key)
+                server_url = f"http://127.0.0.1:{port}"
+                app.add_middleware(MCPApiKeyMiddleware, api_key=api_key, server_url=server_url)
                 logger.info(f"MCP endpoint auth enabled for {tool_name}")
 
             # Create Uvicorn config
