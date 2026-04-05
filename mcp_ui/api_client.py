@@ -408,6 +408,35 @@ class APIClient:
         """
         return await self._request("DELETE", f"/api/tools/{tool_name}/env/{var_name}")
 
+    async def get_tool_auth(self, tool_name: str) -> APIResponse:
+        """
+        Get auth config for a tool.
+
+        Args:
+            tool_name: Name of the tool
+
+        Returns:
+            APIResponse with auth config (is_set, value_masked)
+        """
+        return await self._request("GET", f"/api/tools/{tool_name}/auth")
+
+    async def update_tool_auth(self, tool_name: str, api_key: str) -> APIResponse:
+        """
+        Update auth config for a tool.
+
+        Args:
+            tool_name: Name of the tool
+            api_key: New API key value
+
+        Returns:
+            APIResponse with success status
+        """
+        return await self._request(
+            "PUT",
+            f"/api/tools/{tool_name}/auth",
+            json={"api_key": api_key},
+        )
+
 
 # For backwards compatibility
 APIError = Exception

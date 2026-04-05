@@ -34,6 +34,27 @@ def get_server_url(server_name: str) -> str:
 
 SIMPLEMCP_URL = get_server_url("simplemcp")
 
+# API key for authentication
+_api_key = None
+
+
+def _load_tool_api_key(tool_name: str) -> str | None:
+    """Auto-load API key from the tool's config.json."""
+    config_path = Path(__file__).parent.parent / "tools" / tool_name / "config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = json.load(f)
+        return cfg.get("auth", {}).get("api_key")
+    return None
+
+
+def _get_headers() -> dict:
+    """Get common headers including API key if configured."""
+    headers = {"Content-Type": "application/json"}
+    if _api_key:
+        headers["X-API-Key"] = _api_key
+    return headers
+
 
 async def list_tools():
     """Call tools/list on simplemcp."""
@@ -43,7 +64,7 @@ async def list_tools():
             "method": "tools/list",
             "id": 1
         }
-        response = await client.post(SIMPLEMCP_URL, json=payload)
+        response = await client.post(SIMPLEMCP_URL, json=payload, headers=_get_headers())
         print(f"Status: {response.status_code}")
         result = response.json()
         print(json.dumps(result, indent=2))
@@ -65,7 +86,7 @@ async def call_tool(tool_name: str = "greet", arguments: dict = None):
             },
             "id": 2
         }
-        response = await client.post(SIMPLEMCP_URL, json=payload)
+        response = await client.post(SIMPLEMCP_URL, json=payload, headers=_get_headers())
         print(f"Status: {response.status_code}")
         result = response.json()
         print(json.dumps(result, indent=2))
@@ -116,7 +137,7 @@ async def watch(interval: int = 5):
                     "params": {"name": "get_secret", "arguments": {}},
                     "id": 99,
                 }
-                response = await client.post(SIMPLEMCP_URL, json=payload)
+                response = await client.post(SIMPLEMCP_URL, json=payload, headers=_get_headers())
                 data = response.json()
 
             if "result" in data:
@@ -135,6 +156,8 @@ async def watch(interval: int = 5):
 
 
 def main():
+    global _api_key
+
     parser = argparse.ArgumentParser(description="Test client for simplemcp")
     parser.add_argument(
         "action",
@@ -142,8 +165,13 @@ def main():
         help="Action to perform",
     )
     parser.add_argument("count", nargs="?", type=int, default=5, help="Loop count or watch interval in seconds")
+    parser.add_argument("--api-key", default=None, help="Override API key (auto-loaded from config.json by default)")
 
     args = parser.parse_args()
+
+    _api_key = args.api_key or _load_tool_api_key("simplemcp")
+    if _api_key:
+        print(f"Using API key: {_api_key[:8]}...")
 
     if args.action == "list":
         asyncio.run(list_tools())

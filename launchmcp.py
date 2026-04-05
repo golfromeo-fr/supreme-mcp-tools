@@ -764,13 +764,17 @@ async def main() -> int:
                 if server_urls:
                     # Wait for servers to be ready before syncing
                     import httpx
+                    from launcher.env_manager import load_auth_config
                     max_retries = 5
                     for attempt in range(max_retries):
                         ready = 0
                         for name, url in server_urls.items():
                             try:
+                                auth_cfg = load_auth_config(name)
+                                api_key = auth_cfg.get("api_key")
+                                headers = {"X-API-Key": api_key} if api_key else {}
                                 async with httpx.AsyncClient(timeout=2.0) as c:
-                                    r = await c.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
+                                    r = await c.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}, headers=headers)
                                     if r.status_code == 200:
                                         ready += 1
                             except Exception:
@@ -782,7 +786,9 @@ async def main() -> int:
 
                     logging.info(f"Syncing tools config from {len(server_urls)} servers...")
                     validate_and_cleanup_config()
-                    discovered = update_config_with_discovered_tools(server_urls, timeout=10.0)
+                    # Build auth keys map from tool configs
+                    auth_keys = {name: load_auth_config(name).get("api_key") for name in server_urls}
+                    discovered = update_config_with_discovered_tools(server_urls, timeout=10.0, auth_keys=auth_keys)
                     for name, tools in discovered.items():
                         logging.info(f"  {name}: {len(tools)} tools")
                     logging.info("Tools config synced")

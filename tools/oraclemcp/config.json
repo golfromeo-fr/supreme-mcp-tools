@@ -87,6 +87,9 @@
       "default": ""
     }
   },
+  "auth": {
+  "api_key": "oraclemcp-test-key-efgh"
+},
   "files": {
     "optimization": "optimization.json",
     "proc_rules": "proc_rules.md"

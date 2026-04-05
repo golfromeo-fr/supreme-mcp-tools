@@ -32,6 +32,8 @@ from .env_manager import (
     delete_env_value,
     load_env_schema,
     get_tool_names,
+    load_auth_config,
+    mask_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,11 @@ class ExecuteRequest(BaseModel):
 class EnvVarUpdate(BaseModel):
     """Request model for updating environment variables."""
     variables: Dict[str, str]
+
+
+class AuthUpdate(BaseModel):
+    """Request model for updating tool auth configuration."""
+    api_key: str
 
 
 def _get_default_management_port() -> int:
@@ -485,6 +492,50 @@ class ManagementServer:
         ):
             """Get environment variables for all tools."""
             return {"tools": get_all_env_values()}
+
+        # === Per-Tool Auth Management ===
+
+        @self.app.get("/api/tools/{tool_name}/auth")
+        async def get_tool_auth(
+            tool_name: str,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Get auth config for a tool (masked key)."""
+            auth_config = load_auth_config(tool_name)
+            api_key = auth_config.get("api_key", "")
+            return {
+                "api_key": {
+                    "is_set": bool(api_key),
+                    "value_masked": mask_value(api_key) if api_key else None
+                }
+            }
+
+        @self.app.put("/api/tools/{tool_name}/auth")
+        async def update_tool_auth(
+            tool_name: str,
+            request: AuthUpdate,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Update auth config for a tool."""
+            import json
+            from pathlib import Path
+
+            config_path = Path(__file__).parent.parent / "tools" / tool_name / "config.json"
+            if not config_path.exists():
+                raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+            try:
+                with open(config_path) as f:
+                    config = json.load(f)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid config.json")
+
+            config.setdefault("auth", {})["api_key"] = request.api_key
+
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+
+            return {"success": True}
 
     @property
     def event_aggregator(self):

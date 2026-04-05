@@ -42,6 +42,7 @@ class AppState:
     tool_detail_cache: dict = field(default_factory=dict)  # tool_name -> ToolDetail
     env_variables: list = field(default_factory=list)  # List[EnvVariable] for selected tool
     env_cache: dict = field(default_factory=dict)  # tool_name -> list[EnvVariable]
+    tool_auth: dict = field(default_factory=dict)  # tool_name -> {"is_set": bool, "value_masked": str}
     loading_tools: bool = False
     loading_detail: bool = False
 
@@ -102,6 +103,7 @@ class AppState:
         self.tool_detail_cache.clear()
         self.env_variables = []
         self.env_cache.clear()
+        self.tool_auth = {}
         self.loading_tools = False
         self.loading_detail = False
         self.last_error = None

@@ -400,3 +400,28 @@ def get_tool_names() -> List[str]:
         for d in tools_dir.iterdir()
         if d.is_dir() and (d / "config.json").exists()
     )
+
+
+def load_auth_config(tool_name: str) -> Dict[str, Any]:
+    """
+    Load auth config from tool's config.json.
+
+    Args:
+        tool_name: Name of the tool
+
+    Returns:
+        Dict with auth config, e.g. {"api_key": "secret"} or {} if not configured
+    """
+    config_path = PROJECT_ROOT / "tools" / tool_name / "config.json"
+    if not config_path.exists():
+        logger.debug(f"No config.json found for tool {tool_name}")
+        return {}
+
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"Failed to read config.json for {tool_name}: {e}")
+        return {}
+
+    return config.get("auth", {})

@@ -145,6 +145,7 @@ from .api_client import get_client, close_client
 from .models import ToolInfo, ToolDetail, ExtensionType
 from .state import get_state
 from .components import ToolList, ToolCard, show_success, show_error, show_global_tool_settings
+from .components.auth_box import AuthBox
 from .components.env_var_editor import parse_env_vars_from_api
 from .logging_config import generate_trace_id, set_trace_id
 
@@ -271,6 +272,7 @@ async def _open_tool_settings(state) -> None:
     """Open the global tool settings dialog."""
     from .components.tool_settings import _load_tools_config, _save_tools_config
     from launcher.tools_config import discover_tools_from_server
+    from launcher.env_manager import load_auth_config
 
     servers = [tool.name for tool in state.tools]
 
@@ -281,7 +283,9 @@ async def _open_tool_settings(state) -> None:
         server_name = tool_info.name
         if not config.get("tools", {}).get(server_name) and tool_info.mcp_port:
             mcp_url = f"http://localhost:{tool_info.mcp_port}/mcp"
-            discovered = await discover_tools_from_server(mcp_url)
+            auth_cfg = load_auth_config(server_name)
+            api_key = auth_cfg.get("api_key")
+            discovered = await discover_tools_from_server(mcp_url, api_key=api_key)
             if discovered:
                 if "tools" not in config:
                     config["tools"] = {}
@@ -405,6 +409,15 @@ async def _render_content(state) -> None:
         if key_response.success and key_response.data:
             current_mutator_values["api_key"] = key_response.data
 
+    # Fetch auth config for the tool
+    tool_auth: dict = state.tool_auth.get(selected_tool_detail.name, {}) if selected_tool_detail else {}
+    if selected_tool_detail:
+        client = get_api_client()
+        auth_response = await client.get_tool_auth(selected_tool_detail.name)
+        if auth_response.success and auth_response.data:
+            tool_auth = auth_response.data.get("api_key", {})
+            state.tool_auth[selected_tool_detail.name] = tool_auth
+
     async def on_query(ext_name: str, params: Optional[Dict[str, Any]] = None) -> None:
         state = get_state()
         if not state.selected_tool:
@@ -491,6 +504,35 @@ async def _render_content(state) -> None:
                 show_error(f"Failed to delete {var_name}: {response.error}")
         finally:
             state.loading_detail = False
+
+    async def on_auth_update(tool_name: str, new_api_key: str) -> None:
+        """Handle auth key update."""
+        state.loading_detail = True
+        try:
+            client = get_api_client()
+            response = await client.update_tool_auth(tool_name, new_api_key)
+            if response.success:
+                show_success("Authorization key updated - restart tool to take effect")
+                # Refresh auth config
+                auth_response = await client.get_tool_auth(tool_name)
+                if auth_response.success and auth_response.data:
+                    tool_auth = auth_response.data.get("api_key", {})
+                    state.tool_auth[tool_name] = tool_auth
+                if content_refresh:
+                    content_refresh()
+            else:
+                show_error(f"Failed to update auth key: {response.error}")
+        finally:
+            state.loading_detail = False
+
+    # Render auth section
+    if selected_tool_detail:
+        AuthBox(
+            tool_name=selected_tool_detail.name,
+            is_set=tool_auth.get("is_set", False),
+            value_masked=tool_auth.get("value_masked"),
+            on_update=on_auth_update,
+        )
 
     ToolCard(
         tool=selected_tool_detail,

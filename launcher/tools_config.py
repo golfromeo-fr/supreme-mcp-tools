@@ -165,18 +165,20 @@ def set_server_tools(server_name: str, tools_list: List[str], config_path: Optio
     save_tools_config(config, config_path)
 
 
-async def discover_tools_from_server(server_url: str, timeout: float = 5.0) -> List[str]:
+async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_key: str = None) -> List[str]:
     """
     Discover tools from an MCP server by calling its tools/list endpoint.
 
     Args:
         server_url: URL of the MCP server (e.g., 'http://localhost:8001/mcp')
         timeout: Request timeout in seconds
+        api_key: Optional API key for authentication
 
     Returns:
         List of tool names advertised by the server
     """
     try:
+        headers = {"X-API-Key": api_key} if api_key else {}
         async with httpx.AsyncClient(timeout=timeout) as client:
             # Send tools/list request
             response = await client.post(
@@ -186,7 +188,8 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0) -> L
                     "id": 1,
                     "method": "tools/list",
                     "params": {}
-                }
+                },
+                headers=headers
             )
             if response.status_code == 200:
                 data = response.json()
@@ -199,7 +202,8 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0) -> L
 
 def discover_all_tools(
     server_urls: Dict[str, str],
-    timeout: float = 5.0
+    timeout: float = 5.0,
+    auth_keys: Dict[str, str] = None
 ) -> Dict[str, List[str]]:
     """
     Discover tools from all configured MCP servers.
@@ -207,14 +211,17 @@ def discover_all_tools(
     Args:
         server_urls: Dictionary mapping server names to their MCP URLs
         timeout: Request timeout in seconds
+        auth_keys: Optional dictionary mapping server names to API keys
 
     Returns:
         Dictionary mapping server names to lists of tool names
     """
+    _auth_keys = auth_keys or {}
+
     async def _discover():
         results = {}
         for server_name, url in server_urls.items():
-            tools = await discover_tools_from_server(url, timeout)
+            tools = await discover_tools_from_server(url, timeout, api_key=_auth_keys.get(server_name))
             results[server_name] = tools
         return results
 

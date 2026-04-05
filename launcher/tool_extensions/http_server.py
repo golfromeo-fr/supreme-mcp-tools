@@ -10,8 +10,9 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 import uvicorn
 
@@ -34,6 +35,10 @@ class MutateRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     """Request model for executing actions."""
     params: Optional[Dict[str, Any]] = None
+
+
+# API Key header for authentication
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 class ExtensionHTTPServer:
@@ -126,8 +131,18 @@ class ExtensionHTTPServer:
         
         self._server: Optional[uvicorn.Server] = None
         self._task: Optional[asyncio.Task] = None
-        
+
         self._register_routes()
+
+    def _verify_api_key(self, key: Optional[str] = Depends(API_KEY_HEADER)) -> bool:
+        """Verify API key if configured. If no key is configured, allow access."""
+        if self.api_key is None:
+            return True  # No auth configured
+        if key is None:
+            raise HTTPException(status_code=401, detail="Missing API key")
+        if key != self.api_key:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return True
     
     def _register_routes(self) -> None:
         """Register all API routes."""
@@ -158,13 +173,13 @@ class ExtensionHTTPServer:
                 raise
         
         @self.app.get("/extensions")
-        async def list_extensions():
+        async def list_extensions(_: bool = Depends(self._verify_api_key)):
             """List all extensions registered by this tool."""
             extensions = self.registry.list_extensions(self.tool_name)
             return extensions.get(self.tool_name, [])
         
         @self.app.get("/extensions/{extension_name}")
-        async def get_extension(extension_name: str):
+        async def get_extension(extension_name: str, _: bool = Depends(self._verify_api_key)):
             """Get details of a specific extension."""
             ext = self.registry.get_extension(self.tool_name, extension_name)
             if ext is None:
@@ -175,7 +190,7 @@ class ExtensionHTTPServer:
             return ext.to_dict()
         
         @self.app.post("/extensions/{extension_name}/query")
-        async def query_extension(extension_name: str, request: QueryRequest):
+        async def query_extension(extension_name: str, request: QueryRequest, _: bool = Depends(self._verify_api_key)):
             """Query a data source extension."""
             try:
                 result = self.registry.query(
@@ -191,7 +206,7 @@ class ExtensionHTTPServer:
                 raise HTTPException(status_code=500, detail="Internal server error")
         
         @self.app.post("/extensions/{extension_name}/mutate")
-        async def mutate_extension(extension_name: str, request: MutateRequest):
+        async def mutate_extension(extension_name: str, request: MutateRequest, _: bool = Depends(self._verify_api_key)):
             """Mutate configuration via extension."""
             try:
                 result = self.registry.mutate(
@@ -207,7 +222,7 @@ class ExtensionHTTPServer:
                 raise HTTPException(status_code=500, detail="Internal server error")
         
         @self.app.post("/extensions/{extension_name}/execute")
-        async def execute_extension(extension_name: str, request: ExecuteRequest):
+        async def execute_extension(extension_name: str, request: ExecuteRequest, _: bool = Depends(self._verify_api_key)):
             """Execute an action extension."""
             try:
                 result = self.registry.execute(
@@ -221,21 +236,21 @@ class ExtensionHTTPServer:
             except Exception as e:
                 logger.error(f"Error executing extension: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
-        
+
         @self.app.websocket("/extensions/{extension_name}/events")
-        async def websocket_events(websocket: WebSocket, extension_name: str):
+        async def websocket_events(websocket: WebSocket, extension_name: str, _: bool = Depends(self._verify_api_key)):
             """WebSocket endpoint for real-time event streaming."""
             await websocket.accept()
-            
+
             # Verify extension exists
             ext = self.registry.get_extension(self.tool_name, extension_name)
             if ext is None:
                 await websocket.close(code=4004, reason=f"Extension '{extension_name}' not found")
                 return
-            
+
             # Subscribe to events
             queue = self.registry.subscribe_queue(self.tool_name, extension_name)
-            
+
             try:
                 while True:
                     # Wait for events and send to client
@@ -251,9 +266,9 @@ class ExtensionHTTPServer:
                 logger.error(f"WebSocket error: {e}")
             finally:
                 self.registry.unsubscribe_queue(self.tool_name, extension_name, queue)
-        
+
         @self.app.get("/config")
-        async def get_config():
+        async def get_config(_: bool = Depends(self._verify_api_key)):
             """Get current configuration."""
             if self.config_manager is None:
                 raise HTTPException(
@@ -261,9 +276,9 @@ class ExtensionHTTPServer:
                     detail="Configuration manager not available"
                 )
             return self.config_manager.get_all()
-        
+
         @self.app.post("/config/{key}")
-        async def set_config(key: str, value: Dict[str, Any]):
+        async def set_config(key: str, value: Dict[str, Any], _: bool = Depends(self._verify_api_key)):
             """Set a configuration value."""
             if self.config_manager is None:
                 raise HTTPException(

@@ -19,6 +19,9 @@
       "description": "Converts a DOCX file (local path or URL) to plain text; writes to output_path if provided, otherwise returns text."
     }
   ],
+  "auth": {
+  "api_key": "convertermcp-test-key-ijkl"
+},
   "allowed_roots": [
     "/workspaces"
   ],

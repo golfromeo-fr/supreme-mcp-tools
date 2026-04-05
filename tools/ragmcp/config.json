@@ -257,5 +257,8 @@
       "secret": true,
       "default": ""
     }
-  }
+  },
+  "auth": {
+  "api_key": "ragmcp-test-key-abcd"
+}
 }

@@ -15,14 +15,60 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import uvicorn
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from .errors import ServerStartupError, ServerRuntimeError
 from .tool_discovery import ToolMetadata
 from .service_registry import ServiceRegistry
 from .tool_extensions import ExtensionRegistry, ExtensionHTTPServer
+from .env_manager import load_auth_config
 
 
 logger = logging.getLogger(__name__)
+
+
+class MCPApiKeyMiddleware(BaseHTTPMiddleware):
+    """Middleware to validate API key on MCP endpoints."""
+
+    def __init__(self, app, api_key: str):
+        super().__init__(app)
+        self.api_key = api_key
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/mcp":
+            provided_key = request.headers.get("x-api-key")
+            if not provided_key:
+                logger.warning("[AUTH] MCP request rejected: no X-API-Key header provided")
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32001,
+                            "message": "Authentication required",
+                            "data": "Missing X-API-Key header"
+                        }
+                    }
+                )
+            if provided_key != self.api_key:
+                logger.warning(f"[AUTH] MCP request rejected: invalid API key (got={provided_key[:8]}...)")
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32001,
+                            "message": "Authentication required",
+                            "data": "Invalid X-API-Key header"
+                        }
+                    }
+                )
+            logger.info(f"[AUTH] MCP request authenticated successfully")
+        return await call_next(request)
 
 
 @dataclass
@@ -95,10 +141,19 @@ class ServerManager:
         """
         tool_name = tool_metadata.name
         app = tool_metadata.exports["app"]
-        
+
         logger.info(f"Starting server for {tool_name} on port {port}")
-        
+
         try:
+            # Load per-tool auth config
+            auth_config = load_auth_config(tool_name)
+            api_key = auth_config.get("api_key")  # None if not configured
+
+            # Add MCP auth middleware if API key is configured
+            if api_key:
+                app.add_middleware(MCPApiKeyMiddleware, api_key=api_key)
+                logger.info(f"MCP endpoint auth enabled for {tool_name}")
+
             # Create Uvicorn config
             config = uvicorn.Config(
                 app=app,
@@ -107,27 +162,29 @@ class ServerManager:
                 log_level=self.log_level,
                 access_log=True
             )
-            
+
             # Create Uvicorn server
             server = uvicorn.Server(config)
-            
+
             # Create extension registry for FEF V3
             extension_registry = None
             mgmt_server = None
-            
+
             if self.enable_management and mgmt_port:
                 # Set environment variable so tool can use the same management port
                 os.environ["MCP_MGMT_PORT"] = str(mgmt_port)
                 logger.info(f"Set MCP_MGMT_PORT={mgmt_port} for {tool_name}")
-                
+
                 # Create registry with tool_name for global tracking
                 # This allows the tool to find this registry when it starts
                 extension_registry = ExtensionRegistry(tool_name=tool_name)
+
                 mgmt_server = ExtensionHTTPServer(
                     tool_name=tool_name,
                     registry=extension_registry,
                     port=mgmt_port,
-                    host=self.host
+                    host=self.host,
+                    api_key=api_key
                 )
                 
                 # Call tool's setup_extensions() if available to register extensions

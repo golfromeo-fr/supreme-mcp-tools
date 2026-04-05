@@ -357,34 +357,36 @@ class HTTPClient:
                     )
         return self._session
     
-    async def get(self, url: str) -> Any:
+    async def get(self, url: str, headers: Dict[str, str] = None) -> Any:
         """
         Execute HTTP GET request.
-        
+
         Args:
             url: URL to request
-            
+            headers: Optional extra headers
+
         Returns:
             Response JSON data
         """
         session = await self._get_session()
-        async with session.get(url) as response:
+        async with session.get(url, headers=headers) as response:
             response.raise_for_status()
             return await response.json()
-    
-    async def post(self, url: str, data: Dict[str, Any]) -> Any:
+
+    async def post(self, url: str, data: Dict[str, Any], headers: Dict[str, str] = None) -> Any:
         """
         Execute HTTP POST request.
-        
+
         Args:
             url: URL to request
             data: Request body data
-            
+            headers: Optional extra headers
+
         Returns:
             Response JSON data
         """
         session = await self._get_session()
-        async with session.post(url, json=data) as response:
+        async with session.post(url, json=data, headers=headers) as response:
             response.raise_for_status()
             return await response.json()
     
@@ -545,11 +547,12 @@ class DistributedExtensionRegistry:
             endpoint = await self.service_registry.get_endpoint(tool)
             if not endpoint:
                 continue
-            
+
             try:
                 extensions = await self._http_get(
                     f"{endpoint.management_url}/extensions",
-                    circuit_breaker_key=tool
+                    circuit_breaker_key=tool,
+                    headers=self._auth_headers(tool)
                 )
                 
                 if ext_type:
@@ -603,7 +606,8 @@ class DistributedExtensionRegistry:
         return await self._http_post(
             f"{endpoint.management_url}/extensions/{extension_name}/query",
             {"params": params or {}},
-            circuit_breaker_key=tool_name
+            circuit_breaker_key=tool_name,
+            headers=self._auth_headers(tool_name)
         )
     
     # ==================== MUTATE ====================
@@ -632,7 +636,8 @@ class DistributedExtensionRegistry:
         result = await self._http_post(
             f"{endpoint.management_url}/extensions/{extension_name}/mutate",
             {"params": params},
-            circuit_breaker_key=tool_name
+            circuit_breaker_key=tool_name,
+            headers=self._auth_headers(tool_name)
         )
         
         # Persist configuration change
@@ -684,7 +689,8 @@ class DistributedExtensionRegistry:
         return await self._http_post(
             f"{endpoint.management_url}/extensions/{extension_name}/execute",
             {"params": params or {}},
-            circuit_breaker_key=tool_name
+            circuit_breaker_key=tool_name,
+            headers=self._auth_headers(tool_name)
         )
     
     # ==================== EVENTS ====================
@@ -722,51 +728,62 @@ class DistributedExtensionRegistry:
     
     # ==================== INTERNAL HTTP HELPERS ====================
     
+    def _auth_headers(self, tool_name: str) -> Dict[str, str]:
+        """Get auth headers for a tool's management API."""
+        from launcher.env_manager import load_auth_config
+        auth_cfg = load_auth_config(tool_name)
+        api_key = auth_cfg.get("api_key")
+        return {"X-API-Key": api_key} if api_key else {}
+
     async def _http_get(
         self,
         url: str,
-        circuit_breaker_key: Optional[str] = None
+        circuit_breaker_key: Optional[str] = None,
+        headers: Dict[str, str] = None
     ) -> Any:
         """
         Execute HTTP GET with circuit breaker protection.
-        
+
         Args:
             url: URL to request
             circuit_breaker_key: Optional circuit breaker key
-            
+            headers: Optional extra headers
+
         Returns:
             Response data
         """
         if circuit_breaker_key:
             return await self.circuit_breaker.execute(
                 circuit_breaker_key,
-                lambda: self.http_client.get(url)
+                lambda: self.http_client.get(url, headers=headers)
             )
-        return await self.http_client.get(url)
-    
+        return await self.http_client.get(url, headers=headers)
+
     async def _http_post(
         self,
         url: str,
         data: Dict[str, Any],
-        circuit_breaker_key: Optional[str] = None
+        circuit_breaker_key: Optional[str] = None,
+        headers: Dict[str, str] = None
     ) -> Any:
         """
         Execute HTTP POST with circuit breaker protection.
-        
+
         Args:
             url: URL to request
             data: Request body data
             circuit_breaker_key: Optional circuit breaker key
-            
+            headers: Optional extra headers
+
         Returns:
             Response data
         """
         if circuit_breaker_key:
             return await self.circuit_breaker.execute(
                 circuit_breaker_key,
-                lambda: self.http_client.post(url, data)
+                lambda: self.http_client.post(url, data, headers=headers)
             )
-        return await self.http_client.post(url, data)
+        return await self.http_client.post(url, data, headers=headers)
     
     async def close(self) -> None:
         """Close the HTTP client."""
