@@ -401,14 +401,6 @@ async def _render_content(state) -> None:
         elif not env_variables:
             env_variables = state.env_cache.get(selected_tool_detail.name, [])
 
-    # Fetch current mutator values (e.g. api_key_info) for display in forms
-    current_mutator_values: Dict[str, Dict[str, Any]] = {}
-    if selected_tool_detail:
-        client = get_api_client()
-        key_response = await client.query_extension(selected_tool_detail.name, "api_key_info", {})
-        if key_response.success and key_response.data:
-            current_mutator_values["api_key"] = key_response.data
-
     # Fetch auth config for the tool
     tool_auth: dict = state.tool_auth.get(selected_tool_detail.name, {}) if selected_tool_detail else {}
     if selected_tool_detail:
@@ -427,24 +419,16 @@ async def _render_content(state) -> None:
             client = get_api_client()
             response = await client.query_extension(state.selected_tool, ext_name, params)
             if response.success:
+                # Update the extension's data in place and refresh UI
+                for ext in state.selected_tool_detail.extensions:
+                    if ext.name == ext_name:
+                        ext.data = response.data
+                        break
                 show_success("Query successful")
+                if content_refresh:
+                    content_refresh()
             else:
                 show_error(f"Query failed: {response.error}")
-        finally:
-            state.loading_detail = False
-
-    async def on_mutate(ext_name: str, values: Dict[str, Any]) -> None:
-        state = get_state()
-        if not state.selected_tool:
-            return
-        state.loading_detail = True
-        try:
-            client = get_api_client()
-            response = await client.mutate_extension(state.selected_tool, ext_name, values)
-            if response.success:
-                show_success("Configuration updated")
-            else:
-                show_error(f"Update failed: {response.error}")
         finally:
             state.loading_detail = False
 
@@ -537,13 +521,11 @@ async def _render_content(state) -> None:
     ToolCard(
         tool=selected_tool_detail,
         on_query=on_query,
-        on_mutate=on_mutate,
         on_execute=on_execute,
         loading=state.loading_detail,
         env_variables=env_variables,
         on_env_update=on_env_update,
         on_env_delete=on_env_delete,
-        current_mutator_values=current_mutator_values,
     )
     logger.debug("_render_content completed")
 

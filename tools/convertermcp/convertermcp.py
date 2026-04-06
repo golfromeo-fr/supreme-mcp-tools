@@ -6,7 +6,6 @@ Provides tools for converting document formats (DOCX to text, etc.)
 FEF V3 Integration:
 - Management server on port 9003
 - Extensions: conversion_stats, format_usage, conversion_queue, storage_usage
-- Mutators: output_config, parallel_limit
 """
 import sys
 import os
@@ -98,12 +97,14 @@ convertermcp_metrics = {
 # Format usage tracking
 format_usage = {}
 
-# Output configuration
-output_config = {
-    "encoding": "utf-8",
-    "max_size_mb": MAX_DOCX_SIZE_MB,
-    "preserve_formatting": True,
-}
+# Output configuration (reads from env vars for hot-reload)
+def get_output_config() -> dict:
+    """Get output config from env vars (hot-reload)."""
+    return {
+        "encoding": os.environ.get("CONVERTER_ENCODING", "utf-8"),
+        "max_size_mb": int(os.environ.get("CONVERTER_MAX_FILE_SIZE_MB", str(MAX_DOCX_SIZE_MB))),
+        "preserve_formatting": os.environ.get("CONVERTER_PRESERVE_FORMATTING", "true").lower() == "true",
+    }
 
 
 def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -128,27 +129,6 @@ def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def set_output_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update output configuration."""
-    previous = output_config.copy()
-    
-    if "encoding" in params:
-        output_config["encoding"] = params["encoding"]
-    if "max_size_mb" in params:
-        output_config["max_size_mb"] = int(params["max_size_mb"])
-    if "preserve_formatting" in params:
-        output_config["preserve_formatting"] = bool(params["preserve_formatting"])
-    
-    logger.info(f"[convertermcp] Output config updated: {output_config}")
-    
-    return {
-        "success": True,
-        "message": "Output configuration updated",
-        "previous": previous,
-        "new": output_config.copy()
-    }
-
-
 def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
     """Data source: Get current conversion queue status."""
     return {
@@ -163,23 +143,6 @@ def get_storage_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "total_bytes_processed": convertermcp_metrics["bytes_processed"],
         "estimated_disk_usage_mb": round(convertermcp_metrics["bytes_processed"] / (1024 * 1024), 2)
-    }
-
-
-def set_parallel_limit(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Set maximum parallel conversions."""
-    previous = convertermcp_metrics.get("parallel_limit", 4)
-    
-    if "parallel_limit" in params:
-        convertermcp_metrics["parallel_limit"] = int(params["parallel_limit"])
-    
-    logger.info(f"[convertermcp] Parallel limit updated: {convertermcp_metrics.get('parallel_limit', 4)}")
-    
-    return {
-        "success": True,
-        "message": "Parallel limit updated",
-        "previous": previous,
-        "new": convertermcp_metrics.get("parallel_limit", 4)
     }
 
 
@@ -224,23 +187,6 @@ def setup_fef_v3():
             metadata={"description": "Format usage statistics", "category": "metrics"}
         ),
         Extension(
-            name="output_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "encoding": {"type": "string"},
-                        "max_size_mb": {"type": "integer", "minimum": 1},
-                        "preserve_formatting": {"type": "boolean"}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_output_config,
-            metadata={"description": "Update output configuration", "category": "configuration"}
-        ),
-        Extension(
             name="conversion_queue",
             ext_type=ExtensionType.DATA_SOURCE,
             schema={
@@ -273,23 +219,8 @@ def setup_fef_v3():
             handler=get_storage_usage,
             metadata={"description": "Storage usage by output", "category": "metrics"}
         ),
-        Extension(
-            name="parallel_limit",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "parallel_limit": {"type": "integer", "minimum": 1, "maximum": 16}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_parallel_limit,
-            metadata={"description": "Set max parallel conversions", "category": "configuration"}
-        ),
     ]
-    
+
     return setup_tool_extensions(
         tool_name="convertermcp",
         mgmt_port=9003,

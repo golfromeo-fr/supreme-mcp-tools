@@ -6,7 +6,6 @@ Provides tools for semantic code search, sparse search, and code indexing using 
 FEF V3 Integration:
 - Management server on port 9004
 - Extensions: vector_db_stats, embedding_stats, collection_stats
-- Mutators: collection_config, embedding_config
 - Actions: reindex
 """
 import sys
@@ -252,12 +251,14 @@ ragmcp_metrics = {
     "search_errors": 0,
 }
 
-# Collection configuration
-collection_config = {
-    "default_collection": "code_index",
-    "similarity_threshold": 0.7,
-    "max_results": 10,
-}
+# Collection configuration (reads from env vars for hot-reload)
+def get_collection_config() -> dict:
+    """Get collection config from env vars (hot-reload)."""
+    return {
+        "default_collection": os.environ.get("RAGMCP_DEFAULT_COLLECTION", "code_index"),
+        "similarity_threshold": float(os.environ.get("RAGMCP_SIMILARITY_THRESHOLD", "0.7")),
+        "max_results": int(os.environ.get("RAGMCP_MAX_RESULTS", "10")),
+    }
 
 
 def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -273,7 +274,7 @@ def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "connected": qdrant_client is not None,
         "collections": collections,
-        "default_collection": collection_config["default_collection"]
+        "default_collection": get_collection_config()["default_collection"]
     }
 
 
@@ -287,67 +288,9 @@ def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def set_embedding_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update embedding configuration for external API models."""
-    global EMBEDDING_PROVIDER, LOCAL_EMBEDDING_MODEL
-    previous = {"provider": EMBEDDING_PROVIDER, "model": LOCAL_EMBEDDING_MODEL}
-    
-    if "provider" in params:
-        EMBEDDING_PROVIDER = params["provider"]
-    if "model" in params:
-        LOCAL_EMBEDDING_MODEL = params["model"]
-    
-    logger.info(f"[ragmcp] Embedding config updated: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL}")
-    
-    return {
-        "success": True,
-        "message": "Embedding configuration updated",
-        "previous": previous,
-        "new": {"provider": EMBEDDING_PROVIDER, "model": LOCAL_EMBEDDING_MODEL}
-    }
-
-
-def get_collection_stats(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Data source: Get collection statistics."""
-    count = 0
-    if qdrant_client:
-        try:
-            info = qdrant_client.get_collection(collection_config["default_collection"])
-            count = info.points_count or 0
-        except Exception:
-            pass
-    
-    return {
-        "collection": collection_config["default_collection"],
-        "points_count": count,
-        "similarity_threshold": collection_config["similarity_threshold"]
-    }
-
-
-def set_collection_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update collection configuration."""
-    previous = collection_config.copy()
-    
-    if "default_collection" in params:
-        collection_config["default_collection"] = params["default_collection"]
-    if "similarity_threshold" in params:
-        collection_config["similarity_threshold"] = float(params["similarity_threshold"])
-    if "max_results" in params:
-        collection_config["max_results"] = int(params["max_results"])
-    
-    logger.info(f"[ragmcp] Collection config updated: {collection_config}")
-    
-    return {
-        "success": True,
-        "message": "Collection configuration updated",
-        "previous": previous,
-        "new": collection_config.copy()
-    }
-
-
 def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
     """Action: Trigger reindexing."""
-    collection = params.get("collection", collection_config["default_collection"])
+    collection = params.get("collection", get_collection_config()["default_collection"])
     ragmcp_metrics["index_operations"] += 1
     logger.info(f"[ragmcp] Reindex triggered for collection: {collection}")
     
@@ -412,39 +355,6 @@ def setup_fef_v3():
             },
             handler=get_collection_stats,
             metadata={"description": "Collection statistics", "category": "metrics"}
-        ),
-        Extension(
-            name="collection_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_collection": {"type": "string"},
-                        "similarity_threshold": {"type": "number", "minimum": 0, "maximum": 1},
-                        "max_results": {"type": "integer", "minimum": 1}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_collection_config,
-            metadata={"description": "Update collection configuration", "category": "configuration"}
-        ),
-        Extension(
-            name="embedding_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "provider": {"type": "string", "enum": ["azure", "openai", "local"]},
-                        "model": {"type": "string"}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_embedding_config,
-            metadata={"description": "Update embedding provider/model for external API", "category": "configuration"}
         ),
         Extension(
             name="reindex",

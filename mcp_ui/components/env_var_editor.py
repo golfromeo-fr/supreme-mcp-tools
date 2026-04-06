@@ -110,13 +110,65 @@ def _toggle_edit(
             if var.description:
                 ui.label(var.description).classes("text-caption text-grey")
 
-            # Options dropdown or text input
+            # Type-appropriate input field
+            var_type = getattr(var, 'type', 'string')
+            # Determine initial value: use current raw value if set, otherwise default
+            current_val = getattr(var, 'value_raw', '') or var.default or ''
             if var.options:
                 input_field = ui.select(
                     options=var.options,
                     value=None,
                     with_input=True,
                     label=f"Select or enter value for {var.name}",
+                ).classes("w-full")
+            elif var_type == "boolean":
+                # Parse boolean from string "true"/"false" or bool
+                bool_val = False
+                if var.is_set and current_val:
+                    bool_val = current_val.lower() == "true"
+                elif var.default:
+                    bool_val = var.default.lower() == "true"
+                input_field = ui.switch(
+                    f"Enable {var.name}",
+                    value=bool_val,
+                ).classes("w-full")
+            elif var_type == "integer":
+                int_val = None
+                if var.is_set and current_val:
+                    try:
+                        int_val = int(current_val)
+                    except ValueError:
+                        int_val = int(var.default) if var.default else None
+                elif var.default:
+                    try:
+                        int_val = int(var.default)
+                    except ValueError:
+                        int_val = None
+                input_field = ui.number(
+                    f"Value for {var.name}",
+                    value=int_val,
+                    min=var.minimum,
+                    max=var.maximum,
+                    format="%d",
+                ).classes("w-full")
+            elif var_type == "number":
+                float_val = None
+                if var.is_set and current_val:
+                    try:
+                        float_val = float(current_val)
+                    except ValueError:
+                        float_val = float(var.default) if var.default else None
+                elif var.default:
+                    try:
+                        float_val = float(var.default)
+                    except ValueError:
+                        float_val = None
+                input_field = ui.number(
+                    f"Value for {var.name}",
+                    value=float_val,
+                    min=var.minimum,
+                    max=var.maximum,
+                    format="%.2f",
                 ).classes("w-full")
             elif var.secret:
                 input_field = ui.input(
@@ -136,11 +188,19 @@ def _toggle_edit(
             # Action buttons
             with ui.row().classes("gap-2"):
                 def handle_save() -> None:
-                    new_value = input_field.value
-                    if new_value is not None and on_update:
-                        import asyncio
-                        logger.info(f"env_update: tool={tool_name} var={var.name}")
-                        asyncio.create_task(on_update(tool_name, var.name, str(new_value)))
+                    var_type = getattr(var, 'type', 'string')
+                    if var_type == "boolean":
+                        new_value = "true" if input_field.value else "false"
+                    elif var_type == "integer":
+                        new_value = str(int(input_field.value))
+                    elif var_type == "number":
+                        new_value = str(float(input_field.value))
+                    else:
+                        new_value = str(input_field.value) if input_field.value is not None else ""
+                    if new_value and on_update:
+                        # Call on_update WITHOUT awaiting - it updates state and schedules content_refresh
+                        # which must happen in the UI task, not a background task
+                        on_update(tool_name, var.name, new_value)
                     # Show saving indicator - parent refresh will replace with fresh data
                     card.clear()
                     with card:
@@ -156,9 +216,8 @@ def _toggle_edit(
 
                 if on_delete and not var.required:
                     def handle_delete() -> None:
-                        import asyncio
                         logger.info(f"env_delete: tool={tool_name} var={var.name}")
-                        asyncio.create_task(on_delete(tool_name, var.name))
+                        on_delete(tool_name, var.name)
                         card.clear()
                         with card:
                             ui.label(f"Deleting {var.name}...").classes("text-grey italic text-sm")
@@ -191,6 +250,9 @@ def parse_env_vars_from_api(data: dict) -> List[EnvVariable]:
             is_set=var_data.get("is_set", False),
             default=var_data.get("default", ""),
             options=var_data.get("options", []),
+            type=var_data.get("type", "string"),
+            minimum=var_data.get("minimum"),
+            maximum=var_data.get("maximum"),
         ))
 
     return result

@@ -207,6 +207,29 @@
     }
   ],
   "environment_variables": {
+    "RAGMCP_DEFAULT_COLLECTION": {
+      "description": "Default Qdrant collection name",
+      "required": false,
+      "secret": false,
+      "default": "default"
+    },
+    "RAGMCP_SIMILARITY_THRESHOLD": {
+      "description": "Minimum similarity score threshold (0.0 to 1.0)",
+      "required": false,
+      "secret": false,
+      "type": "number",
+      "default": "0.7",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "RAGMCP_MAX_RESULTS": {
+      "description": "Default maximum number of search results",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "5",
+      "minimum": 1
+    },
     "QDRANT_HOST": {
       "description": "Qdrant server hostname",
       "required": false,

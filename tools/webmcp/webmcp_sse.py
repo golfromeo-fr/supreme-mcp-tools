@@ -10,7 +10,6 @@ Based on best practices from:
 FEF V3 Integration:
 - Management server on port 9001
 - Extensions: search_stats, fetch_stats, search_history, fetch_cache_hits
-- Mutators: search_config
 """
 import sys
 import os
@@ -108,13 +107,15 @@ webmcp_metrics = {
     "total_fetch_time_ms": 0.0,
 }
 
-# Search configuration
-search_config = {
-    "max_results": 10,
-    "safe_search": "active",
-    "country": "us",
-    "language": "en"
-}
+# Search configuration (reads from env vars for hot-reload)
+def get_search_config() -> dict:
+    """Get search config from env vars (hot-reload)."""
+    return {
+        "max_results": int(os.environ.get("WEBMCP_MAX_RESULTS", "10")),
+        "safe_search": os.environ.get("WEBMCP_SAFE_SEARCH", "active"),
+        "country": os.environ.get("WEBMCP_COUNTRY", "US"),
+        "language": os.environ.get("WEBMCP_LANGUAGE", "en"),
+    }
 
 
 def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -127,7 +128,7 @@ def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
         "total_searches": webmcp_metrics["search_count"],
         "search_errors": webmcp_metrics["search_errors"],
         "avg_search_time_ms": round(avg_search_time, 2),
-        "config": search_config
+        "config": get_search_config()
     }
 
 
@@ -163,29 +164,6 @@ def get_fetch_cache_hits(params: Dict[str, Any]) -> Dict[str, Any]:
         "cache_hits": cache_hits,
         "cache_misses": cache_misses,
         "hit_ratio": round(hit_ratio, 3)
-    }
-
-
-def set_search_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update search configuration."""
-    previous = search_config.copy()
-    
-    if "max_results" in params:
-        search_config["max_results"] = int(params["max_results"])
-    if "safe_search" in params:
-        search_config["safe_search"] = params["safe_search"]
-    if "country" in params:
-        search_config["country"] = params["country"]
-    if "language" in params:
-        search_config["language"] = params["language"]
-    
-    logger.info(f"[webmcp] Search config updated: {search_config}")
-    
-    return {
-        "success": True,
-        "message": "Search configuration updated",
-        "previous": previous,
-        "new": search_config.copy()
     }
 
 
@@ -235,33 +213,6 @@ def setup_fef_v3():
             metadata={
                 "description": "URL fetch statistics",
                 "category": "metrics"
-            }
-        ),
-        Extension(
-            name="search_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
-                        "safe_search": {"type": "string", "enum": ["off", "moderate", "active"]},
-                        "country": {"type": "string"},
-                        "language": {"type": "string"}
-                    }
-                },
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "success": {"type": "boolean"},
-                        "message": {"type": "string"}
-                    }
-                }
-            },
-            handler=set_search_config,
-            metadata={
-                "description": "Update search engine configuration",
-                "category": "configuration"
             }
         ),
         Extension(

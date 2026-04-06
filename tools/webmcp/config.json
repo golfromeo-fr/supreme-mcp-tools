@@ -51,6 +51,59 @@
       "required": false,
       "secret": true,
       "default": ""
+    },
+    "WEBMCP_MAX_RESULTS": {
+      "description": "Default maximum number of search results to return",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "10",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "WEBMCP_SAFE_SEARCH": {
+      "description": "Safe search level for Brave Search",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "active",
+      "options": ["off", "moderate", "active"]
+    },
+    "WEBMCP_COUNTRY": {
+      "description": "Default country code for search results",
+      "required": false,
+      "secret": false,
+      "default": "US"
+    },
+    "WEBMCP_LANGUAGE": {
+      "description": "Default language code for search results",
+      "required": false,
+      "secret": false,
+      "default": "en"
+    },
+    "MCP_CACHE_MAX_SIZE": {
+      "description": "Maximum number of cache entries",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1000",
+      "minimum": 1
+    },
+    "MCP_CACHE_TTL": {
+      "description": "Cache TTL in seconds",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "300",
+      "minimum": 0
+    },
+    "MCP_CACHE_ENABLED": {
+      "description": "Enable or disable caching",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "true",
+      "options": ["true", "false"]
     }
   },
   "auth": {

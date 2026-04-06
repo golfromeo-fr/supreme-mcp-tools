@@ -453,9 +453,12 @@ class ManagementServer:
                     detail=f"Unknown environment variables: {', '.join(unknown_vars)}"
                 )
 
-            # Set each variable
+            # Set each variable (validate + update)
             for var_name, value in request.variables.items():
-                set_env_value(var_name, value, persist=True)
+                try:
+                    set_env_value(var_name, value, persist=True)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
 
             # Return updated masked values
             updated = get_env_values(tool_name)

@@ -56,6 +56,30 @@
     }
   ],
   "environment_variables": {
+    "ORACLE_MIN_CONNECTIONS": {
+      "description": "Minimum number of connections in the pool",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1",
+      "minimum": 1
+    },
+    "ORACLE_MAX_CONNECTIONS": {
+      "description": "Maximum number of connections in the pool",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "10",
+      "minimum": 1
+    },
+    "ORACLE_QUERY_TIMEOUT": {
+      "description": "Query timeout in seconds",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "30",
+      "minimum": 1
+    },
     "USERID": {
       "description": "Oracle connection string (format: username/password)",
       "required": true,

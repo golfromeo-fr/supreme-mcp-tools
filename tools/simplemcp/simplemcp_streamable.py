@@ -6,7 +6,6 @@ Provides simple demonstration tools for testing and development using Streamable
 FEF V3 Integration:
 - Management server on port 9012
 - Extensions: tool_usage, api_response_times
-- Mutators: timeout_config
 """
 import sys
 import os
@@ -453,22 +452,6 @@ def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
             handler=get_api_response_times,
             metadata={"description": "API response time statistics", "category": "metrics"}
         ),
-        Extension(
-            name="timeout_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_timeout_ms": {"type": "integer", "minimum": 1000, "default": timeout_config["default_timeout_ms"]},
-                        "max_timeout_ms": {"type": "integer", "minimum": 5000, "default": timeout_config["max_timeout_ms"]}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_timeout_config,
-            metadata={"description": "Update timeout configuration", "category": "configuration"}
-        ),
     ]
     
     # If a registry is provided (from launcher), use it
@@ -605,11 +588,13 @@ simplemcp_metrics = {
     "max_time_ms": 0.0,
 }
 
-# Timeout configuration
-timeout_config = {
-    "default_timeout_ms": 30000,
-    "max_timeout_ms": 120000,
-}
+# Timeout configuration - reads from env vars at call time for hot-reload
+def get_timeout_config() -> dict:
+    """Get timeout config from env vars (hot-reload)."""
+    return {
+        "default_timeout_ms": int(os.environ.get("SIMPLEMCP_DEFAULT_TIMEOUT_MS", "30000")),
+        "max_timeout_ms": int(os.environ.get("SIMPLEMCP_MAX_TIMEOUT_MS", "120000")),
+    }
 
 
 def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -638,24 +623,6 @@ def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
         )
     }
 
-
-def set_timeout_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update timeout configuration."""
-    previous = timeout_config.copy()
-    
-    if "default_timeout_ms" in params:
-        timeout_config["default_timeout_ms"] = int(params["default_timeout_ms"])
-    if "max_timeout_ms" in params:
-        timeout_config["max_timeout_ms"] = int(params["max_timeout_ms"])
-    
-    logger.info(f"[simplemcp] Timeout config updated: {timeout_config}")
-    
-    return {
-        "success": True,
-        "message": "Timeout configuration updated",
-        "previous": previous,
-        "new": timeout_config.copy()
-    }
 
 
 @app.get("/")

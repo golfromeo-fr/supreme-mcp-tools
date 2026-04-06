@@ -157,3 +157,6 @@ class EnvVariable(BaseModel):
     is_set: bool = False
     default: str = ""
     options: List[str] = []
+    type: str = "string"  # string, integer, number, boolean
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None

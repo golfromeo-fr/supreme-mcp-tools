@@ -6,7 +6,6 @@ Provides simple demonstration tools for testing and development.
 FEF V3 Integration:
 - Management server on port 9002
 - Extensions: tool_usage, api_response_times
-- Mutators: timeout_config
 """
 import sys
 import os
@@ -80,11 +79,13 @@ simplemcp_metrics = {
     "total_time_ms": 0.0,
 }
 
-# Timeout configuration
-timeout_config = {
-    "default_timeout_ms": 30000,
-    "max_timeout_ms": 120000,
-}
+# Timeout configuration (reads from env vars for hot-reload)
+def get_timeout_config() -> dict:
+    """Get timeout config from env vars (hot-reload)."""
+    return {
+        "default_timeout_ms": int(os.environ.get("SIMPLEMCP_DEFAULT_TIMEOUT_MS", "30000")),
+        "max_timeout_ms": int(os.environ.get("SIMPLEMCP_MAX_TIMEOUT_MS", "120000")),
+    }
 
 
 def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,25 +110,6 @@ def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
             simplemcp_metrics["total_time_ms"] / simplemcp_metrics["total_tool_calls"]
             if simplemcp_metrics["total_tool_calls"] > 0 else 0.0, 2
         )
-    }
-
-
-def set_timeout_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update timeout configuration."""
-    previous = timeout_config.copy()
-    
-    if "default_timeout_ms" in params:
-        timeout_config["default_timeout_ms"] = int(params["default_timeout_ms"])
-    if "max_timeout_ms" in params:
-        timeout_config["max_timeout_ms"] = int(params["max_timeout_ms"])
-    
-    logger.info(f"[simplemcp] Timeout config updated: {timeout_config}")
-    
-    return {
-        "success": True,
-        "message": "Timeout configuration updated",
-        "previous": previous,
-        "new": timeout_config.copy()
     }
 
 
@@ -176,24 +158,8 @@ def setup_fef_v3():
             handler=get_api_response_times,
             metadata={"description": "API response time statistics", "category": "metrics"}
         ),
-        Extension(
-            name="timeout_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_timeout_ms": {"type": "integer", "minimum": 1000},
-                        "max_timeout_ms": {"type": "integer", "minimum": 5000}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-            },
-            handler=set_timeout_config,
-            metadata={"description": "Update timeout configuration", "category": "configuration"}
-        ),
     ]
-    
+
     return setup_tool_extensions(
         tool_name="simplemcp",
         mgmt_port=9002,

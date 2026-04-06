@@ -76,6 +76,46 @@
       "required": false,
       "secret": true,
       "default": ""
+    },
+    "SIMPLEMCP_DEFAULT_TIMEOUT_MS": {
+      "description": "Default timeout in milliseconds for tool operations",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "30000",
+      "minimum": 1000
+    },
+    "SIMPLEMCP_MAX_TIMEOUT_MS": {
+      "description": "Maximum allowed timeout in milliseconds",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "120000",
+      "minimum": 5000
+    },
+    "MCP_CACHE_MAX_SIZE": {
+      "description": "Maximum number of cache entries",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1000",
+      "minimum": 1
+    },
+    "MCP_CACHE_TTL": {
+      "description": "Cache TTL in seconds",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "300",
+      "minimum": 0
+    },
+    "MCP_CACHE_ENABLED": {
+      "description": "Enable or disable caching",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "true",
+      "options": ["true", "false"]
     }
   },
   "auth": {

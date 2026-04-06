@@ -115,21 +115,6 @@ class ToolMetrics:
         self._by_tool.clear()
 
 
-@dataclass
-class CacheConfig:
-    """Cache configuration."""
-    max_size: int = 1000
-    ttl_seconds: int = 300
-    enabled: bool = True
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "max_size": self.max_size,
-            "ttl_seconds": self.ttl_seconds,
-            "enabled": self.enabled
-        }
-
-
 class ToolExtensionManager:
     """
     Manages FEF V3 extensions for an MCP tool.
@@ -146,69 +131,12 @@ class ToolExtensionManager:
         """
         self.tool_name = tool_name
         self.metrics = ToolMetrics()
-        self.cache_config = CacheConfig()
-        self._api_key: Optional[str] = None
         self._custom_data: Dict[str, Any] = {}
     
     def get_request_stats(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Data source: Get request statistics."""
         return self.metrics.to_dict()
-    
-    def get_cache_stats(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Data source: Get cache statistics."""
-        total = self.metrics.cache_hits + self.metrics.cache_misses
-        return {
-            "size": self._custom_data.get("cache_size", 0),
-            "max_size": self.cache_config.max_size,
-            "hit_rate": round(
-                self.metrics.cache_hits / total if total > 0 else 0.0, 4
-            ),
-            "hits": self.metrics.cache_hits,
-            "misses": self.metrics.cache_misses,
-            "ttl_seconds": self.cache_config.ttl_seconds,
-            "enabled": self.cache_config.enabled
-        }
-    
-    def set_cache_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Mutator: Update cache configuration."""
-        previous = self.cache_config.to_dict()
-        
-        if "max_size" in params:
-            try:
-                self.cache_config.max_size = int(params["max_size"])
-            except (ValueError, TypeError):
-                raise ValueError(f"Invalid max_size value: {params['max_size']!r}. Must be an integer.")
-        if "ttl" in params:
-            try:
-                self.cache_config.ttl_seconds = int(params["ttl"])
-            except (ValueError, TypeError):
-                raise ValueError(f"Invalid ttl value: {params['ttl']!r}. Must be an integer.")
-        if "enabled" in params:
-            self.cache_config.enabled = bool(params["enabled"])
-        
-        logger.info(f"[{self.tool_name}] Cache config updated: {self.cache_config.to_dict()}")
-        
-        return {
-            "success": True,
-            "message": "Cache configuration updated",
-            "previous": previous,
-            "new": self.cache_config.to_dict()
-        }
-    
-    def set_api_key(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Mutator: Set API key."""
-        new_key = params.get("key")
-        if not new_key:
-            return {"success": False, "message": "API key is required"}
-        
-        self._api_key = new_key
-        logger.info(f"[{self.tool_name}] API key updated")
-        
-        return {
-            "success": True,
-            "message": "API key updated successfully"
-        }
-    
+
     def clear_cache(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Action: Clear cache."""
         cache_type = params.get("cache_type", "all")
@@ -239,19 +167,6 @@ class ToolExtensionManager:
             "name": self.tool_name,
             "uptime_seconds": round(time.time() - self.metrics.start_time, 2),
             "total_requests": self.metrics.total_requests,
-            "cache_config": self.cache_config.to_dict()
-        }
-
-    def get_api_key(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Data source: Get current API key (masked)."""
-        key = self._api_key or ""
-        is_set = bool(key)
-        # Show last 4 chars if set
-        masked = f"****{key[-4:]}" if is_set else "(not set)"
-        return {
-            "is_set": is_set,
-            "value_masked": masked,
-            "length": len(key) if is_set else 0,
         }
 
 
@@ -297,30 +212,7 @@ def register_common_extensions(
             "category": "metrics"
         }
     ))
-    
-    registry.register(tool_name, Extension(
-        name="cache_stats",
-        ext_type=ExtensionType.DATA_SOURCE,
-        schema={
-            "input": {"type": "object", "properties": {}},
-            "output": {
-                "type": "object",
-                "properties": {
-                    "size": {"type": "integer"},
-                    "max_size": {"type": "integer"},
-                    "hit_rate": {"type": "number"},
-                    "hits": {"type": "integer"},
-                    "misses": {"type": "integer"}
-                }
-            }
-        },
-        handler=manager.get_cache_stats,
-        metadata={
-            "description": "Cache statistics and hit rates",
-            "category": "metrics"
-        }
-    ))
-    
+
     registry.register(tool_name, Extension(
         name="tool_info",
         ext_type=ExtensionType.DATA_SOURCE,
@@ -342,81 +234,6 @@ def register_common_extensions(
         }
     ))
 
-    registry.register(tool_name, Extension(
-        name="api_key_info",
-        ext_type=ExtensionType.DATA_SOURCE,
-        schema={
-            "input": {"type": "object", "properties": {}},
-            "output": {
-                "type": "object",
-                "properties": {
-                    "is_set": {"type": "boolean"},
-                    "value_masked": {"type": "string"},
-                    "length": {"type": "integer"}
-                }
-            }
-        },
-        handler=manager.get_api_key,
-        metadata={
-            "description": "Current API key value (masked)",
-            "category": "configuration"
-        }
-    ))
-
-    # Mutators
-    registry.register(tool_name, Extension(
-        name="cache_config",
-        ext_type=ExtensionType.MUTATOR,
-        schema={
-            "input": {
-                "type": "object",
-                "properties": {
-                    "max_size": {"type": "integer", "minimum": 1, "default": manager.cache_config.max_size},
-                    "ttl": {"type": "integer", "minimum": 0, "default": manager.cache_config.ttl_seconds},
-                    "enabled": {"type": "boolean", "default": manager.cache_config.enabled}
-                }
-            },
-            "output": {
-                "type": "object",
-                "properties": {
-                    "success": {"type": "boolean"},
-                    "message": {"type": "string"}
-                }
-            }
-        },
-        handler=manager.set_cache_config,
-        metadata={
-            "description": "Update cache configuration",
-            "category": "configuration"
-        }
-    ))
-    
-    registry.register(tool_name, Extension(
-        name="api_key",
-        ext_type=ExtensionType.MUTATOR,
-        schema={
-            "input": {
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "API key value"}
-                },
-                "required": ["key"]
-            },
-            "output": {
-                "type": "object",
-                "properties": {
-                    "success": {"type": "boolean"},
-                    "message": {"type": "string"}
-                }
-            }
-        },
-        handler=manager.set_api_key,
-        metadata={
-            "description": "Set API key for authentication",
-            "category": "configuration"
-        }
-    ))
-    
     # Actions
     registry.register(tool_name, Extension(
         name="clear_cache",
@@ -467,7 +284,7 @@ def register_common_extensions(
         }
     ))
     
-    logger.info(f"[{tool_name}] Registered {7} common FEF V3 extensions")
+    logger.info(f"[{tool_name}] Registered {4} common FEF V3 extensions")
 
 
 def setup_tool_extensions(

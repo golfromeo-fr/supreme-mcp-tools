@@ -135,6 +135,9 @@ def _normalize_env_schema(env_section: Dict[str, Any]) -> Dict[str, Dict[str, An
                 "secret": var_meta.get("secret", True),
                 "default": var_meta.get("default", ""),
                 "options": var_meta.get("options", []),
+                "type": var_meta.get("type", "string"),
+                "minimum": var_meta.get("minimum"),
+                "maximum": var_meta.get("maximum"),
             }
         else:
             # Unexpected format, treat as unknown
@@ -144,6 +147,9 @@ def _normalize_env_schema(env_section: Dict[str, Any]) -> Dict[str, Dict[str, An
                 "secret": True,
                 "default": str(var_meta) if var_meta else "",
                 "options": [],
+                "type": "string",
+                "minimum": None,
+                "maximum": None,
             }
     return normalized
 
@@ -218,6 +224,9 @@ def get_env_values(tool_name: str) -> Dict[str, Dict[str, Any]]:
             "is_set": is_set,
             "default": meta.get("default", ""),
             "options": meta.get("options", []),
+            "type": meta.get("type", "string"),
+            "minimum": meta.get("minimum"),
+            "maximum": meta.get("maximum"),
         }
 
         if not is_secret:
@@ -255,6 +264,87 @@ def get_all_env_values() -> Dict[str, Dict[str, Dict[str, Any]]]:
     return result
 
 
+def _find_var_schema(var_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Find the schema for a variable by searching all tool config.json files.
+
+    Args:
+        var_name: Name of the environment variable
+
+    Returns:
+        Schema dict or None if not found
+    """
+    tools_dir = PROJECT_ROOT / "tools"
+    if not tools_dir.exists():
+        return None
+
+    for tool_dir in tools_dir.iterdir():
+        if not tool_dir.is_dir():
+            continue
+        config_path = tool_dir / "config.json"
+        if not config_path.exists():
+            continue
+
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        env_section = config.get("environment_variables", {})
+        if var_name in env_section:
+            meta = env_section[var_name]
+            if isinstance(meta, dict):
+                return meta
+
+    return None
+
+
+def _validate_env_value(var_name: str, value: str, schema: Dict[str, Any]) -> None:
+    """
+    Validate a value against a variable's schema.
+
+    Args:
+        var_name: Name of the variable (for error messages)
+        value: The value to validate
+        schema: The variable's schema from config.json
+
+    Raises:
+        ValueError: If validation fails
+    """
+    var_type = schema.get("type", "string")
+
+    if var_type == "integer":
+        try:
+            int_val = int(value)
+        except ValueError:
+            raise ValueError(f"{var_name} must be an integer, got: {value!r}")
+
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if minimum is not None and int_val < minimum:
+            raise ValueError(f"{var_name} must be >= {minimum}, got: {int_val}")
+        if maximum is not None and int_val > maximum:
+            raise ValueError(f"{var_name} must be <= {maximum}, got: {int_val}")
+
+    elif var_type == "number":
+        try:
+            float_val = float(value)
+        except ValueError:
+            raise ValueError(f"{var_name} must be a number, got: {value!r}")
+
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if minimum is not None and float_val < minimum:
+            raise ValueError(f"{var_name} must be >= {minimum}, got: {float_val}")
+        if maximum is not None and float_val > maximum:
+            raise ValueError(f"{var_name} must be <= {maximum}, got: {float_val}")
+
+    elif var_type == "boolean":
+        if value.lower() not in ("true", "false"):
+            raise ValueError(f"{var_name} must be 'true' or 'false', got: {value!r}")
+
+
 def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
     """
     Set an environment variable both in memory and optionally in .env file.
@@ -263,7 +353,15 @@ def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
         var_name: Environment variable name
         value: New value
         persist: Whether to also write to .env file
+
+    Raises:
+        ValueError: If value doesn't match the variable's type/constraints
     """
+    # Validate value against schema if we can find it
+    schema = _find_var_schema(var_name)
+    if schema:
+        _validate_env_value(var_name, value, schema)
+
     # Update runtime environment immediately
     os.environ[var_name] = value
     logger.info(f"Set env var {var_name} (persist={persist})")

@@ -6,7 +6,6 @@ Provides tools for converting document formats (DOCX to text, etc.)
 FEF V3 Integration:
 - Management server on port 9013
 - Extensions: conversion_stats, format_usage, conversion_queue, storage_usage
-- Mutators: output_config, parallel_limit
 """
 import sys
 import os
@@ -637,23 +636,6 @@ def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
             metadata={"description": "Format usage breakdown", "category": "metrics"}
         ),
         Extension(
-            name="output_config",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "default_format": {"type": "string"},
-                        "max_file_size_mb": {"type": "integer", "minimum": 1},
-                        "preserve_formatting": {"type": "boolean"}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
-            },
-            handler=set_output_config,
-            metadata={"description": "Update output configuration", "category": "configuration"}
-        ),
-        Extension(
             name="conversion_queue",
             ext_type=ExtensionType.DATA_SOURCE,
             schema={
@@ -685,21 +667,6 @@ def setup_extensions(registry: Optional["ExtensionRegistry"] = None) -> None:
             },
             handler=get_storage_usage,
             metadata={"description": "Storage usage by output", "category": "metrics"}
-        ),
-        Extension(
-            name="parallel_limit",
-            ext_type=ExtensionType.MUTATOR,
-            schema={
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "parallel_limit": {"type": "integer", "minimum": 1, "maximum": 16}
-                    }
-                },
-                "output": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}}
-            },
-            handler=set_parallel_limit,
-            metadata={"description": "Set max parallel conversions", "category": "configuration"}
         ),
     ]
     
@@ -836,12 +803,14 @@ converter_metrics = {
     "max_time_ms": 0.0,
 }
 
-# Output configuration
-output_config = {
-    "default_format": "text",
-    "max_file_size_mb": 50,
-    "preserve_formatting": False,
-}
+# Output configuration (reads from env vars for hot-reload)
+def get_output_config() -> dict:
+    """Get output config from env vars (hot-reload)."""
+    return {
+        "default_format": os.environ.get("CONVERTER_DEFAULT_FORMAT", "text"),
+        "max_file_size_mb": int(os.environ.get("CONVERTER_MAX_FILE_SIZE_MB", "50")),
+        "preserve_formatting": os.environ.get("CONVERTER_PRESERVE_FORMATTING", "false").lower() == "true",
+    }
 
 
 def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -859,27 +828,6 @@ def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     return converter_metrics["format_counts"].copy()
 
 
-def set_output_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update output configuration."""
-    previous = output_config.copy()
-    
-    if "default_format" in params:
-        output_config["default_format"] = params["default_format"]
-    if "max_file_size_mb" in params:
-        output_config["max_file_size_mb"] = int(params["max_file_size_mb"])
-    if "preserve_formatting" in params:
-        output_config["preserve_formatting"] = bool(params["preserve_formatting"])
-    
-    logger.info(f"[convertermcp] Output config updated: {output_config}")
-    
-    return {
-        "success": True,
-        "message": "Output configuration updated",
-        "previous": previous,
-        "new": output_config.copy()
-    }
-
-
 def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
     """Data source: Get current conversion queue status."""
     return {
@@ -894,23 +842,6 @@ def get_storage_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "total_bytes_processed": converter_metrics["total_bytes_processed"],
         "estimated_disk_usage_mb": round(converter_metrics["total_bytes_processed"] / (1024 * 1024), 2)
-    }
-
-
-def set_parallel_limit(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Set maximum parallel conversions."""
-    previous = converter_metrics.get("parallel_limit", 4)
-    
-    if "parallel_limit" in params:
-        converter_metrics["parallel_limit"] = int(params["parallel_limit"])
-    
-    logger.info(f"[convertermcp] Parallel limit updated: {converter_metrics.get('parallel_limit', 4)}")
-    
-    return {
-        "success": True,
-        "message": "Parallel limit updated",
-        "previous": previous,
-        "new": converter_metrics.get("parallel_limit", 4)
     }
 
 

@@ -6,7 +6,7 @@ Provides access to Oracle databases with query execution, schema introspection, 
 FEF V3 Integration:
 - Management server on port 9010 (separate from oraclemcp_sse on 9000)
 - Extensions: query_stats, connection_pool, schema_cache
-- Mutators: pool_config, query_timeout
+- Mutators: query_timeout
 - Actions: reset_connections, clear_cache
 """
 import sys
@@ -1262,13 +1262,15 @@ oraclemcp_metrics = {
     "schema_lookups": 0,
 }
 
-# Connection pool configuration
-pool_config = {
-    "min_connections": 1,
-    "max_connections": 10,
-    "increment": 1,
-    "query_timeout_seconds": 30
-}
+# Connection pool configuration (reads from env vars for hot-reload)
+def get_pool_config() -> dict:
+    """Get pool config from env vars (hot-reload)."""
+    return {
+        "min_connections": int(os.environ.get("ORACLE_MIN_CONNECTIONS", "1")),
+        "max_connections": int(os.environ.get("ORACLE_MAX_CONNECTIONS", "10")),
+        "increment": 1,
+        "query_timeout_seconds": int(os.environ.get("ORACLE_QUERY_TIMEOUT", "30")),
+    }
 
 # FEF V3 globals (set by setup_extensions when registry is passed by launcher)
 fef_manager = None
@@ -1296,7 +1298,7 @@ def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "active_connections": oraclemcp_metrics["connection_count"],
         "connection_errors": oraclemcp_metrics["connection_errors"],
-        "config": pool_config
+        "config": get_pool_config()
     }
 
 
@@ -1305,27 +1307,6 @@ def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "cached_tables": len(table_columns_cache) if 'table_columns_cache' in globals() else 0,
         "schema_lookups": oraclemcp_metrics["schema_lookups"]
-    }
-
-
-def set_pool_config(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Mutator: Update connection pool configuration."""
-    previous = pool_config.copy()
-    
-    if "min_connections" in params:
-        pool_config["min_connections"] = int(params["min_connections"])
-    if "max_connections" in params:
-        pool_config["max_connections"] = int(params["max_connections"])
-    if "query_timeout" in params:
-        pool_config["query_timeout_seconds"] = int(params["query_timeout"])
-    
-    logger.info(f"[oraclemcp] Pool config updated: {pool_config}")
-    
-    return {
-        "success": True,
-        "message": "Connection pool configuration updated",
-        "previous": previous,
-        "new": pool_config.copy()
     }
 
 
@@ -1413,23 +1394,6 @@ def setup_extensions(registry: ExtensionRegistry):
                 },
                 handler=get_schema_cache_stats,
                 metadata={"description": "Schema cache statistics", "category": "metrics"}
-            ),
-            Extension(
-                name="pool_config",
-                ext_type=ExtensionType.MUTATOR,
-                schema={
-                    "input": {
-                        "type": "object",
-                        "properties": {
-                            "min_connections": {"type": "integer", "minimum": 1},
-                            "max_connections": {"type": "integer", "minimum": 1},
-                            "query_timeout": {"type": "integer", "minimum": 1}
-                        }
-                    },
-                    "output": {"type": "object", "properties": {"success": {"type": "boolean"}}}
-                },
-                handler=set_pool_config,
-                metadata={"description": "Update connection pool configuration", "category": "configuration"}
             ),
             Extension(
                 name="reset_connections",

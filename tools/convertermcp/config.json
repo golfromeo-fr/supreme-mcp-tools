@@ -19,6 +19,65 @@
       "description": "Converts a DOCX file (local path or URL) to plain text; writes to output_path if provided, otherwise returns text."
     }
   ],
+  "environment_variables": {
+    "CONVERTER_DEFAULT_FORMAT": {
+      "description": "Default output format for conversions",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "pdf",
+      "options": ["pdf", "txt", "html", "md", "docx"]
+    },
+    "CONVERTER_MAX_FILE_SIZE_MB": {
+      "description": "Maximum input file size in MB",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "50",
+      "minimum": 1
+    },
+    "CONVERTER_PRESERVE_FORMATTING": {
+      "description": "Whether to preserve source formatting",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "true",
+      "options": ["true", "false"]
+    },
+    "CONVERTER_PARALLEL_LIMIT": {
+      "description": "Maximum number of parallel conversions",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "4",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "MCP_CACHE_MAX_SIZE": {
+      "description": "Maximum number of cache entries",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1000",
+      "minimum": 1
+    },
+    "MCP_CACHE_TTL": {
+      "description": "Cache TTL in seconds",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "300",
+      "minimum": 0
+    },
+    "MCP_CACHE_ENABLED": {
+      "description": "Enable or disable caching",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "true",
+      "options": ["true", "false"]
+    }
+  },
   "auth": {
   "api_key": "convertermcp-test-key-ijkl"
 },
