@@ -754,44 +754,29 @@ async def main() -> int:
         # Sync tools config from running servers (unless disabled)
         if not args.no_sync_tools:
             try:
-                from launcher.tools_config import update_config_with_discovered_tools, validate_and_cleanup_config
-                # Build server URLs from allocated ports
-                server_urls = {}
+                from launcher.tools_config import save_tools_config, load_tools_config, validate_and_cleanup_config
+                logging.info(f"Syncing tools config from {len(started_tools)} servers...")
+                validate_and_cleanup_config()
+                discovered = {}
                 for tool in started_tools:
-                    port = port_manager.get_port(tool.name)
-                    if port:
-                        server_urls[tool.name] = f"http://localhost:{port}/mcp"
-                if server_urls:
-                    # Wait for servers to be ready before syncing
-                    import httpx
-                    from launcher.env_manager import load_auth_config
-                    max_retries = 5
-                    for attempt in range(max_retries):
-                        ready = 0
-                        for name, url in server_urls.items():
-                            try:
-                                auth_cfg = load_auth_config(name)
-                                api_key = auth_cfg.get("api_key")
-                                headers = {"X-API-Key": api_key} if api_key else {}
-                                async with httpx.AsyncClient(timeout=2.0) as c:
-                                    r = await c.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}, headers=headers)
-                                    if r.status_code == 200:
-                                        ready += 1
-                            except Exception:
-                                pass
-                        if ready == len(server_urls):
-                            break
-                        logging.info(f"Waiting for servers to be ready ({ready}/{len(server_urls)}), attempt {attempt + 1}/{max_retries}...")
-                        await asyncio.sleep(2)
-
-                    logging.info(f"Syncing tools config from {len(server_urls)} servers...")
-                    validate_and_cleanup_config()
-                    # Build auth keys map from tool configs
-                    auth_keys = {name: load_auth_config(name).get("api_key") for name in server_urls}
-                    discovered = update_config_with_discovered_tools(server_urls, timeout=10.0, auth_keys=auth_keys)
-                    for name, tools in discovered.items():
-                        logging.info(f"  {name}: {len(tools)} tools")
-                    logging.info("Tools config synced")
+                    module = discovery.loaded_modules.get(tool.name)
+                    if module and hasattr(module, "mcp"):
+                        try:
+                            tool_list = module.mcp._tool_manager.list_tools()
+                            discovered[tool.name] = [t.name for t in tool_list]
+                        except Exception:
+                            discovered[tool.name] = []
+                    else:
+                        discovered[tool.name] = []
+                config_data = load_tools_config()
+                if "tools" not in config_data:
+                    config_data["tools"] = {}
+                for server_name, tool_names in discovered.items():
+                    config_data["tools"][server_name] = tool_names
+                save_tools_config(config_data)
+                for name, tool_names in discovered.items():
+                    logging.info(f"  {name}: {len(tool_names)} tools")
+                logging.info("Tools config synced")
             except Exception as e:
                 logging.warning(f"Failed to sync tools config: {e}")
 

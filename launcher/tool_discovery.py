@@ -45,7 +45,8 @@ class ToolDiscovery:
     # Default patterns to exclude from tool discovery
     # These files are supplementary modules, not standalone MCP tools
     DEFAULT_EXCLUDE_PATTERNS = [
-        "_sse",         # SSE transport variants (we prefer streamable)
+        "_sse",         # SSE transport variants (legacy)
+        "_streamable",   # Obsoleted by _fastmcp variants
         "migrate_",     # Migration scripts
         "copilot_context_injector",  # Helper module, not a tool
     ]
@@ -119,8 +120,23 @@ class ToolDiscovery:
 
                     # Filter by tool names if specified
                     if tool_names is None or metadata.name in tool_names:
-                        self.discovered_tools[metadata.name] = metadata
-                        logger.info(f"Discovered tool: {metadata.name} from {py_file}")
+                        # When duplicate names exist, prefer fastmcp > non-suffixed > streamable
+                        existing = self.discovered_tools.get(metadata.name)
+                        if existing:
+                            existing_is_fastmcp = existing.file_path.endswith("_fastmcp.py")
+                            new_is_fastmcp = str(py_file).endswith("_fastmcp.py")
+                            if new_is_fastmcp and not existing_is_fastmcp:
+                                # Replace non-fastmcp with fastmcp version
+                                self.discovered_tools[metadata.name] = metadata
+                                logger.info(f"Discovered tool: {metadata.name} from {py_file} (fastmcp variant)")
+                            elif not new_is_fastmcp and existing_is_fastmcp:
+                                # Skip non-fastmcp when fastmcp already exists
+                                logger.debug(f"Skipping {py_file} - fastmcp variant already discovered")
+                            else:
+                                logger.debug(f"Skipping duplicate tool: {metadata.name} from {py_file}")
+                        else:
+                            self.discovered_tools[metadata.name] = metadata
+                            logger.info(f"Discovered tool: {metadata.name} from {py_file}")
                     else:
                         logger.debug(f"Skipping tool not in list: {metadata.name}")
 
@@ -228,7 +244,18 @@ class ToolDiscovery:
         # If Streamable HTTP valid, we're done
         if streamable_valid:
             return
-        
+
+        # Check for FastMCP (Starlette app with mcp attribute)
+        fastmcp_valid = False
+        if hasattr(module, "app") and hasattr(module, "mcp"):
+            from starlette.applications import Starlette
+            if isinstance(getattr(module, "app"), Starlette):
+                fastmcp_valid = True
+                logger.debug(f"Module validated as FastMCP tool")
+
+        if fastmcp_valid:
+            return
+
         # Check for SSE transport (needs server, app, sse_transport)
         missing_exports = []
         exports = {}
@@ -285,8 +312,10 @@ class ToolDiscovery:
         """
         # Determine tool name from file name
         name = file_path.stem
-        # Remove _streamable suffix to get normalized name
-        if name.endswith("_streamable"):
+        # Remove _fastmcp or _streamable suffix to get normalized name
+        if name.endswith("_fastmcp"):
+            name = name[:-8]   # Remove "_fastmcp" (8 chars)
+        elif name.endswith("_streamable"):
             name = name[:-11]  # Remove "_streamable" (11 chars)
         
         # Extract version from __version__ if available

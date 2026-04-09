@@ -167,7 +167,11 @@ def set_server_tools(server_name: str, tools_list: List[str], config_path: Optio
 
 async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_key: str = None) -> List[str]:
     """
-    Discover tools from an MCP server by calling its tools/list endpoint.
+    Discover tools from an MCP server by performing an initialize handshake
+    then calling tools/list via the Streamable HTTP transport.
+
+    Uses streaming to handle SSE responses and tracks the mcp-session-id
+    header for session continuity between requests.
 
     Args:
         server_url: URL of the MCP server (e.g., 'http://localhost:8001/mcp')
@@ -178,23 +182,69 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_
         List of tool names advertised by the server
     """
     try:
-        headers = {"X-API-Key": api_key} if api_key else {}
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # Send tools/list request
-            response = await client.post(
-                server_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/list",
-                    "params": {}
-                },
-                headers=headers
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if api_key:
+            headers["X-API-Key"] = api_key
+        request_timeout = httpx.Timeout(timeout, read=timeout)
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
+            init_resp = await client.send(
+                client.build_request(
+                    "POST",
+                    server_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-03-26",
+                            "capabilities": {},
+                            "clientInfo": {"name": "launcher-discovery", "version": "1.0"},
+                        },
+                    },
+                    headers=headers,
+                ),
+                stream=True,
             )
-            if response.status_code == 200:
-                data = response.json()
-                tools = data.get("result", {}).get("tools", [])
-                return [tool.get("name") for tool in tools if tool.get("name")]
+            if init_resp.status_code != 200:
+                await init_resp.aclose()
+                return []
+            session_id = init_resp.headers.get("mcp-session-id")
+            async for line in init_resp.aiter_lines():
+                if line.startswith("data: "):
+                    break
+            await init_resp.aclose()
+
+            if not session_id:
+                return []
+
+            headers["mcp-session-id"] = session_id
+            tools_resp = await client.send(
+                client.build_request(
+                    "POST",
+                    server_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/list",
+                        "params": {},
+                    },
+                    headers=headers,
+                ),
+                stream=True,
+            )
+            if tools_resp.status_code != 200:
+                await tools_resp.aclose()
+                return []
+            async for line in tools_resp.aiter_lines():
+                if line.startswith("data: "):
+                    await tools_resp.aclose()
+                    data = json.loads(line[6:])
+                    tools = data.get("result", {}).get("tools", [])
+                    return [t.get("name") for t in tools if t.get("name")]
+            await tools_resp.aclose()
     except Exception:
         pass
     return []
@@ -247,7 +297,8 @@ def discover_all_tools(
 def update_config_with_discovered_tools(
     server_urls: Dict[str, str],
     config_path: Optional[Path] = None,
-    timeout: float = 5.0
+    timeout: float = 5.0,
+    auth_keys: Optional[Dict[str, str]] = None
 ) -> Dict[str, List[str]]:
     """
     Discover tools from all servers and update the config file.
@@ -256,11 +307,12 @@ def update_config_with_discovered_tools(
         server_urls: Dictionary mapping server names to their MCP URLs
         config_path: Optional path to config file
         timeout: Request timeout in seconds
+        auth_keys: Optional dictionary mapping server names to API keys
 
     Returns:
         Dictionary mapping server names to lists of discovered tool names
     """
-    discovered = discover_all_tools(server_urls, timeout)
+    discovered = discover_all_tools(server_urls, timeout, auth_keys=auth_keys)
 
     config = load_tools_config(config_path)
     if "tools" not in config:
