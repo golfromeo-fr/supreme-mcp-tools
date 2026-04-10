@@ -6,10 +6,12 @@ import sys
 import os
 import logging
 import time
+import re
 import hashlib
+import threading
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 import httpx
 
 TOOL_NAME = "webmcp"
@@ -72,32 +74,62 @@ def get_fetch_cache_hits(params: Dict[str, Any]) -> Dict[str, Any]:
     hit_ratio = cache_hits / total if total > 0 else 0.0
     return {"cache_hits": cache_hits, "cache_misses": cache_misses, "hit_ratio": round(hit_ratio, 3)}
 
+def _is_internal_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        internal_hosts = {
+            'localhost', '127.0.0.1', '::1', '0.0.0.0',
+            '169.254.169.254',
+            'metadata.google.internal',
+            'metadata.azure.internal',
+        }
+        if hostname in internal_hosts:
+            return True
+        private_patterns = [
+            r'^10\.',
+            r'^172\.(1[6-9]|2[0-9]|3[0-1])\.',
+            r'^192\.168\.',
+            r'^127\.',
+        ]
+        for pattern in private_patterns:
+            if re.match(pattern, hostname):
+                return True
+        return False
+    except Exception:
+        return True
+
 class SimpleCache:
     def __init__(self, default_ttl: int = 3600):
         self.cache: dict[str, tuple[str, float]] = {}
+        self.lock = threading.RLock()
         self.default_ttl = default_ttl
     
     def get(self, key: str) -> Optional[str]:
-        if key in self.cache:
-            content, expiry = self.cache[key]
-            if time.time() < expiry:
-                return content
-            else:
-                del self.cache[key]
+        with self.lock:
+            if key in self.cache:
+                content, expiry = self.cache[key]
+                if time.time() < expiry:
+                    return content
+                else:
+                    del self.cache[key]
         return None
     
     def set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
-        expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
-        self.cache[key] = (value, expiry)
+        with self.lock:
+            expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
+            self.cache[key] = (value, expiry)
     
     def clear(self) -> None:
-        self.cache.clear()
+        with self.lock:
+            self.cache.clear()
     
     def cleanup_expired(self) -> None:
-        current_time = time.time()
-        expired_keys = [key for key, (_, expiry) in self.cache.items() if current_time >= expiry]
-        for key in expired_keys:
-            del self.cache[key]
+        with self.lock:
+            current_time = time.time()
+            expired_keys = [key for key, (_, expiry) in self.cache.items() if current_time >= expiry]
+            for key in expired_keys:
+                del self.cache[key]
 
 _cache = SimpleCache(default_ttl=3600)
 
@@ -286,6 +318,13 @@ async def brave_search_api(query: str, count: int = 10, timeout: float = 30.0, l
 
     if not BRAVE_SEARCH_API_KEY:
         logger.warning("brave_search_api called but BRAVE_SEARCH_API_KEY is not set in .env")
+        webmcp_metrics["search_errors"] += 1
+        webmcp_metrics["search_count"] += 1
+        if fef_manager is not None:
+            fef_manager.metrics.record_request(
+                endpoint="tools/call", tool_name="brave_search_api",
+                success=False, duration_ms=0.0
+            )
         return (
             "BRAVE_SEARCH_API_KEY is not configured.\n\n"
             "To use brave_search_api, you need to:\n"
@@ -434,6 +473,13 @@ async def google_search_api(query: str, engine: str = "google", google_domain: s
 
     if not SERPAPI_API_KEY:
         logger.warning("google_search_api called but SERPAPI_API_KEY is not set in .env")
+        webmcp_metrics["search_errors"] += 1
+        webmcp_metrics["search_count"] += 1
+        if fef_manager is not None:
+            fef_manager.metrics.record_request(
+                endpoint="tools/call", tool_name="google_search_api",
+                success=False, duration_ms=0.0
+            )
         return (
             "SERPAPI_API_KEY is not configured.\n\n"
             "To use google_search_api, you need to:\n"
@@ -678,6 +724,10 @@ async def fetch_url(url: str, timeout: float = 30.0, max_length: int = 50000, st
     """
     if not url:
         return "Error: 'url' parameter is required"
+
+    if _is_internal_url(url):
+        webmcp_metrics["fetch_errors"] += 1
+        return "Error: Internal URLs are not allowed for security reasons"
 
     if timeout < 1 or timeout > 300:
         return "Error: 'timeout' must be between 1 and 300 seconds"
@@ -971,16 +1021,10 @@ def setup_extensions(registry=None) -> None:
 # Lifespan
 # ============================================================================
 
-fef_lifespan_manager = None
-fef_lifespan_registry = None
-fef_lifespan_http_server = None
-
 
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for startup/shutdown."""
-    global fef_lifespan_manager, fef_lifespan_registry, fef_lifespan_http_server
-    
     logger.info(f"{TOOL_NAME} FastMCP server starting on port {MCP_PORT}...")
     
     if not fef_setup_done:

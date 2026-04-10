@@ -118,6 +118,11 @@ mcp = FastMCP(
     streamable_http_path="/mcp",
 )
 
+fef_manager = None
+fef_registry = None
+fef_http_server = None
+fef_setup_done = False
+
 
 @mcp.tool()
 async def double(value: float) -> str:
@@ -257,11 +262,6 @@ async def get_secret() -> str:
 # ============================================================================
 # FEF V3 Extensions Setup
 # ============================================================================
-
-fef_manager = None
-fef_registry = None
-fef_http_server = None
-fef_setup_done = False
 
 
 def setup_extensions(registry=None) -> None:

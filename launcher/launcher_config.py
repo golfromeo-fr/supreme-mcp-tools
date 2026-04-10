@@ -173,9 +173,10 @@ class Config:
         if port_alloc.get("reservedPorts") is None:
             port_alloc["reservedPorts"] = ports_config.get("reserved", {})
         
-        # Set assignments from ports.json
-        if port_alloc.get("manualPorts") is None:
-            port_alloc["manualPorts"] = ports_config.get("assignments", {})
+        # Set assignments from ports.json (ports.json is authoritative, override defaults)
+        assignments = ports_config.get("assignments", {})
+        if assignments:
+            port_alloc["manualPorts"] = assignments
         
         self.config["portAllocation"] = port_alloc
     

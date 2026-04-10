@@ -288,6 +288,7 @@ def execute_query(sql_query):
     """Execute a SQL query and return results or error details."""
     global metrics
     start_time = time.time()
+    logger.info(f"[SQL] Executing query: {sql_query[:200]}{'...' if len(sql_query) > 200 else ''}")
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -488,11 +489,11 @@ async def execute_sql(sql: str) -> str:
         return "Error: sql statement is required"
 
     try:
+        logger.info(f"[SQL] Executing statement: {sql[:200]}{'...' if len(sql) > 200 else ''}")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(sql)
         conn.commit()
-        logger.info(f"SQL statement executed and committed: {sql}")
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         metrics["query_count"] += 1
         metrics["total_query_time_ms"] += elapsed_ms
@@ -930,16 +931,10 @@ def setup_extensions(registry=None) -> None:
 # Lifespan
 # ============================================================================
 
-fef_lifespan_manager = None
-fef_lifespan_registry = None
-fef_lifespan_http_server = None
-
 
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for startup/shutdown."""
-    global fef_lifespan_manager, fef_lifespan_registry, fef_lifespan_http_server
-
     logger.info(f"{TOOL_NAME} FastMCP server starting on port {MCP_PORT}...")
 
     if not fef_setup_done:

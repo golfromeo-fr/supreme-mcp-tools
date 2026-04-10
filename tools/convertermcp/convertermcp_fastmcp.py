@@ -12,7 +12,7 @@ import tempfile
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse, parse_qs
 import re
 from contextlib import asynccontextmanager
@@ -105,7 +105,7 @@ def is_under_allowed_roots(p: Path, allowed_roots: list[Path]) -> bool:
     return False
 
 
-async def download_docx_to_temp(url: str, max_size_mb: int = MAX_DOCX_SIZE_MB, headers: dict | None = None) -> Path:
+async def download_docx_to_temp(url: str, max_size_mb: int = MAX_DOCX_SIZE_MB, headers: Optional[Dict[str, str]] = None) -> Path:
     """Download DOCX from URL to a temporary file with size checks and optional auth headers."""
     import httpx
 
@@ -188,7 +188,7 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def convert_docx_to_text(source: str, output_path: str | None = None, headers: dict | None = None) -> str:
+async def convert_docx_to_text(source: str, output_path: Optional[str] = None, headers: Optional[Dict[str, str]] = None) -> str:
     """Converts a DOCX file (local path or URL) to plain text; writes to output_path if provided, otherwise returns text.
 
     Args:
@@ -196,7 +196,7 @@ async def convert_docx_to_text(source: str, output_path: str | None = None, head
         output_path: Optional local path to write the extracted text
         headers: Optional dict of HTTP headers for URL downloads (e.g., auth)
     """
-    temp_path: Path | None = None
+    temp_path: Optional[Path] = None
     start_time = time.perf_counter()
     success = False
 
