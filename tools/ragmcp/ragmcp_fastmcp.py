@@ -1405,15 +1405,11 @@ def setup_extensions(registry=None) -> None:
 # Lifespan
 # ============================================================================
 
-fef_lifespan_manager = None
-fef_lifespan_registry = None
-fef_lifespan_http_server = None
 
 
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for startup/shutdown."""
-    global fef_lifespan_manager, fef_lifespan_registry, fef_lifespan_http_server
 
     logger.info(f"{TOOL_NAME} FastMCP server starting on port {MCP_PORT}...")
 
