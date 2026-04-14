@@ -130,6 +130,13 @@ LOCAL_EMBEDDING_MODELS = {
         'dimensions': 768,
         'description': 'BGE Base - Balanced English embeddings',
         'device': 'cpu'
+    },
+    'gte-qwen': {
+        'model_name': 'Alibaba-NLP/gte-Qwen2-1.5B-instruct',
+        'dimensions': 1536,
+        'description': 'GTE Qwen2-1.5B - High quality with trust_remote_code',
+        'device': 'cpu',
+        'trust_remote_code': True
     }
 }
 
@@ -919,7 +926,13 @@ Options:
 Why this changed: To prevent accidental data loss, the indexer now requires explicit confirmation before deleting existing indexes."""
 
     # Build command - using incremental indexer
-    indexer_script = SCRIPT_DIR.parent.parent / "oraclemcp" / "indexer" / "incremental_indexer.py"
+    indexer_dir = os.getenv('RAGMCP_INDEXER_DIR', '')
+    if indexer_dir:
+        indexer_script = Path(indexer_dir) / "incremental_indexer.py"
+        indexer_cwd = Path(indexer_dir).parent
+    else:
+        indexer_script = SCRIPT_DIR / "indexer" / "incremental_indexer.py"
+        indexer_cwd = SCRIPT_DIR
     if not indexer_script.exists():
         return f"Error: Indexer script not found at {indexer_script}"
 
@@ -935,10 +948,14 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
         cmd.extend(["--mode", mode])
 
     if force:
-        cmd.append("--force-reindex")
+        cmd.append("--force")
 
     if directories:
         cmd.extend(["--dirs"] + directories)
+    else:
+        auto_dirs = [d.name for d in Path(workspace_root).iterdir() if d.is_dir() and not d.name.startswith('.')]
+        if auto_dirs:
+            cmd.extend(["--dirs"] + auto_dirs)
 
     # Create logs/ directory if it doesn't exist
     logs_dir = SCRIPT_DIR / "logs"
@@ -955,7 +972,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
             cmd,
             stdout=log,
             stderr=subprocess.STDOUT,
-            cwd=SCRIPT_DIR.parent.parent / "oraclemcp",
+            cwd=indexer_cwd,
             start_new_session=True
         )
 
