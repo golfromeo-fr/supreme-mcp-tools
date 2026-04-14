@@ -140,6 +140,14 @@ LOCAL_EMBEDDING_MODELS = {
     }
 }
 
+# Embedding model presets for simplified user experience
+EMBEDDING_MODEL_PRESETS = {
+    "auto": {"provider": "local", "model": "gte-qwen", "dimensions": 1536},
+    "fast": {"provider": "local", "model": "small", "dimensions": 384},
+    "balanced": {"provider": "local", "model": "e5-large", "dimensions": 1024},
+    "high-quality": {"provider": "azure", "model": "text-embedding-3-large", "dimensions": 3072},
+}
+
 # Global model cache
 _local_embedding_model = None
 _local_embedding_model_name = None
@@ -365,6 +373,61 @@ def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def validate_search_request(collection_name: str, query_vector: list, using_vector: str = None) -> dict:
+    """
+    Validate that query vector dimension matches collection vector config.
+
+    Returns:
+        dict with keys:
+            - valid: bool
+            - error: str (if not valid)
+            - warning: str (if valid but degraded)
+            - recommended_vector: str (if different vector recommended)
+    """
+    try:
+        info = qdrant_client.get_collection(collection_name)
+        vectors = info.config.params.vectors
+
+        if isinstance(vectors, dict):
+            available = {name: cfg.size for name, cfg in vectors.items() if hasattr(cfg, 'size')}
+        else:
+            available = {"default": vectors.size} if vectors else {}
+
+        query_dim = len(query_vector)
+
+        # Check if using_vector matches
+        if using_vector and using_vector in available:
+            if available[using_vector] != query_dim:
+                return {
+                    "valid": False,
+                    "error": f"Query dimension ({query_dim}) vs '{using_vector}' vector ({available[using_vector]}). "
+                             f"Use mode='dense' or 'sparse' to select compatible vector."
+                }
+            return {"valid": True}
+
+        # Find matching vector
+        for name, dim in available.items():
+            if dim == query_dim:
+                if using_vector and using_vector != name:
+                    return {
+                        "valid": True,
+                        "warning": f"Using '{name}' vector (matches {query_dim}d). "
+                                   f"Original '{using_vector}' had mismatched dimension.",
+                        "recommended_vector": name
+                    }
+                return {"valid": True}
+
+        # Dimension mismatch - provide helpful error
+        return {
+            "valid": False,
+            "error": f"Query dimension ({query_dim}) does not match collection vectors ({available}). "
+                     f"Collection was indexed with different embedding model than search query. "
+                     f"Options: 1) Reindex with matching model, 2) Use different collection."
+        }
+    except Exception as e:
+        return {"valid": True, "warning": f"Validation skipped: {e}"}
+
+
 def setup_fef_v3():
     """Set up FEF V3 extensions for ragmcp."""
     if not FEF_V3_AVAILABLE:
@@ -487,7 +550,12 @@ async def search_code(
     """
     Semantic search across indexed code (Pro*C, PL/SQL, Java, etc.) using natural language.
     Returns relevant code chunks with function names and file locations.
+
+    [DEPRECATED] Use 'search' tool with mode='dense' instead.
     """
+    logger.warning("search_code is deprecated. Use search(mode='dense') instead.")
+    return await search(query=query, limit=limit, collection_name=collection_name,
+                       mode="dense", file_type=file_type, function_name=function_name)
     logger.debug(f"Processing search_code tool: query={query}, limit={limit}")
 
     if not qdrant_client:
@@ -676,7 +744,12 @@ async def search_code_sparse(
     Lexical (BM25-style) code search using sparse vectors.
     Excellent for finding exact identifiers, table names, function names. Works offline without API costs.
     Use this for precise code lookups (e.g., 'STOMVT table', 'get_movement_type function').
+
+    [DEPRECATED] Use 'search' tool with mode='sparse' instead.
     """
+    logger.warning("search_code_sparse is deprecated. Use search(mode='sparse') instead.")
+    return await search(query=query, limit=limit, collection_name=collection_name,
+                        mode="sparse", file_type=file_type, function_name=function_name)
     logger.debug(f"Processing search_code_sparse tool: query={query}, limit={limit}")
 
     if not SPARSE_VECTORS_AVAILABLE:
@@ -777,6 +850,314 @@ async def search_code_sparse(
         return f"Error: {error_msg}"
 
 
+@with_metrics("search")
+@mcp.tool()
+async def search(
+    query: str,
+    limit: int = 5,
+    collection_name: str = "folder.to.index-database-code",
+    mode: str = "auto",  # auto | dense | sparse | hybrid
+    file_type: Optional[str] = None,
+    function_name: Optional[str] = None,
+    copilot_format: Optional[str] = None,  # "comment" | "sidebar"
+    language: str = "c",
+    max_lines: int = 50
+) -> str:
+    """
+    Unified code search with automatic detection of collection capabilities.
+
+    - mode='auto': Detect collection and use best available search method
+    - mode='dense': Semantic search using embeddings (requires matching dimension)
+    - mode='sparse': BM25 lexical search for exact identifiers
+    - mode='hybrid': Combined dense + sparse (requires hybrid collection)
+
+    copilot_format adds GitHub Copilot formatting:
+    - 'comment': Inline comment block
+    - 'sidebar': Sidebar context block
+    """
+    logger.debug(f"Processing unified search: query={query}, mode={mode}, copilot_format={copilot_format}")
+
+    if not qdrant_client:
+        return "Error: Qdrant client not initialized."
+
+    if not query:
+        raise ValueError("Missing argument: query")
+
+    # Detect collection capabilities
+    try:
+        info = qdrant_client.get_collection(collection_name)
+        vectors_config = info.config.params.vectors
+        has_sparse = bool(info.config.params.sparse_vectors)
+
+        if isinstance(vectors_config, dict):
+            has_dense = "dense" in vectors_config
+            has_sparse = has_sparse or "sparse" in vectors_config
+        else:
+            has_dense = vectors_config is not None
+    except Exception as e:
+        return f"Error: Collection '{collection_name}' not found: {e}"
+
+    # Auto-select mode based on collection
+    if mode == "auto":
+        if has_sparse and has_dense:
+            mode = "hybrid"
+        elif has_sparse:
+            mode = "sparse"
+        elif has_dense:
+            mode = "dense"
+        else:
+            return f"Error: Collection '{collection_name}' has no vectors configured."
+
+    # Handle copilot format - route to copilot handler if requested
+    if copilot_format:
+        return await _search_copilot(query, limit, collection_name, file_type, function_name,
+                                     copilot_format, language, max_lines)
+
+    # Route to appropriate search
+    if mode == "dense":
+        return await _search_dense(query, limit, collection_name, file_type, function_name)
+    elif mode == "sparse":
+        return await _search_sparse(query, limit, collection_name, file_type, function_name)
+    elif mode == "hybrid":
+        return await _search_hybrid(query, limit, collection_name, file_type, function_name)
+    else:
+        return f"Error: Unknown mode '{mode}'. Use: auto, dense, sparse, hybrid"
+
+
+async def _search_dense(query: str, limit: int, collection_name: str,
+                        file_type: Optional[str], function_name: Optional[str]) -> str:
+    """Internal: dense semantic search."""
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+    # Generate embedding
+    embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'azure')
+
+    if embedding_provider == 'azure':
+        import httpx
+        azure_api_url = os.getenv('AZURE_EMBEDDING_API_URL',
+                                  'https://put.your.API.gateway.ai/v1/embeddings')
+        azure_model = os.getenv('AZURE_EMBEDDING_MODEL', 'text-embedding-3-large')
+        api_key = os.getenv('AI_API_KEY', '')
+
+        if not api_key:
+            return "Error: AI_API_KEY not set. Cannot generate search embedding."
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                azure_api_url,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json={"input": [query], "model": azure_model}
+            )
+            response.raise_for_status()
+            data = response.json()
+            query_vector = data['data'][0]['embedding']
+    else:
+        if not LOCAL_EMBEDDINGS_AVAILABLE:
+            return "Error: Local embeddings module not available. Install sentence-transformers."
+
+        try:
+            model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['e5-large'])
+            query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
+            if query_embeddings is None or len(query_embeddings) == 0:
+                return "Error: Failed to generate local embedding for query."
+            query_vector = query_embeddings[0].tolist()
+        except Exception as e:
+            return f"Error generating local embedding: {str(e)}"
+
+    # Validate dimension matches collection
+    validation = validate_search_request(collection_name, query_vector)
+    if not validation.get('valid', True) and 'error' in validation:
+        return f"Error: {validation['error']}"
+    if validation.get('warning'):
+        logger.warning(validation['warning'])
+
+    # Build filter
+    conditions = []
+    if file_type:
+        conditions.append(FieldCondition(key="fileType", match=MatchValue(value=file_type)))
+    if function_name:
+        conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
+    search_filter = Filter(must=conditions) if conditions else None
+
+    # Perform search
+    try:
+        collection_info = qdrant_client.get_collection(collection_name)
+        vectors_config = collection_info.config.params.vectors
+
+        if isinstance(vectors_config, dict):
+            vector_names = list(vectors_config.keys())
+            vector_dim = len(query_vector)
+            vector_name = None
+
+            for vname in vector_names:
+                vconfig = vectors_config[vname]
+                if hasattr(vconfig, 'size') and vconfig.size == vector_dim:
+                    vector_name = vname
+                    break
+
+            if not vector_name:
+                vector_name = vector_names[0]
+
+            query_response = qdrant_client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                using=vector_name,
+                query_filter=search_filter,
+                limit=limit,
+                with_payload=True
+            )
+        else:
+            query_response = qdrant_client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=search_filter,
+                limit=limit,
+                with_payload=True
+            )
+    except Exception as e:
+        return f"Error in dense search: {str(e)}"
+
+    return _format_search_results(query_response.points)
+
+
+async def _search_sparse(query: str, limit: int, collection_name: str,
+                         file_type: Optional[str], function_name: Optional[str]) -> str:
+    """Internal: sparse BM25 lexical search."""
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+    if not SPARSE_VECTORS_AVAILABLE:
+        return "Error: Sparse vector search not available. Missing sparse_vector_gen.py module."
+
+    query_metadata = {'language': file_type if file_type else 'unknown'}
+    query_sparse_vec = generate_sparse_vector(query, query_metadata)
+
+    if not query_sparse_vec:
+        return "Error: Failed to generate sparse vector for query."
+
+    conditions = []
+    if file_type:
+        conditions.append(FieldCondition(key="fileType", match=MatchValue(value=file_type)))
+    if function_name:
+        conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
+    search_filter = Filter(must=conditions) if conditions else None
+
+    try:
+        query_response = qdrant_client.query_points(
+            collection_name=collection_name,
+            query=SparseVector(indices=list(query_sparse_vec.keys()), values=list(query_sparse_vec.values())),
+            using="sparse",
+            query_filter=search_filter,
+            limit=limit,
+            with_payload=True
+        )
+    except Exception as e:
+        return f"Error in sparse search: {str(e)}"
+
+    return _format_search_results(query_response.points)
+
+
+async def _search_hybrid(query: str, limit: int, collection_name: str,
+                         file_type: Optional[str], function_name: Optional[str]) -> str:
+    """Internal: combined dense + sparse search."""
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+    # Get both search results and combine
+    try:
+        dense_results = (await _search_dense(query, limit, collection_name, file_type, function_name))
+        sparse_results = (await _search_sparse(query, limit, collection_name, file_type, function_name))
+
+        # Return hybrid summary (both searches performed)
+        return f"Hybrid search results:\n\n=== Dense Search ===\n{dense_results}\n\n=== Sparse Search ===\n{sparse_results}"
+    except Exception as e:
+        return f"Error in hybrid search: {str(e)}"
+
+
+async def _search_copilot(query: str, limit: int, collection_name: str,
+                          file_type: Optional[str], function_name: Optional[str],
+                          copilot_format: str, language: str, max_lines: int) -> str:
+    """Internal: search with copilot formatting."""
+    if not COPILOT_INJECTOR_AVAILABLE:
+        return "Error: Copilot context injector not available. Missing copilot_context_injector.py module."
+
+    if not SPARSE_VECTORS_AVAILABLE:
+        return "Error: Sparse vector search required for copilot context. Missing sparse_vector_gen.py module."
+
+    try:
+        injector = get_injector(max_context_lines=max_lines)
+
+        # Extract keywords
+        keywords = injector.extract_keywords_from_context(query)
+        if not keywords:
+            return injector._format_no_context(language)
+
+        search_query = ' '.join(keywords[:5])
+
+        # Sparse search
+        query_metadata = {'language': 'unknown'}
+        query_sparse_vec = generate_sparse_vector(search_query, query_metadata)
+
+        if not query_sparse_vec:
+            return injector._format_no_context(language)
+
+        query_response = qdrant_client.query_points(
+            collection_name=collection_name,
+            query=SparseVector(indices=list(query_sparse_vec.keys()), values=list(query_sparse_vec.values())),
+            using="sparse",
+            limit=limit,
+            with_payload=True
+        )
+
+        chunks = [hit.payload for hit in query_response.points]
+
+        if not chunks:
+            return injector._format_no_context(language)
+
+        if copilot_format == "sidebar":
+            return injector.format_sidebar_context(chunks, language)
+        else:
+            return injector.format_context_comment(chunks, language)
+
+    except Exception as e:
+        return f"Error in copilot search: {str(e)}"
+
+
+def _format_search_results(search_results) -> str:
+    """Format search results consistently."""
+    if not search_results:
+        return "No results found."
+
+    formatted = []
+    formatted.append(f"Found {len(search_results)} relevant code chunks:\n")
+    formatted.append("=" * 80 + "\n")
+
+    for i, hit in enumerate(search_results, 1):
+        payload = hit.payload
+        score = hit.score
+
+        formatted.append(f"\n**Result {i}** (relevance: {score:.3f})\n")
+        formatted.append(f"File: {payload.get('filePath', 'Unknown')}\n")
+        formatted.append(f"Lines: {payload.get('startLine', '?')}-{payload.get('endLine', '?')}\n")
+        formatted.append(f"Type: {payload.get('fileType', 'Unknown')}\n")
+
+        if payload.get('functionName'):
+            formatted.append(f"Function: {payload['functionName']}\n")
+        if payload.get('chunkType'):
+            formatted.append(f"Chunk Type: {payload['chunkType']}\n")
+
+        formatted.append("\nCode:\n```\n")
+        code_chunk = payload.get('codeChunk', '')
+        lines = code_chunk.split('\n')
+        if len(lines) > 50:
+            formatted.append('\n'.join(lines[:50]))
+            formatted.append(f"\n... ({len(lines) - 50} more lines)")
+        else:
+            formatted.append(code_chunk)
+        formatted.append("\n```\n")
+        formatted.append("-" * 80 + "\n")
+
+    return ''.join(formatted)
+
+
 @with_metrics("get_copilot_context")
 @mcp.tool()
 async def get_copilot_context(
@@ -791,8 +1172,13 @@ async def get_copilot_context(
     Get formatted code context for GitHub Copilot injection.
     Retrieves relevant code using sparse vectors and formats it as inline comments or markdown.
     Perfect for making Copilot project-aware.
+
+    [DEPRECATED] Use 'search' tool with copilot_format='comment' or 'sidebar' instead.
     """
-    logger.debug(f"Processing get_copilot_context tool: current_context={current_context[:50]}...")
+    logger.warning("get_copilot_context is deprecated. Use search(copilot_format='comment' or 'sidebar') instead.")
+    copilot_format = "sidebar" if format == "sidebar" else "comment"
+    return await search(query=current_context, limit=limit, collection_name=collection_name,
+                        copilot_format=copilot_format, language=language, max_lines=max_lines)
 
     if not COPILOT_INJECTOR_AVAILABLE:
         error_msg = "Copilot context injector not available. Missing copilot_context_injector.py module."
@@ -879,6 +1265,153 @@ async def get_copilot_context(
         return f"Error: {error_msg}"
 
 
+@with_metrics("index_code")
+@mcp.tool()
+async def index_code(
+    workspace_root: str,
+    collection_name: str = "folder.to.index-database-code",
+    directories: Optional[List[str]] = None,
+    embedding_model: str = "auto",  # auto | fast | balanced | high-quality
+    force: bool = False
+) -> str:
+    """
+    Index code files into Qdrant for semantic search.
+
+    Simple interface: just specify workspace and collection name.
+
+    embedding_model presets:
+    - 'auto': GTE Qwen 2 (1536d) - best quality, local
+    - 'fast': BGE small (384d) - quick, English-only, local
+    - 'balanced': E5 large (1024d) - multilingual, local
+    - 'high-quality': text-embedding-3-large (3072d) - best, Azure API cost
+
+    For advanced options (mode, custom embedding provider), use start_indexing.
+    """
+    logger.debug(f"Processing index_code tool: workspace_root={workspace_root}, embedding_model={embedding_model}")
+
+    if not qdrant_client:
+        return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT environment variables."
+
+    # Resolve preset
+    preset = EMBEDDING_MODEL_PRESETS.get(embedding_model, EMBEDDING_MODEL_PRESETS["auto"])
+    logger.info(f"Using embedding preset '{embedding_model}': provider={preset['provider']}, model={preset['model']}, dims={preset['dimensions']}")
+
+    # Auto-create collection if it doesn't exist (with correct dimensions)
+    collection_exists = False
+    try:
+        qdrant_client.get_collection(collection_name)
+        collection_exists = True
+        logger.info(f"Collection '{collection_name}' already exists")
+    except Exception as e:
+        if "Not found" in str(e) or "doesn't exist" in str(e):
+            logger.info(f"Collection '{collection_name}' does not exist, will be auto-created by indexer")
+            collection_exists = False
+        else:
+            return f"Error: Error checking collection: {str(e)}"
+
+    # If force=True and collection exists, warn but don't delete automatically
+    if force and collection_exists:
+        return f"""Warning: Collection Already Exists
+
+Collection `{collection_name}` already exists. The `force` parameter is no longer used to delete existing collections for safety.
+
+Options:
+1. Continue indexing (recommended): Remove `force=true` and rerun. The indexer will skip already-indexed files.
+2. Clear and reindex: First use `clear_index(collection_name="{collection_name}", confirm=true)` to delete the collection, then start indexing again.
+
+Why this changed: To prevent accidental data loss, the indexer now requires explicit confirmation before deleting existing indexes."""
+
+    # Build command - using incremental indexer
+    indexer_dir = os.getenv('RAGMCP_INDEXER_DIR', '')
+    if indexer_dir:
+        indexer_script = Path(indexer_dir) / "incremental_indexer.py"
+        indexer_cwd = Path(indexer_dir).parent
+    else:
+        indexer_script = SCRIPT_DIR / "indexer" / "incremental_indexer.py"
+        indexer_cwd = SCRIPT_DIR
+    if not indexer_script.exists():
+        return f"Error: Indexer script not found at {indexer_script}"
+
+    cmd = [
+        "python3",
+        str(indexer_script),
+        workspace_root,
+        "--collection", collection_name
+    ]
+
+    if force:
+        cmd.append("--force")
+
+    if directories:
+        cmd.extend(["--dirs"] + directories)
+    else:
+        auto_dirs = [d.name for d in Path(workspace_root).iterdir() if d.is_dir() and not d.name.startswith('.')]
+        if auto_dirs:
+            cmd.extend(["--dirs"] + auto_dirs)
+
+    # Create logs/ directory if it doesn't exist
+    logs_dir = SCRIPT_DIR / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create log file path in logs/ subfolder
+    log_file = logs_dir / f"indexing_{collection_name}.log"
+
+    # Prepare environment with embedding configuration from preset
+    env = os.environ.copy()
+    env['EMBEDDING_PROVIDER'] = preset['provider']
+    if preset['provider'] == 'local':
+        env['LOCAL_EMBEDDING_MODEL'] = preset['model']
+
+    # Start process in background
+    logger.info(f"Starting indexing process: {' '.join(cmd)}")
+
+    with open(log_file, 'w') as log:
+        process = subprocess.Popen(
+            cmd,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            cwd=indexer_cwd,
+            env=env,
+            start_new_session=True
+        )
+
+    pid = process.pid
+
+    # Save PID to file in logs/ subfolder for later reference
+    pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
+    with open(pid_file, 'w') as f:
+        json.dump({
+            "pid": pid,
+            "workspace_root": workspace_root,
+            "collection_name": collection_name,
+            "log_file": str(log_file),
+            "started_at": time.time(),
+            "embedding_model": embedding_model,
+            "embedding_dimensions": preset['dimensions']
+        }, f)
+
+    result = f"""Indexing started successfully!
+
+Process Information:
+- PID: {pid}
+- Workspace: {workspace_root}
+- Collection: {collection_name}
+- Embedding model: {embedding_model} ({preset['dimensions']}d)
+- Force reindex: {force}
+- Log file: {log_file}
+
+Next Steps:
+1. Monitor progress: Use check_indexing_progress tool
+2. View live logs: tail -f {log_file}
+3. Check collection: Query Qdrant at qdrant:6333
+
+The indexing process is running in the background. Use check_indexing_progress to monitor status.
+"""
+
+    logger.info(f"Indexing started with PID {pid}")
+    return result
+
+
 @with_metrics("start_indexing")
 @mcp.tool()
 async def start_indexing(
@@ -894,8 +1427,13 @@ async def start_indexing(
     Start background indexing of code files into Qdrant.
     Returns process ID (PID) for monitoring. Indexes Pro*C, PL/SQL, Java, and other files with smart function-level chunking.
     Supports sparse (BM25, $0), dense (embeddings, API cost), or hybrid modes.
+
+    [DEPRECATED] Use 'index_code' tool with embedding_model preset instead.
     """
-    logger.debug(f"Processing start_indexing tool: workspace_root={workspace_root}")
+    logger.warning("start_indexing is deprecated. Use index_code with embedding_model preset instead.")
+    return await index_code(workspace_root=workspace_root, collection_name=collection_name,
+                            directories=directories, force=force,
+                            embedding_model=local_embedding_model)  # simplified mapping
 
     if not qdrant_client:
         return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT environment variables."
@@ -964,6 +1502,17 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
     # Create log file path in logs/ subfolder
     log_file = logs_dir / f"indexing_{collection_name}.log"
 
+    # Prepare environment with embedding configuration
+    env = os.environ.copy()
+    # embedding_provider param was previously silently ignored - now properly passed
+    if embedding_provider:
+        env['EMBEDDING_PROVIDER'] = embedding_provider
+    if local_embedding_model:
+        env['LOCAL_EMBEDDING_MODEL'] = local_embedding_model
+        # If local_embedding_model is set but provider not specified, default to local
+        if not embedding_provider:
+            env['EMBEDDING_PROVIDER'] = 'local'
+
     # Start process in background
     logger.info(f"Starting indexing process: {' '.join(cmd)}")
 
@@ -973,6 +1522,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
             stdout=log,
             stderr=subprocess.STDOUT,
             cwd=indexer_cwd,
+            env=env,
             start_new_session=True
         )
 
@@ -1153,13 +1703,24 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
             try:
                 collection_info = qdrant_client.get_collection(collection.name)
                 points_count = collection_info.points_count
-                vector_size = collection_info.config.params.vectors.size
-                distance = collection_info.config.params.vectors.distance
+
+                # Handle both single vector and hybrid named vectors (dict)
+                vectors_config = collection_info.config.params.vectors
+                if isinstance(vectors_config, dict):
+                    # Hybrid collection with named vectors like {"dense": VectorParams, "sparse": SparseVectorParams}
+                    vector_parts = []
+                    for name, params in vectors_config.items():
+                        if hasattr(params, 'size'):
+                            vector_parts.append(f"{name}={params.size}d ({params.distance})")
+                        else:
+                            vector_parts.append(f"{name}=sparse")
+                    vector_size_str = ", ".join(vector_parts)
+                else:
+                    vector_size_str = f"{vectors_config.size}d ({vectors_config.distance})"
 
                 result.append(f"**{collection.name}**\n")
                 result.append(f"  - Chunks indexed: {points_count:,}\n")
-                result.append(f"  - Vector dimensions: {vector_size}\n")
-                result.append(f"  - Distance metric: {distance}\n")
+                result.append(f"  - Vector dimensions: {vector_size_str}\n")
                 result.append("\n")
             except Exception as e:
                 result.append(f"**{collection.name}**\n")

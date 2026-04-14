@@ -804,6 +804,27 @@ def main():
                     )
                 )
             logger.info(f"   ✓ Collection '{args.collection}' created successfully")
+
+            # Store collection metadata for search-time validation
+            from qdrant_client.models import PointStruct
+            collection_meta = {
+                "embedding_provider": EMBEDDING_PROVIDER,
+                "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
+                "embedding_dimensions": EMBEDDING_DIMENSIONS,
+                "indexed_at": datetime.utcnow().isoformat(),
+                "indexer_version": "2.0"
+            }
+            logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
+
+            meta_point = PointStruct(
+                id="__collection_metadata__",
+                vector={},  # No vectors for metadata point
+                payload={**collection_meta, "_is_metadata": True}
+            )
+            try:
+                qdrant_client.upsert(collection_name=args.collection, points=[meta_point])
+            except Exception as meta_e:
+                logger.warning(f"   Could not store collection metadata: {meta_e}")
         else:
             logger.error(f"   ✗ Error checking collection: {e}")
             raise
