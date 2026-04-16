@@ -9,7 +9,7 @@ making it ideal for:
 - Cost-sensitive deployments
 - Survival when cloud API access is lost
 
-Models used: BAAI/bge-base-en or BAAI/bge-small-en
+Models used: BAAI/bge-m3 (default), BAAI/bge-base-en-v1.5 (fast testing)
 - Downloads automatically on first use
 - Cached locally for future use
 - CPU-optimized (no GPU required)
@@ -28,13 +28,11 @@ _model_cache: dict[str, SentenceTransformer] = {}
 
 # Recommended models (ranked by quality vs speed tradeoff)
 MODELS = {
+    "bge-m3": "BAAI/bge-m3",
     "base": "BAAI/bge-base-en",
-    "small": "BAAI/bge-small-en",
-    "e5-large": "intfloat/multilingual-e5-large",
-    "gte-qwen": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
 }
 
-DEFAULT_MODEL = "gte-qwen"
+DEFAULT_MODEL = "bge-m3"
 
 
 def get_local_model(
@@ -71,7 +69,7 @@ def get_local_model(
     logger.info("First-time download may take a few minutes...")
 
     try:
-        trust_code = resolved_name == "Alibaba-NLP/gte-Qwen2-1.5B-instruct"
+        trust_code = False
         
         try:
             model = SentenceTransformer(
@@ -216,17 +214,19 @@ def get_model_info(model_name: str | None = None) -> dict[str, Any]:
         "cached": False
     }
 
-    if model_name == "base":
+    if model_name == "bge-m3":
+        info.update({
+            "dimensions": 1024,
+            "size_mb": 1200,
+            "speed": "medium",
+            "quality": "excellent",
+            "multilingual": True,
+            "hybrid": True
+        })
+    elif model_name == "base":
         info.update({
             "dimensions": 768,
             "size_mb": 300,
-            "speed": "medium",
-            "quality": "high"
-        })
-    elif model_name == "small":
-        info.update({
-            "dimensions": 384,
-            "size_mb": 110,
             "speed": "fast",
             "quality": "good"
         })

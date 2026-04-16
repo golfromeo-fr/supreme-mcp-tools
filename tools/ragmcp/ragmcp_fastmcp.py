@@ -79,7 +79,7 @@ if root_env.exists():
 
 # Read embedding configuration
 EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'azure').lower()
-LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'e5-large')
+LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'bge-m3')
 
 # ============================================================================
 # Port Configuration (from ports.json only)
@@ -107,44 +107,24 @@ except Exception as e:
 # ============================================================================
 
 LOCAL_EMBEDDING_MODELS = {
-    'sbert-large': {
-        'model_name': 'stsb-bert-large',
+    'bge-m3': {
+        'model_name': 'BAAI/bge-m3',
         'dimensions': 1024,
-        'description': 'SBERT Large - English semantic similarity',
-        'device': 'cpu'
-    },
-    'e5-large': {
-        'model_name': 'intfloat/multilingual-e5-large',
-        'dimensions': 1024,
-        'description': 'Multilingual E5 Large - Multilingual semantic similarity',
-        'device': 'cpu'
-    },
-    'small': {
-        'model_name': 'BAAI/bge-small-en-v1.5',
-        'dimensions': 384,
-        'description': 'BGE Small - Fast English embeddings',
+        'description': 'BGE-M3 - 1024d multilingual with dense+sparse hybrid',
         'device': 'cpu'
     },
     'base': {
         'model_name': 'BAAI/bge-base-en-v1.5',
         'dimensions': 768,
-        'description': 'BGE Base - Balanced English embeddings',
+        'description': 'BGE Base - Fast English embeddings for quick testing',
         'device': 'cpu'
-    },
-    'gte-qwen': {
-        'model_name': 'Alibaba-NLP/gte-Qwen2-1.5B-instruct',
-        'dimensions': 1536,
-        'description': 'GTE Qwen2-1.5B - High quality with trust_remote_code',
-        'device': 'cpu',
-        'trust_remote_code': True
     }
 }
 
 # Embedding model presets for simplified user experience
 EMBEDDING_MODEL_PRESETS = {
-    "auto": {"provider": "local", "model": "gte-qwen", "dimensions": 1536},
-    "fast": {"provider": "local", "model": "small", "dimensions": 384},
-    "balanced": {"provider": "local", "model": "e5-large", "dimensions": 1024},
+    "auto": {"provider": "local", "model": "bge-m3", "dimensions": 1024},
+    "fast": {"provider": "local", "model": "base", "dimensions": 768},
     "high-quality": {"provider": "azure", "model": "text-embedding-3-large", "dimensions": 3072},
 }
 
@@ -158,7 +138,7 @@ def get_local_embedding_model(model_name: str = None):
     Get or create a local embedding model instance.
 
     Args:
-        model_name: Model identifier (sbert-large, e5-large, small, base)
+        model_name: Model identifier (bge-m3, base)
                   Defaults to LOCAL_EMBEDDING_MODEL env var
 
     Returns:
@@ -178,8 +158,8 @@ def get_local_embedding_model(model_name: str = None):
 
     model_config = LOCAL_EMBEDDING_MODELS.get(model_name)
     if not model_config:
-        logger.warning(f"Unknown local embedding model: {model_name}, falling back to e5-large")
-        model_config = LOCAL_EMBEDDING_MODELS['e5-large']
+        logger.warning(f"Unknown local embedding model: {model_name}, falling back to bge-m3")
+        model_config = LOCAL_EMBEDDING_MODELS['bge-m3']
 
     try:
         logger.info(f"Loading local embedding model: {model_config['model_name']}")
@@ -198,7 +178,7 @@ def generate_local_embeddings(texts: list, model_name: str = None):
 
     Args:
         texts: List of text strings to embed
-        model_name: Model identifier (sbert-large, e5-large, small, base)
+        model_name: Model identifier (bge-m3, base)
 
     Returns:
         numpy array of embeddings or None if failed
@@ -700,7 +680,7 @@ def setup_fef_v3():
                     "properties": {
                         "workspace_root": {"type": "string", "description": "Path to workspace to index"},
                         "collection_name": {"type": "string", "description": "Target collection name"},
-                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "balanced", "high-quality"], "description": "Embedding model preset"}
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality"], "description": "Embedding model preset"}
                     },
                     "required": ["workspace_root"]
                 },
@@ -821,7 +801,7 @@ async def search_code(
                 return "Error: Local embeddings module not available. Install sentence-transformers."
 
             try:
-                model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['e5-large'])
+                model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
                 logger.info(f"Using local embeddings for search query (model: {LOCAL_EMBEDDING_MODEL} - {model_info['description']})")
                 query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
 
@@ -1167,7 +1147,7 @@ async def _search_dense(query: str, limit: int, collection_name: str,
             return "Error: Local embeddings module not available. Install sentence-transformers."
 
         try:
-            model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['e5-large'])
+            model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
             query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
             if query_embeddings is None or len(query_embeddings) == 0:
                 return "Error: Failed to generate local embedding for query."
@@ -1481,7 +1461,7 @@ async def index_code(
     workspace_root: str,
     collection_name: str = "folder.to.index-database-code",
     directories: list[str] | None = None,
-    embedding_model: str = "auto",  # auto | fast | balanced | high-quality
+    embedding_model: str = "auto",  # auto | fast | high-quality
     force: bool = False,
     log_level: str = "info"  # debug | info | warning | error
 ) -> str:
@@ -1491,9 +1471,8 @@ async def index_code(
     Simple interface: just specify workspace and collection name.
 
     embedding_model presets:
-    - 'auto': GTE Qwen 2 (1536d) - best quality, local
-    - 'fast': BGE small (384d) - quick, English-only, local
-    - 'balanced': E5 large (1024d) - multilingual, local
+    - 'auto': BGE-M3 (1024d) - best local quality, multilingual, hybrid
+    - 'fast': BGE Base (768d) - quick testing, local
     - 'high-quality': text-embedding-3-large (3072d) - best, Azure API cost
 
     For advanced options (mode, custom embedding provider), use start_indexing.
@@ -1853,6 +1832,109 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
         return f"Error: {error_msg}"
 
 
+
+@with_metrics("stop_indexing")
+@mcp.tool()
+async def stop_indexing(
+    force: bool = False
+) -> str:
+    """Stop the currently running background indexing process.
+    
+    Gracefully terminates the indexer by sending SIGTERM. If the process
+    does not stop within 5 seconds, sends SIGKILL (force kill).
+    Also kills any orphaned indexer child processes.
+    Use force=True to skip the graceful SIGTERM and kill immediately.
+    """
+    import signal
+    
+    try:
+        # Find all running indexer processes (not just the one in PID file)
+        stopped_pids = []
+        errors = []
+        
+        # 1. Try to stop the tracked process from PID file
+        pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
+        tracked_pid = None
+        collection_name = "unknown"
+        workspace_root = "unknown"
+        
+        if pid_file.exists():
+            with Path(pid_file).open('r') as f:
+                pid_info = json.load(f)
+            tracked_pid = pid_info.get("pid")
+            collection_name = pid_info.get("collection_name", "unknown")
+            workspace_root = pid_info.get("workspace_root", "unknown")
+        
+        # 2. Find ALL indexer processes (handles orphans too)
+        indexer_pids = []
+        for proc in psutil.process_iter(['pid', 'cmdline', 'name']):
+            try:
+                cmdline = proc.info.get('cmdline') or []
+                cmdline_str = ' '.join(cmdline)
+                if 'incremental_indexer' in cmdline_str:
+                    indexer_pids.append(proc.info['pid'])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        # If no processes found via psutil, try tracked PID
+        if not indexer_pids and tracked_pid:
+            try:
+                proc = psutil.Process(tracked_pid)
+                if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
+                    indexer_pids.append(tracked_pid)
+            except psutil.NoSuchProcess:
+                pass
+        
+        if not indexer_pids:
+            # Clean up stale PID file
+            if pid_file.exists():
+                pid_file.unlink(missing_ok=True)
+            return "No running indexer processes found. Nothing to stop."
+        
+        # 3. Kill all found indexer processes
+        for pid in indexer_pids:
+            try:
+                proc = psutil.Process(pid)
+                
+                if force:
+                    proc.kill()
+                    stopped_pids.append(f"{pid} (force killed)")
+                else:
+                    # Graceful: SIGTERM first
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                        stopped_pids.append(f"{pid} (stopped gracefully)")
+                    except psutil.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=3)
+                        stopped_pids.append(f"{pid} (force killed after timeout)")
+            except psutil.NoSuchProcess:
+                stopped_pids.append(f"{pid} (already gone)")
+            except Exception as e:
+                errors.append(f"{pid}: {str(e)}")
+        
+        # Clean up PID file
+        if pid_file.exists():
+            pid_file.unlink(missing_ok=True)
+        
+        result_parts = [
+            f"Stopped {len(stopped_pids)} indexer process(es):",
+            "\n".join(f"  - PID {p}" for p in stopped_pids),
+        ]
+        if tracked_pid:
+            result_parts.append(f"Collection: {collection_name}, Workspace: {workspace_root}")
+        if errors:
+            result_parts.append(f"Errors: {' | '.join(errors)}")
+        
+        return "\n".join(result_parts)
+            
+    except Exception as e:
+        error_msg = f"Error stopping indexing process: {str(e)}"
+        logger.error(error_msg)
+        return f"Error: {error_msg}"
+
+
 @with_metrics("clear_index")
 @mcp.tool()
 async def clear_index(
@@ -2100,7 +2182,7 @@ def setup_extensions(registry=None) -> None:
                     "properties": {
                         "workspace_root": {"type": "string", "description": "Path to workspace to index"},
                         "collection_name": {"type": "string", "description": "Target collection name"},
-                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "balanced", "high-quality"], "description": "Embedding model preset"}
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality"], "description": "Embedding model preset"}
                     },
                     "required": ["workspace_root"]
                 },

@@ -62,7 +62,7 @@ QDRANT_PORT = int(os.getenv('QDRANT_PORT', '6333'))
 
 # Embedding provider configuration
 EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'local').lower()  # 'azure' or 'local'
-LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'gte-qwen')
+LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'bge-m3')
 
 # Azure OpenAI configuration (only used when EMBEDDING_PROVIDER=azure)
 AZURE_EMBEDDING_API_URL = os.getenv('AZURE_EMBEDDING_API_URL',
@@ -73,12 +73,8 @@ AZURE_API_KEY = os.getenv('AI_API_KEY', '')
 
 # Determine embedding dimensions based on provider
 if EMBEDDING_PROVIDER == 'local':
-    if LOCAL_EMBEDDING_MODEL == 'small':
-        EMBEDDING_DIMENSIONS = 384
-    elif LOCAL_EMBEDDING_MODEL == 'e5-large':
+    if LOCAL_EMBEDDING_MODEL == 'bge-m3':
         EMBEDDING_DIMENSIONS = 1024
-    elif LOCAL_EMBEDDING_MODEL == 'gte-qwen':
-        EMBEDDING_DIMENSIONS = 1536
     else:
         EMBEDDING_DIMENSIONS = 768
     logger.info(f"Using local embeddings: {LOCAL_EMBEDDING_MODEL} model ({EMBEDDING_DIMENSIONS} dims)")

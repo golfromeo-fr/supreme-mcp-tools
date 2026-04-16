@@ -87,35 +87,23 @@ if root_env.exists():
 
 # Read embedding configuration
 EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'azure').lower()
-LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'e5-large')  # 'sbert-large', 'e5-large', 'small', 'base'
+LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'bge-m3')  # 'bge-m3', 'base'
 
 # ============================================================================
 # Local Embedding Model Definitions
 # ============================================================================
 
 LOCAL_EMBEDDING_MODELS = {
-    'sbert-large': {
-        'model_name': 'stsb-bert-large',
+    'bge-m3': {
+        'model_name': 'BAAI/bge-m3',
         'dimensions': 1024,
-        'description': 'SBERT Large - English semantic similarity',
-        'device': 'cpu'
-    },
-    'e5-large': {
-        'model_name': 'intfloat/multilingual-e5-large',
-        'dimensions': 1024,
-        'description': 'Multilingual E5 Large - Multilingual semantic similarity',
-        'device': 'cpu'
-    },
-    'small': {
-        'model_name': 'BAAI/bge-small-en-v1.5',
-        'dimensions': 384,
-        'description': 'BGE Small - Fast English embeddings',
+        'description': 'BGE-M3 - 1024d multilingual with dense+sparse hybrid',
         'device': 'cpu'
     },
     'base': {
         'model_name': 'BAAI/bge-base-en-v1.5',
         'dimensions': 768,
-        'description': 'BGE Base - Balanced English embeddings',
+        'description': 'BGE Base - Fast English embeddings for quick testing',
         'device': 'cpu'
     }
 }
@@ -130,7 +118,7 @@ def get_local_embedding_model(model_name: str = None):
     Get or create a local embedding model instance.
     
     Args:
-        model_name: Model identifier (sbert-large, e5-large, small, base)
+        model_name: Model identifier (bge-m3, base)
                   Defaults to LOCAL_EMBEDDING_MODEL env var
     
     Returns:
@@ -153,8 +141,8 @@ def get_local_embedding_model(model_name: str = None):
     # Get model configuration
     model_config = LOCAL_EMBEDDING_MODELS.get(model_name)
     if not model_config:
-        logger.warning(f"Unknown local embedding model: {model_name}, falling back to e5-large")
-        model_config = LOCAL_EMBEDDING_MODELS['e5-large']
+        logger.warning(f"Unknown local embedding model: {model_name}, falling back to bge-m3")
+        model_config = LOCAL_EMBEDDING_MODELS['bge-m3']
     
     # Load model
     try:
@@ -174,7 +162,7 @@ def generate_local_embeddings(texts: list, model_name: str = None):
     
     Args:
         texts: List of text strings to embed
-        model_name: Model identifier (sbert-large, e5-large, small, base)
+        model_name: Model identifier (bge-m3, base)
     
     Returns:
         numpy array of embeddings or None if failed
@@ -483,7 +471,7 @@ async def handle_search_code_tool(arguments: dict) -> list[types.TextContent]:
                     text="Error: Local embeddings module not available. Install sentence-transformers.")]
 
             try:
-                model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['e5-large'])
+                model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
                 logger.info(f"Using local embeddings for search query (model: {LOCAL_EMBEDDING_MODEL} - {model_info['description']})")
                 query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
 
