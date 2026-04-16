@@ -6,10 +6,10 @@ Provides token bucket rate limiting for API endpoints.
 
 import time
 import logging
-from typing import Dict, Optional
 from collections import defaultdict
 from functools import wraps
 
+from collections.abc import Callable
 from fastapi import HTTPException, Request
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ class RateLimiter:
     def __init__(
         self,
         requests_per_minute: int = 60,
-        burst_size: Optional[int] = None
+        burst_size: int | None = None
     ):
         """
         Initialize the rate limiter.
@@ -39,7 +39,7 @@ class RateLimiter:
         self.burst_size = burst_size or requests_per_minute
         self.refill_rate = requests_per_minute / 60.0  # tokens per second
         
-        self.buckets: Dict[str, Dict] = defaultdict(lambda: {
+        self.buckets: dict[str, dict] = defaultdict(lambda: {
             "tokens": self.burst_size,
             "last_update": time.time()
         })
@@ -142,7 +142,7 @@ class AsyncRateLimiter:
     def __init__(
         self,
         requests_per_minute: int = 60,
-        burst_size: Optional[int] = None
+        burst_size: int | None = None
     ):
         """
         Initialize the async rate limiter.
@@ -155,7 +155,7 @@ class AsyncRateLimiter:
         self.burst_size = burst_size or requests_per_minute
         self.refill_rate = requests_per_minute / 60.0
         
-        self.buckets: Dict[str, Dict] = {}
+        self.buckets: dict[str, dict] = {}
         self._lock = None
     
     async def _get_lock(self):
@@ -204,12 +204,12 @@ class AsyncRateLimiter:
 
 
 # Global rate limiter instance
-_rate_limiter: Optional[RateLimiter] = None
+_rate_limiter: RateLimiter | None = None
 
 
 def get_rate_limiter(
     requests_per_minute: int = 60,
-    burst_size: Optional[int] = None
+    burst_size: int | None = None
 ) -> RateLimiter:
     """Get or create the global rate limiter."""
     global _rate_limiter
@@ -223,7 +223,7 @@ def get_rate_limiter(
 
 def rate_limit(
     requests_per_minute: int = 60,
-    key_func: Optional[callable] = None
+    key_func: Callable | None = None
 ):
     """
     Decorator for rate limiting FastAPI endpoints.

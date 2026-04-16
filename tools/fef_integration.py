@@ -9,17 +9,16 @@ Environment Variables:
     MCP_MGMT_PORT: Port for the management server (set by launcher)
 """
 
-import asyncio
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 
-def get_management_port() -> Optional[int]:
+def get_management_port() -> int | None:
     """
     Get the management port from environment variable.
     
@@ -45,13 +44,13 @@ class ToolMetrics:
     cache_hits: int = 0
     cache_misses: int = 0
     start_time: float = field(default_factory=time.time)
-    _by_endpoint: Dict[str, int] = field(default_factory=dict)
-    _by_tool: Dict[str, int] = field(default_factory=dict)
+    _by_endpoint: dict[str, int] = field(default_factory=dict)
+    _by_tool: dict[str, int] = field(default_factory=dict)
     
     def record_request(
         self,
         endpoint: str,
-        tool_name: Optional[str] = None,
+        tool_name: str | None = None,
         success: bool = True,
         duration_ms: float = 0.0
     ):
@@ -75,7 +74,7 @@ class ToolMetrics:
         """Record a cache miss."""
         self.cache_misses += 1
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert metrics to dictionary."""
         uptime = time.time() - self.start_time
         avg_duration = (
@@ -131,13 +130,13 @@ class ToolExtensionManager:
         """
         self.tool_name = tool_name
         self.metrics = ToolMetrics()
-        self._custom_data: Dict[str, Any] = {}
+        self._custom_data: dict[str, Any] = {}
     
-    def get_request_stats(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def get_request_stats(self, params: dict[str, Any]) -> dict[str, Any]:
         """Data source: Get request statistics."""
         return self.metrics.to_dict()
 
-    def clear_cache(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def clear_cache(self, params: dict[str, Any]) -> dict[str, Any]:
         """Action: Clear cache."""
         cache_type = params.get("cache_type", "all")
         cleared = self._custom_data.get("cache_size", 0)
@@ -151,7 +150,7 @@ class ToolExtensionManager:
             "cache_type": cache_type
         }
     
-    def reset_counters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def reset_counters(self, params: dict[str, Any]) -> dict[str, Any]:
         """Action: Reset all counters."""
         self.metrics.reset()
         logger.info(f"[{self.tool_name}] Counters reset")
@@ -161,7 +160,7 @@ class ToolExtensionManager:
             "message": "All counters have been reset"
         }
     
-    def get_tool_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def get_tool_info(self, params: dict[str, Any]) -> dict[str, Any]:
         """Data source: Get tool information."""
         return {
             "name": self.tool_name,
@@ -289,8 +288,8 @@ def register_common_extensions(
 
 def setup_tool_extensions(
     tool_name: str,
-    mgmt_port: Optional[int] = None,
-    custom_extensions: Optional[List] = None
+    mgmt_port: int | None = None,
+    custom_extensions: list | None = None
 ) -> tuple:
     """
     Set up FEF V3 extensions for a tool.

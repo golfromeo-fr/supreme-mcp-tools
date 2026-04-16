@@ -6,10 +6,11 @@ Helper functions and utilities for testing the Flexible Extensibility Framework 
 """
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from dataclasses import dataclass, field
 from enum import Enum
 import requests
+import pathlib
 
 
 class TestStatus(Enum):
@@ -27,9 +28,9 @@ class TestResult:
     status: TestStatus
     duration_ms: float
     message: str = ""
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "name": self.name,
@@ -45,10 +46,10 @@ class ExtensionTestResult:
     """Result of testing an extension."""
     extension_name: str
     availability: TestResult
-    execution: Optional[TestResult] = None
-    validation: Optional[TestResult] = None
+    execution: TestResult | None = None
+    validation: TestResult | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         result = {
             "extension_name": self.extension_name,
@@ -76,7 +77,7 @@ class HTTPClient:
         self.timeout = timeout
         self.session = requests.Session()
     
-    def get(self, endpoint: str, params: Dict[str, Any] = None) -> requests.Response:
+    def get(self, endpoint: str, params: dict[str, Any] = None) -> requests.Response:
         """
         Make a GET request.
         
@@ -93,8 +94,8 @@ class HTTPClient:
     def post(
         self,
         endpoint: str,
-        data: Dict[str, Any] = None,
-        headers: Dict[str, str] = None
+        data: dict[str, Any] = None,
+        headers: dict[str, str] = None
     ) -> requests.Response:
         """
         Make a POST request.
@@ -115,8 +116,8 @@ class HTTPClient:
     def put(
         self,
         endpoint: str,
-        data: Dict[str, Any] = None,
-        headers: Dict[str, str] = None
+        data: dict[str, Any] = None,
+        headers: dict[str, str] = None
     ) -> requests.Response:
         """
         Make a PUT request.
@@ -217,7 +218,7 @@ class ExtensionTester:
     def test_execution(
         self,
         extension_name: str,
-        params: Dict[str, Any] = None
+        params: dict[str, Any] = None
     ) -> TestResult:
         """
         Test executing an extension.
@@ -282,8 +283,8 @@ class ExtensionTester:
     def test_validation(
         self,
         extension_name: str,
-        params: Dict[str, Any],
-        expected_fields: List[str]
+        params: dict[str, Any],
+        expected_fields: list[str]
     ) -> TestResult:
         """
         Test if extension response contains expected fields.
@@ -364,8 +365,8 @@ class ExtensionTester:
     def test_extension(
         self,
         extension_name: str,
-        params: Dict[str, Any] = None,
-        expected_fields: List[str] = None
+        params: dict[str, Any] = None,
+        expected_fields: list[str] = None
     ) -> ExtensionTestResult:
         """
         Run all tests for an extension.
@@ -423,10 +424,10 @@ class PerformanceTester:
         self,
         endpoint: str,
         method: str = "GET",
-        params: Dict[str, Any] = None,
-        data: Dict[str, Any] = None,
+        params: dict[str, Any] = None,
+        data: dict[str, Any] = None,
         iterations: int = 10
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Test average response time for an endpoint.
         
@@ -471,10 +472,10 @@ class PerformanceTester:
         self,
         endpoint: str,
         method: str = "GET",
-        params: Dict[str, Any] = None,
-        data: Dict[str, Any] = None,
+        params: dict[str, Any] = None,
+        data: dict[str, Any] = None,
         concurrent: int = 10
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Test concurrent requests to an endpoint.
         
@@ -530,7 +531,7 @@ class ConfigLoader:
     """Loader for test configuration files."""
     
     @staticmethod
-    def load_config(config_path: str) -> Dict[str, Any]:
+    def load_config(config_path: str) -> dict[str, Any]:
         """
         Load test configuration from JSON file.
         
@@ -541,7 +542,7 @@ class ConfigLoader:
             Configuration dictionary
         """
         try:
-            with open(config_path, 'r') as f:
+            with pathlib.Path(config_path).open('r') as f:
                 return json.load(f)
         except FileNotFoundError:
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -549,7 +550,7 @@ class ConfigLoader:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
     
     @staticmethod
-    def get_tool_config(config: Dict[str, Any], tool_name: str) -> Optional[Dict[str, Any]]:
+    def get_tool_config(config: dict[str, Any], tool_name: str) -> dict[str, Any] | None:
         """
         Get configuration for a specific tool.
         
@@ -563,7 +564,7 @@ class ConfigLoader:
         return config.get("tools", {}).get(tool_name)
     
     @staticmethod
-    def get_enabled_tools(config: Dict[str, Any]) -> List[str]:
+    def get_enabled_tools(config: dict[str, Any]) -> list[str]:
         """
         Get list of enabled tools from configuration.
         
@@ -582,7 +583,7 @@ class ReportGenerator:
     """Generator for test reports."""
     
     @staticmethod
-    def generate_summary(results: List[ExtensionTestResult]) -> Dict[str, Any]:
+    def generate_summary(results: list[ExtensionTestResult]) -> dict[str, Any]:
         """
         Generate summary from test results.
         
@@ -609,7 +610,7 @@ class ReportGenerator:
         }
     
     @staticmethod
-    def save_results(results: List[Dict[str, Any]], output_path: str):
+    def save_results(results: list[dict[str, Any]], output_path: str):
         """
         Save test results to JSON file.
         
@@ -617,7 +618,7 @@ class ReportGenerator:
             results: List of test result dictionaries
             output_path: Path to output file
         """
-        with open(output_path, 'w') as f:
+        with pathlib.Path(output_path).open('w') as f:
             json.dump(results, f, indent=2)
 
 

@@ -15,7 +15,6 @@ Usage:
     # Inject context above cursor in VSCode
 """
 
-from typing import List, Dict, Optional
 import logging
 import re
 
@@ -46,8 +45,8 @@ class CopilotContextInjector:
 
     def format_context_comment(
         self,
-        chunks: List[Dict],
-        max_lines: Optional[int] = None,
+        chunks: list[dict],
+        max_lines: int | None = None,
         language: str = "c"
     ) -> str:
         """
@@ -77,7 +76,7 @@ class CopilotContextInjector:
             # Default: C-style (works for C, C++, Java, JavaScript, TypeScript, Pro*C)
             return self._format_c_style(chunks, max_lines)
 
-    def _format_c_style(self, chunks: List[Dict], max_lines: int) -> str:
+    def _format_c_style(self, chunks: list[dict], max_lines: int) -> str:
         """Format as C-style /* */ block comment."""
         lines = []
         lines.append("/*")
@@ -134,7 +133,7 @@ class CopilotContextInjector:
         lines.append(" */")
         return '\n'.join(lines)
 
-    def _format_python_style(self, chunks: List[Dict], max_lines: int) -> str:
+    def _format_python_style(self, chunks: list[dict], max_lines: int) -> str:
         """Format as Python # comment style."""
         lines = []
         lines.append("# === CONTEXT: Related Code (Auto-retrieved for Copilot) ===")
@@ -181,7 +180,7 @@ class CopilotContextInjector:
 
         return '\n'.join(lines)
 
-    def _format_sql_style(self, chunks: List[Dict], max_lines: int) -> str:
+    def _format_sql_style(self, chunks: list[dict], max_lines: int) -> str:
         """Format as SQL -- comment style."""
         lines = []
         lines.append("-- === CONTEXT: Related Code (Auto-retrieved for Copilot) ===")
@@ -234,7 +233,7 @@ class CopilotContextInjector:
         else:
             return "/* No relevant context found */"
 
-    def format_sidebar_context(self, chunks: List[Dict]) -> str:
+    def format_sidebar_context(self, chunks: list[dict]) -> str:
         """
         Format for VSCode sidebar panel (Markdown format).
 
@@ -303,7 +302,7 @@ class CopilotContextInjector:
         }
         return type_map.get(file_type.lower(), '')
 
-    def extract_keywords_from_context(self, current_code: str) -> List[str]:
+    def extract_keywords_from_context(self, current_code: str) -> list[str]:
         """
         Extract relevant keywords from current cursor context.
 

@@ -1,0 +1,153 @@
+"""
+RAG MCP Collections Panel.
+
+Dedicated panel for ragmcp showing indexed collections with stats.
+Shows at the top of the ragmcp tool detail view.
+"""
+
+from nicegui import ui
+from typing import Any
+from collections.abc import Callable
+
+
+def RagCollectionsPanel(
+    collections_data: dict[str, Any],
+    indexing_progress: dict[str, Any] = None,
+    on_refresh: Callable[[], None] | None = None
+) -> None:
+    """
+    Render ragmcp collections panel at the top of tool detail view.
+
+    Args:
+        collections_data: Dictionary with collection names as keys and stats as values.
+                          Expected format: {'fastapi-code': '124 chunks @ 1536d', ...}
+        indexing_progress: Optional indexing progress data.
+        on_refresh: Callback when refresh is clicked.
+    """
+    with ui.card().classes('w-full mb-4'):
+        ui.label('Indexed Collections').classes('text-h6 mb-3')
+
+        if not collections_data:
+            ui.label('No collections indexed yet').classes('text-grey')
+            return
+
+        # Filter out 'total' from collections display
+        collections = {k: v for k, v in collections_data.items() if k != 'total'}
+        total = collections_data.get('total', len(collections))
+
+        # Show indexing progress if available
+        if indexing_progress:
+            _render_indexing_progress(indexing_progress)
+
+        # Show collections count
+        with ui.row().classes('items-center gap-2 mb-3'):
+            ui.icon('folder', size='sm').classes('text-primary')
+            ui.label(f'{total} collection(s) indexed').classes('text-sm')
+
+        if not collections:
+            ui.label('No collections indexed yet').classes('text-grey')
+            return
+
+        # Render as a table with Collection | Stats columns
+        rows = [{'collection': k, 'stats': v} for k, v in collections.items()]
+        ui.table(
+            columns=[
+                {'name': 'collection', 'label': 'Collection', 'field': 'collection'},
+                {'name': 'stats', 'label': 'Stats', 'field': 'stats'}
+            ],
+            rows=rows,
+            row_key='collection'
+        ).classes('w-full').props('flat dense')
+
+        if on_refresh:
+            with ui.row().classes('mt-3'):
+                ui.button(
+                    'Refresh',
+                    icon='refresh',
+                    on_click=on_refresh
+                ).props('flat dense')
+
+
+def _render_indexing_progress(progress: dict[str, Any]) -> None:
+    """Render indexing progress if there's an active indexing job."""
+    status = progress.get('status', '')
+
+    if status == 'running':
+        with ui.card().classes('w-full bg-blue-50 dark:bg-blue-900 p-3 mb-3'):
+            with ui.row().classes('items-center gap-2'):
+                ui.spinner(size='sm')
+                ui.label('Indexing in progress...').classes('text-sm')
+            if 'progress' in progress and progress['progress']:
+                ui.label(progress['progress']).classes('text-xs mt-1')
+    elif status == 'completed_stopped' or status == 'completed':
+        # Show last indexing info
+        with ui.card().classes('w-full bg-green-50 dark:bg-green-900 p-3 mb-3'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('check_circle', size='sm').classes('text-green')
+                ui.label('Indexing finished').classes('text-sm')
+            if 'workspace' in progress:
+                ui.label(f"Workspace: {progress['workspace']}").classes('text-xs mt-1')
+            if 'collection' in progress:
+                ui.label(f"Collection: {progress['collection']}").classes('text-xs')
+            if 'runtime' in progress:
+                ui.label(f"Duration: {progress['runtime']}").classes('text-xs')
+    elif status == 'incomplete':
+        # Show warning that indexing didn't complete
+        with ui.card().classes('w-full bg-yellow-50 dark:bg-yellow-900 p-3 mb-3'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('warning', size='sm').classes('text-yellow')
+                ui.label('Indexing incomplete').classes('text-sm')
+            if 'progress' in progress and progress['progress']:
+                ui.label(f"Last progress: {progress['progress']}").classes('text-xs mt-1')
+            if 'workspace' in progress:
+                ui.label(f"Workspace: {progress['workspace']}").classes('text-xs')
+            if 'runtime' in progress:
+                ui.label(f"Duration: {progress['runtime']}").classes('text-xs')
+    elif status == 'no_active_indexing':
+        pass  # Don't show anything
+    else:
+        # Unknown status
+        with ui.card().classes('w-full bg-grey-100 dark:bg-grey-800 p-3 mb-3'):
+            ui.label(f'Indexing status: {status}').classes('text-xs')
+
+
+def RagStartIndexingForm(
+    on_start: Callable[[dict[str, Any]], None] | None = None
+) -> None:
+    """
+    Render a form to start indexing a workspace.
+
+    Args:
+        on_start: Callback when start indexing is clicked with params.
+    """
+    workspace = None
+    collection_name = None
+    model_select = None
+
+    with ui.card().classes('w-full'):
+        ui.label('Start New Indexing').classes('text-h6 mb-3')
+
+        with ui.input('Workspace Root', placeholder='/home/gr/myproject'
+                    ).bind_value(workspace if workspace else None).classes('w-full mb-2') as workspace_input:
+            pass
+
+        with ui.input('Collection Name', placeholder='my-code'
+                    ).bind_value(collection_name if collection_name else None).classes('w-full mb-2') as collection_input:
+            pass
+
+        with ui.select(
+            'Embedding Model',
+            options=['auto', 'fast', 'balanced', 'high-quality'],
+            value='auto'
+        ).classes('w-full mb-3') as model_select:
+            pass
+
+        ui.button(
+            'Start Indexing',
+            icon='play_arrow',
+            on_click=lambda: on_start({
+                'workspace_root': workspace_input.value,
+                'collection_name': collection_input.value,
+                'embedding_model': model_select.value
+            }) if on_start else None
+        ).props('color=primary')

@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class ConfigManager:
         self.config_dir = Path(config_dir).expanduser()
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / f"{tool_name}.json"
-        self.config: Dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._load_config()
     
@@ -45,7 +45,7 @@ class ConfigManager:
         """Load configuration from disk."""
         if self.config_file.exists():
             try:
-                with open(self.config_file, "r") as f:
+                with Path(self.config_file).open("r") as f:
                     self.config = json.load(f)
                 logger.info(f"Loaded config for {self.tool_name}")
             except Exception as e:
@@ -80,12 +80,12 @@ class ConfigManager:
     def _save_config(self) -> None:
         """Save configuration to disk."""
         try:
-            with open(self.config_file, "w") as f:
+            with Path(self.config_file).open("w") as f:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving config for {self.tool_name}: {e}")
     
-    def get_all(self) -> Dict[str, Any]:
+    def get_all(self) -> dict[str, Any]:
         """
         Get all configuration values.
         

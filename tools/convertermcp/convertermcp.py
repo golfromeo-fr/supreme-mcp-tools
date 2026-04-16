@@ -11,9 +11,8 @@ import sys
 import os
 import tempfile
 import logging
-import time
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 # Check for required dependencies before importing
 try:
@@ -71,7 +70,7 @@ except Exception as e:
 # FEF V3 Integration
 # ============================================================================
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from tools.fef_integration import (
@@ -107,7 +106,7 @@ def get_output_config() -> dict:
     }
 
 
-def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_conversion_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get conversion statistics."""
     avg_time = (
         convertermcp_metrics["total_conversion_time_ms"] / convertermcp_metrics["total_conversions"]
@@ -121,7 +120,7 @@ def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_format_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get format usage statistics."""
     return {
         "formats": format_usage,
@@ -129,7 +128,7 @@ def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_conversion_queue(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get current conversion queue status."""
     return {
         "pending_conversions": convertermcp_metrics.get("pending", 0),
@@ -138,7 +137,7 @@ def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_storage_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_storage_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get storage usage by output."""
     return {
         "total_bytes_processed": convertermcp_metrics["bytes_processed"],
@@ -391,7 +390,7 @@ async def handle_convert_docx_to_text_tool(arguments: dict) -> list[types.TextCo
                 logger.error(f"Output path not allowed: {out_path}")
                 return [types.TextContent(type="text", text=f"Error: Output path not allowed: {out_path}")]
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(out_path, "w", encoding="utf-8") as f:
+            with Path(out_path).open("w", encoding="utf-8") as f:
                 f.write(text)
             docx_size = docx_path.stat().st_size if docx_path.exists() else 0
             txt_size = out_path.stat().st_size

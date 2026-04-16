@@ -5,7 +5,8 @@ Renders tool detail card with extensions in a two-column layout.
 """
 
 from nicegui import ui
-from typing import List, Dict, Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 from ..models import ToolDetail, ToolStatus, Extension, ExtensionType, EnvVariable
 from ..logging_config import get_logger
@@ -28,13 +29,13 @@ _STATUS_COLORS: dict[ToolStatus, str] = {
 
 
 def ToolCard(
-    tool: Optional[ToolDetail],
-    on_query: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    tool: ToolDetail | None,
+    on_query: Callable[[str, dict[str, Any]], None] | None = None,
+    on_execute: Callable[[str, dict[str, Any]], None] | None = None,
     loading: bool = False,
-    env_variables: Optional[List[EnvVariable]] = None,
-    on_env_update: Optional[Callable[[str, str, str], None]] = None,
-    on_env_delete: Optional[Callable[[str, str], None]] = None,
+    env_variables: list[EnvVariable] | None = None,
+    on_env_update: Callable[[str, str, str], None] | None = None,
+    on_env_delete: Callable[[str, str], None] | None = None,
 ) -> None:
     """
     Render tool detail card with extensions.
@@ -71,6 +72,10 @@ def ToolCard(
 
         # Tool info section
         _render_tool_info(tool)
+
+        # Show ragmcp-specific collections panel at the top
+        if tool.name == "ragmcp":
+            _render_rag_collections_panel(tool.extensions)
 
         # Show extensions or placeholder message
         if not tool.extensions:
@@ -146,14 +151,36 @@ def _render_tool_info(tool: ToolDetail) -> None:
                 ui.label(", ".join(parts)).classes("text-sm")
 
 
+def _render_rag_collections_panel(extensions: list[Extension]) -> None:
+    """Render ragmcp-specific collections panel at the top."""
+    from .rag_collections_panel import RagCollectionsPanel
+
+    # Find list_collections and check_indexing_progress data
+    list_collections_data = None
+    check_indexing_progress_data = None
+
+    for ext in extensions:
+        if ext.name == "list_collections" and ext.data:
+            list_collections_data = ext.data
+        elif ext.name == "check_indexing_progress" and ext.data:
+            check_indexing_progress_data = ext.data
+
+    # Only render if we have collection data
+    if list_collections_data:
+        RagCollectionsPanel(
+            collections_data=list_collections_data,
+            indexing_progress=check_indexing_progress_data
+        )
+
+
 def _render_extensions(
     tool: ToolDetail,
-    on_query: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    env_variables: Optional[List[EnvVariable]] = None,
-    tool_name: Optional[str] = None,
-    on_env_update: Optional[Callable[[str, str, str], None]] = None,
-    on_env_delete: Optional[Callable[[str, str], None]] = None,
+    on_query: Callable[[str, dict[str, Any]], None] | None = None,
+    on_execute: Callable[[str, dict[str, Any]], None] | None = None,
+    env_variables: list[EnvVariable] | None = None,
+    tool_name: str | None = None,
+    on_env_update: Callable[[str, str, str], None] | None = None,
+    on_env_delete: Callable[[str, str], None] | None = None,
 ) -> None:
     """Render collapsible extension sections."""
     # Separate extensions by type

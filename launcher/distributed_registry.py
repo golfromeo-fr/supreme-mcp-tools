@@ -11,7 +11,8 @@ import logging
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any
+from collections.abc import AsyncIterator, Callable
 
 import aiohttp
 
@@ -40,10 +41,10 @@ class RequestCoalescer:
     
     def __init__(self):
         """Initialize the request coalescer."""
-        self._pending: Dict[str, asyncio.Future] = {}
+        self._pending: dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
     
-    async def execute(self, key: str, func: callable) -> Any:
+    async def execute(self, key: str, func: Callable) -> Any:
         """
         Execute request with coalescing.
         
@@ -75,7 +76,7 @@ class RequestCoalescer:
         
         return await future
     
-    async def _execute_func(self, key: str, func: callable, future: asyncio.Future) -> None:
+    async def _execute_func(self, key: str, func: Callable, future: asyncio.Future) -> None:
         """Execute function and set future result."""
         try:
             result = await func()
@@ -111,15 +112,15 @@ class CircuitBreaker:
         """
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
-        self.states: Dict[str, CircuitBreakerState] = {}
-        self.failure_counts: Dict[str, int] = {}
-        self.last_failure_times: Dict[str, float] = {}
+        self.states: dict[str, CircuitBreakerState] = {}
+        self.failure_counts: dict[str, int] = {}
+        self.last_failure_times: dict[str, float] = {}
     
     async def execute(
         self,
         key: str,
-        func: callable,
-        fallback: Optional[callable] = None
+        func: Callable,
+        fallback: Callable | None = None
     ) -> Any:
         """
         Execute a function with circuit breaker protection.
@@ -190,10 +191,10 @@ class CacheManager:
             max_size: Maximum number of cache entries
         """
         self.max_size = max_size
-        self.cache: Dict[str, Dict] = {}
+        self.cache: dict[str, dict] = {}
         self._lock = asyncio.Lock()
     
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """
         Get cached value if not expired.
         
@@ -265,7 +266,7 @@ class EventAggregator:
     
     def __init__(self):
         """Initialize the event aggregator."""
-        self.subscribers: Dict[str, List[asyncio.Queue]] = {}
+        self.subscribers: dict[str, list[asyncio.Queue]] = {}
         self._lock = asyncio.Lock()
     
     async def subscribe(self, tool_name: str) -> asyncio.Queue:
@@ -302,7 +303,7 @@ class EventAggregator:
         self,
         tool_name: str,
         event_type: str,
-        data: Dict[str, Any]
+        data: dict[str, Any]
     ) -> None:
         """
         Publish an event to all subscribers of a tool.
@@ -342,7 +343,7 @@ class HTTPClient:
             timeout: Request timeout in seconds
         """
         self.timeout = aiohttp.ClientTimeout(total=timeout)
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self._lock = asyncio.Lock()
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -357,7 +358,7 @@ class HTTPClient:
                     )
         return self._session
     
-    async def get(self, url: str, headers: Dict[str, str] = None) -> Any:
+    async def get(self, url: str, headers: dict[str, str] = None) -> Any:
         """
         Execute HTTP GET request.
 
@@ -373,7 +374,7 @@ class HTTPClient:
             response.raise_for_status()
             return await response.json()
 
-    async def post(self, url: str, data: Dict[str, Any], headers: Dict[str, str] = None) -> Any:
+    async def post(self, url: str, data: dict[str, Any], headers: dict[str, str] = None) -> Any:
         """
         Execute HTTP POST request.
 
@@ -430,7 +431,7 @@ class ConfigPersistence:
         """Get path to tool's config file."""
         return self.config_dir / f"{tool_name}.json"
     
-    def load(self, tool_name: str) -> Dict[str, Any]:
+    def load(self, tool_name: str) -> dict[str, Any]:
         """
         Load persisted configuration for a tool.
         
@@ -444,7 +445,7 @@ class ConfigPersistence:
         
         if config_path.exists():
             try:
-                with open(config_path, "r") as f:
+                with Path(config_path).open("r") as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Error loading config for {tool_name}: {e}")
@@ -455,7 +456,7 @@ class ConfigPersistence:
         self,
         tool_name: str,
         extension_name: str,
-        params: Dict[str, Any]
+        params: dict[str, Any]
     ) -> None:
         """
         Save a configuration change.
@@ -481,7 +482,7 @@ class ConfigPersistence:
         })
         
         # Save to file
-        with open(config_path, "w") as f:
+        with Path(config_path).open("w") as f:
             json.dump(config, f, indent=2)
         
         logger.info(f"Saved config for {tool_name}.{extension_name}")
@@ -511,7 +512,7 @@ class DistributedExtensionRegistry:
     
     # ==================== DISCOVERY ====================
     
-    async def list_tools(self) -> List[str]:
+    async def list_tools(self) -> list[str]:
         """
         List all available tools.
         
@@ -522,9 +523,9 @@ class DistributedExtensionRegistry:
     
     async def list_extensions(
         self,
-        tool_name: Optional[str] = None,
-        ext_type: Optional[str] = None
-    ) -> Dict[str, List[Dict]]:
+        tool_name: str | None = None,
+        ext_type: str | None = None
+    ) -> dict[str, list[dict]]:
         """
         List extensions from tools with caching.
         
@@ -586,7 +587,7 @@ class DistributedExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        params: Optional[Dict[str, Any]] = None
+        params: dict[str, Any] | None = None
     ) -> Any:
         """
         Query a data source extension in a tool process.
@@ -616,7 +617,7 @@ class DistributedExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        params: Dict[str, Any]
+        params: dict[str, Any]
     ) -> Any:
         """
         Mutate configuration in a tool process.
@@ -669,7 +670,7 @@ class DistributedExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        params: Optional[Dict[str, Any]] = None
+        params: dict[str, Any] | None = None
     ) -> Any:
         """
         Execute an action in a tool process.
@@ -728,7 +729,7 @@ class DistributedExtensionRegistry:
     
     # ==================== INTERNAL HTTP HELPERS ====================
     
-    def _auth_headers(self, tool_name: str) -> Dict[str, str]:
+    def _auth_headers(self, tool_name: str) -> dict[str, str]:
         """Get auth headers for a tool's management API."""
         from launcher.env_manager import load_auth_config
         auth_cfg = load_auth_config(tool_name)
@@ -738,8 +739,8 @@ class DistributedExtensionRegistry:
     async def _http_get(
         self,
         url: str,
-        circuit_breaker_key: Optional[str] = None,
-        headers: Dict[str, str] = None
+        circuit_breaker_key: str | None = None,
+        headers: dict[str, str] = None
     ) -> Any:
         """
         Execute HTTP GET with circuit breaker protection.
@@ -762,9 +763,9 @@ class DistributedExtensionRegistry:
     async def _http_post(
         self,
         url: str,
-        data: Dict[str, Any],
-        circuit_breaker_key: Optional[str] = None,
-        headers: Dict[str, str] = None
+        data: dict[str, Any],
+        circuit_breaker_key: str | None = None,
+        headers: dict[str, str] = None
     ) -> Any:
         """
         Execute HTTP POST with circuit breaker protection.

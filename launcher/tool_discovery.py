@@ -6,12 +6,10 @@ MCP tools from configured directories.
 """
 
 import importlib.util
-import inspect
 import logging
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from .errors import DiscoveryError, ValidationError
 
@@ -27,8 +25,8 @@ class ToolMetadata:
     file_path: str
     version: str = "unknown"
     description: str = ""
-    dependencies: List[str] = field(default_factory=list)
-    exports: Dict[str, Any] = field(default_factory=dict)
+    dependencies: list[str] = field(default_factory=list)
+    exports: dict[str, Any] = field(default_factory=dict)
     
     def __repr__(self) -> str:
         return f"ToolMetadata(name={self.name}, path={self.module_path})"
@@ -51,7 +49,7 @@ class ToolDiscovery:
         "copilot_context_injector",  # Helper module, not a tool
     ]
     
-    def __init__(self, search_paths: List[str]):
+    def __init__(self, search_paths: list[str]):
         """
         Initialize the tool discovery manager.
         
@@ -59,10 +57,10 @@ class ToolDiscovery:
             search_paths: List of directories to search for MCP tools
         """
         self.search_paths = [Path(p) for p in search_paths]
-        self.discovered_tools: Dict[str, ToolMetadata] = {}
-        self.loaded_modules: Dict[str, Any] = {}
+        self.discovered_tools: dict[str, ToolMetadata] = {}
+        self.loaded_modules: dict[str, Any] = {}
 
-    def discover(self) -> Dict[str, ToolMetadata]:
+    def discover(self) -> dict[str, ToolMetadata]:
         """Discover all tools and return as a dict.
 
         Returns:
@@ -73,9 +71,9 @@ class ToolDiscovery:
 
     def discover_tools(
         self,
-        tool_names: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None
-    ) -> List[ToolMetadata]:
+        tool_names: list[str] | None = None,
+        exclude_patterns: list[str] | None = None
+    ) -> list[ToolMetadata]:
         """
         Discover MCP tools from configured directories.
         
@@ -351,7 +349,7 @@ class ToolDiscovery:
             exports=exports
         )
     
-    def _extract_dependencies(self, module_dir: Path) -> List[str]:
+    def _extract_dependencies(self, module_dir: Path) -> list[str]:
         """
         Extract dependencies from requirements.txt if available.
         
@@ -364,7 +362,7 @@ class ToolDiscovery:
         requirements_file = module_dir / "requirements.txt"
         if requirements_file.exists():
             try:
-                with open(requirements_file, 'r') as f:
+                with Path(requirements_file).open('r') as f:
                     dependencies = [
                         line.strip()
                         for line in f
@@ -376,7 +374,7 @@ class ToolDiscovery:
         
         return []
     
-    def get_tool(self, name: str) -> Optional[ToolMetadata]:
+    def get_tool(self, name: str) -> ToolMetadata | None:
         """
         Get a discovered tool by name.
         
@@ -388,7 +386,7 @@ class ToolDiscovery:
         """
         return self.discovered_tools.get(name)
     
-    def get_tool_module(self, name: str) -> Optional[Any]:
+    def get_tool_module(self, name: str) -> Any | None:
         """
         Get a loaded tool module by name.
         
@@ -400,7 +398,7 @@ class ToolDiscovery:
         """
         return self.loaded_modules.get(name)
     
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         """
         List all discovered tool names.
         
@@ -409,7 +407,7 @@ class ToolDiscovery:
         """
         return list(self.discovered_tools.keys())
     
-    def get_all_tools(self) -> List[ToolMetadata]:
+    def get_all_tools(self) -> list[ToolMetadata]:
         """
         Get all discovered tools.
         

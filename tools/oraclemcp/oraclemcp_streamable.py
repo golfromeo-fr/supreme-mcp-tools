@@ -14,9 +14,9 @@ import os
 import logging
 import json
 import re
-import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -36,7 +36,7 @@ except ImportError as e:
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
 # Script is at: tools/oraclemcp/oraclemcp_streamable.py
 # supreme-mcp-tools is at: . (relative path)
-supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+supreme_mcp_tools_dir = (Path(__file__).parent / ".." / "..").resolve()
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
@@ -135,7 +135,7 @@ def get_db_connection():
         try:
             user_id = os.getenv('USERID')
             if not user_id:
-                raise EnvironmentError("USERID environment variable not set")
+                raise OSError("USERID environment variable not set")
 
             login, password = user_id.split('/')
 
@@ -143,7 +143,7 @@ def get_db_connection():
             db_port = int(os.getenv('DB_PORT') or 1521)  # Default to 1521 if DB_PORT is not set
             db_service_name = os.getenv('DB_SERVICE_NAME')
             if not db_host or not db_port or not db_service_name:
-                raise EnvironmentError("Database connection environment variables not set")
+                raise OSError("Database connection environment variables not set")
 
             dsn_tns = oracledb.makedsn(db_host, db_port, service_name=db_service_name)
             connection = oracledb.connect(user=login, password=password, dsn=dsn_tns)
@@ -314,9 +314,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle tools/list request."""
         tools = [
             {
@@ -452,10 +452,10 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tool_call(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any],
+        params: dict[str, Any],
+        session: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -609,9 +609,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_schemas_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for the schemas tool."""
         logger.info(f"Processing schemas tool for tables: {arguments.get('table_names')}")
         table_names = arguments.get("table_names")
@@ -657,9 +657,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_query_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for the query tool."""
         logger.debug(f"Processing query tool with arguments: {arguments}")
         sql_query = arguments.get("sql_query")
@@ -715,9 +715,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_execute_sql_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for the execute_sql tool."""
         logger.debug(f"Processing execute_sql tool with arguments: {arguments}")
         sql_statement = arguments.get("sql_statement")
@@ -787,9 +787,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_list_user_tables_with_descriptions_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for listing user tables and their functional descriptions."""
         try:
             conn = get_db_connection()
@@ -833,9 +833,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_optimize_sql_with_ai_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for optimizing a SQL query using AI and optimization rules."""
         sql_query = arguments.get("sql_query")
         add_comments = arguments.get("add_comments", True)
@@ -873,7 +873,7 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
                     table_descriptions = None
             # Load optimization rules
             optimization_path = SCRIPT_DIR / "optimization.json"
-            with open(optimization_path, "r", encoding="utf-8") as f:
+            with Path(optimization_path).open("r", encoding="utf-8") as f:
                 rules = json.load(f)
             # Prepare prompt for the AI
             prompt = "You are an expert SQL query optimizer."
@@ -951,9 +951,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_explain_plan_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for sending EXPLAIN PLAN to Oracle and returning the execution plan."""
         sql_query = arguments.get("sql_query")
         if not sql_query:
@@ -1017,13 +1017,13 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_get_sql_optimization_rules_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for returning SQL optimization rules from optimization.json."""
         try:
             optimization_path = SCRIPT_DIR / "optimization.json"
-            with open(optimization_path, "r", encoding="utf-8") as f:
+            with Path(optimization_path).open("r", encoding="utf-8") as f:
                 rules = json.load(f)
             yield {
                 "jsonrpc": "2.0",
@@ -1054,13 +1054,13 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_get_pro_c_rules_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for returning Pro*C coding rules from proc_rules.md."""
         try:
             proc_rules_path = SCRIPT_DIR / "proc_rules.md"
-            with open(proc_rules_path, "r", encoding="utf-8") as f:
+            with Path(proc_rules_path).open("r", encoding="utf-8") as f:
                 rules = f.read()
             yield {
                 "jsonrpc": "2.0",
@@ -1091,9 +1091,9 @@ class OracleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_get_valid_languages_tool(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for get_valid_languages tool."""
         limit = arguments.get("limit", 10)
         sql = f"""
@@ -1279,7 +1279,7 @@ fef_http_server = None
 fef_setup_done = False
 
 
-def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_query_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get query statistics."""
     avg_query_time = (
         oraclemcp_metrics["total_query_time_ms"] / oraclemcp_metrics["query_count"]
@@ -1293,7 +1293,7 @@ def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_connection_pool_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get connection pool statistics."""
     return {
         "active_connections": oraclemcp_metrics["connection_count"],
@@ -1302,7 +1302,7 @@ def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_schema_cache_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get schema cache statistics."""
     return {
         "cached_tables": len(table_columns_cache) if 'table_columns_cache' in globals() else 0,
@@ -1310,7 +1310,7 @@ def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reset_connections(params: Dict[str, Any]) -> Dict[str, Any]:
+def reset_connections(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Reset database connections."""
     oraclemcp_metrics["connection_count"] = 0
     oraclemcp_metrics["connection_errors"] = 0

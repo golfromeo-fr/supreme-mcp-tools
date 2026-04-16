@@ -11,7 +11,8 @@ Based on the SSE to Streamable HTTP Migration Plan (Phase 6.1).
 import asyncio
 import json
 import logging
-from typing import Any, AsyncGenerator, Callable, Dict, Optional, Union
+from typing import Any
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 
 # Try to import from modelcontextprotocol SDK
@@ -67,7 +68,7 @@ class StreamableHttpConfig:
     session_timeout: float = 300.0  # 5 minutes
     
     # Headers
-    required_headers: Dict[str, str] = field(default_factory=lambda: {
+    required_headers: dict[str, str] = field(default_factory=lambda: {
         "Content-Type": "application/json",
         "Accept": "application/json,text/event-stream",
     })
@@ -81,7 +82,7 @@ class StreamableHttpFraming:
     """Handles message framing for Streamable HTTP transport."""
     
     @staticmethod
-    def encode_message(message: Dict[str, Any], config: StreamableHttpConfig) -> bytes:
+    def encode_message(message: dict[str, Any], config: StreamableHttpConfig) -> bytes:
         """
         Encode a message with appropriate framing.
         
@@ -105,7 +106,7 @@ class StreamableHttpFraming:
             raise ValueError(f"Unsupported framing format: {config.framing_format}")
     
     @staticmethod
-    def decode_message(data: bytes, config: StreamableHttpConfig) -> Dict[str, Any]:
+    def decode_message(data: bytes, config: StreamableHttpConfig) -> dict[str, Any]:
         """
         Decode a message with appropriate framing.
         
@@ -131,7 +132,7 @@ class StreamableHttpFraming:
     async def parse_stream(
         data_stream: AsyncGenerator[bytes, None],
         config: StreamableHttpConfig
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Parse a stream of framed messages.
         
@@ -181,7 +182,7 @@ class StreamableHttpFraming:
                         )
     
     @staticmethod
-    def _create_error_response(code: int, message: str, data: Any = None) -> Dict[str, Any]:
+    def _create_error_response(code: int, message: str, data: Any = None) -> dict[str, Any]:
         """Create a JSON-RPC error response."""
         error_response = {
             "jsonrpc": "2.0",
@@ -208,7 +209,7 @@ class StreamableHttpTransportBase:
     def __init__(
         self,
         server_name: str,
-        config: Optional[StreamableHttpConfig] = None
+        config: StreamableHttpConfig | None = None
     ):
         """
         Initialize the Streamable HTTP transport.
@@ -219,7 +220,7 @@ class StreamableHttpTransportBase:
         """
         self.server_name = server_name
         self.config = config or StreamableHttpConfig()
-        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
         self._session_lock = asyncio.Lock()
         
         # Initialize MCP server if SDK is available
@@ -231,10 +232,10 @@ class StreamableHttpTransportBase:
     
     async def handle_request(
         self,
-        request_data: Dict[str, Any],
-        headers: Dict[str, str],
-        session_id: Optional[str] = None
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        request_data: dict[str, Any],
+        headers: dict[str, str],
+        session_id: str | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Handle an incoming Streamable HTTP request.
         
@@ -268,9 +269,9 @@ class StreamableHttpTransportBase:
     
     async def _process_request(
         self,
-        request_data: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        request_data: dict[str, Any],
+        session: dict[str, Any]
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Process a JSON-RPC request.
         
@@ -317,9 +318,9 @@ class StreamableHttpTransportBase:
     
     async def _handle_initialize(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle initialize request."""
         session["initialized"] = False
         session["capabilities"] = params.get("capabilities", {})
@@ -342,9 +343,9 @@ class StreamableHttpTransportBase:
     
     async def _handle_initialized(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle initialized notification."""
         session["initialized"] = True
         return {
@@ -354,9 +355,9 @@ class StreamableHttpTransportBase:
     
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle tools/list request."""
         # Subclasses should override this to return actual tools
         return {
@@ -368,17 +369,17 @@ class StreamableHttpTransportBase:
     
     async def _handle_tool_call(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any],
+        params: dict[str, Any],
+        session: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handle tools/call request."""
         # Subclasses should override this to handle actual tool calls
         yield StreamableHttpFraming._create_error_response(
             -32601, "Method not found", "Tool calls not implemented"
         )
     
-    def _validate_request(self, request_data: Dict[str, Any]) -> bool:
+    def _validate_request(self, request_data: dict[str, Any]) -> bool:
         """Validate a JSON-RPC request."""
         if not isinstance(request_data, dict):
             return False
@@ -393,9 +394,9 @@ class StreamableHttpTransportBase:
     
     async def _get_or_create_session(
         self,
-        session_id: Optional[str],
-        headers: Dict[str, str]
-    ) -> Dict[str, Any]:
+        session_id: str | None,
+        headers: dict[str, str]
+    ) -> dict[str, Any]:
         """Get or create a session."""
         if not self.config.enable_session_management:
             return {}
@@ -441,7 +442,7 @@ class StreamableHttpTransportBase:
     
     async def create_response_stream(
         self,
-        responses: AsyncGenerator[Dict[str, Any], None]
+        responses: AsyncGenerator[dict[str, Any], None]
     ) -> AsyncGenerator[bytes, None]:
         """
         Create a response stream with proper framing.

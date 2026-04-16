@@ -11,7 +11,8 @@ Based on the SSE to Streamable HTTP Migration Plan (Phase 6.1).
 import asyncio
 import json
 import logging
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
+from typing import Any
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -70,13 +71,13 @@ class ClientConfig:
     encoding: str = "utf-8"
     
     # Headers
-    headers: Dict[str, str] = field(default_factory=lambda: {
+    headers: dict[str, str] = field(default_factory=lambda: {
         "Content-Type": "application/json",
         "Accept": "application/json,text/event-stream",
     })
     
     # Session management
-    session_id: Optional[str] = None
+    session_id: str | None = None
     enable_session_persistence: bool = True
 
 
@@ -88,7 +89,7 @@ class StreamableHttpClient:
     responses, and managing reconnection logic.
     """
     
-    def __init__(self, config: Optional[ClientConfig] = None):
+    def __init__(self, config: ClientConfig | None = None):
         """
         Initialize the Streamable HTTP client.
         
@@ -97,9 +98,9 @@ class StreamableHttpClient:
         """
         self.config = config or ClientConfig()
         self._state = ConnectionState.DISCONNECTED
-        self._http_client: Optional[httpx.AsyncClient] = None
-        self._reconnect_task: Optional[asyncio.Task] = None
-        self._event_handlers: Dict[str, List[Callable]] = {}
+        self._http_client: httpx.AsyncClient | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._event_handlers: dict[str, list[Callable]] = {}
         
         logger.info(f"StreamableHttpClient initialized for {self.config.base_url}")
     
@@ -190,9 +191,9 @@ class StreamableHttpClient:
     async def send_request(
         self,
         method: str,
-        params: Optional[Dict[str, Any]] = None,
-        request_id: Optional[int] = None
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        request_id: int | None = None
+    ) -> dict[str, Any]:
         """
         Send a JSON-RPC request and get a single response.
         
@@ -225,9 +226,9 @@ class StreamableHttpClient:
     async def send_streaming_request(
         self,
         method: str,
-        params: Optional[Dict[str, Any]] = None,
-        request_id: Optional[int] = None
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        params: dict[str, Any] | None = None,
+        request_id: int | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Send a JSON-RPC request and stream multiple responses.
         
@@ -260,9 +261,9 @@ class StreamableHttpClient:
     
     async def _send_request(
         self,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         retry_count: int = 0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send a request and get a single response.
         
@@ -332,8 +333,8 @@ class StreamableHttpClient:
     
     async def _send_streaming_request(
         self,
-        request: Dict[str, Any]
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        request: dict[str, Any]
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Send a request and stream multiple responses.
         
@@ -406,7 +407,7 @@ class StreamableHttpClient:
             encoding=self.config.encoding,
         )
     
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """
         List available tools from the server.
         
@@ -427,8 +428,8 @@ class StreamableHttpClient:
     async def call_tool(
         self,
         name: str,
-        arguments: Optional[Dict[str, Any]] = None
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        arguments: dict[str, Any] | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Call a tool on the server.
         
@@ -521,7 +522,7 @@ class StreamingJSONParser:
         self.encoding = encoding
         self._buffer = ""
     
-    def feed(self, data: bytes) -> List[Dict[str, Any]]:
+    def feed(self, data: bytes) -> list[dict[str, Any]]:
         """
         Feed data to the parser and return parsed messages.
         
@@ -598,7 +599,7 @@ class ReconnectionManager:
         self.max_delay = max_delay
         self._attempt = 0
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
     
     async def start(self) -> None:
         """Start the reconnection manager."""

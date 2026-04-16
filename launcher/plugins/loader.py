@@ -4,12 +4,11 @@ Plugin Loader for FEF V3
 Loads extensions from external plugin packages.
 """
 
-import importlib
 import importlib.util
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class PluginLoader:
     def __init__(
         self,
         plugin_dir: str = "~/.supreme-mcp-tools/plugins",
-        registry: Optional[Any] = None
+        registry: Any | None = None
     ):
         """
         Initialize the plugin loader.
@@ -37,9 +36,9 @@ class PluginLoader:
         self.plugin_dir = Path(plugin_dir).expanduser()
         self.plugin_dir.mkdir(parents=True, exist_ok=True)
         self.registry = registry
-        self.loaded_plugins: Dict[str, Any] = {}
+        self.loaded_plugins: dict[str, Any] = {}
     
-    def discover_plugins(self) -> List[str]:
+    def discover_plugins(self) -> list[str]:
         """
         Discover available plugins.
         
@@ -59,7 +58,7 @@ class PluginLoader:
         self,
         plugin_name: str,
         tool_name: str,
-        registry: Optional[Any] = None
+        registry: Any | None = None
     ) -> Any:
         """
         Load a plugin and register its extensions.
@@ -125,7 +124,7 @@ class PluginLoader:
         self,
         plugin_name: str,
         tool_name: str,
-        registry: Optional[Any] = None
+        registry: Any | None = None
     ) -> Any:
         """
         Reload a plugin.
@@ -144,8 +143,8 @@ class PluginLoader:
     def load_all_plugins(
         self,
         tool_name: str,
-        registry: Optional[Any] = None
-    ) -> Dict[str, Any]:
+        registry: Any | None = None
+    ) -> dict[str, Any]:
         """
         Load all discovered plugins.
         
@@ -169,7 +168,7 @@ class PluginLoader:
         logger.info(f"Loaded {len(loaded)}/{len(plugins)} plugins")
         return loaded
     
-    def get_loaded_plugins(self) -> List[str]:
+    def get_loaded_plugins(self) -> list[str]:
         """
         Get list of loaded plugin names.
         
@@ -178,7 +177,7 @@ class PluginLoader:
         """
         return list(self.loaded_plugins.keys())
     
-    def get_plugin_info(self, plugin_name: str) -> Optional[Dict[str, Any]]:
+    def get_plugin_info(self, plugin_name: str) -> dict[str, Any] | None:
         """
         Get information about a loaded plugin.
         
@@ -224,7 +223,7 @@ class PluginRegistry:
             plugin_dir: Directory containing plugin files
         """
         self.plugin_dir = plugin_dir
-        self.loaders: Dict[str, PluginLoader] = {}
+        self.loaders: dict[str, PluginLoader] = {}
     
     def get_loader(self, tool_name: str, registry: Any) -> PluginLoader:
         """
@@ -249,7 +248,7 @@ class PluginRegistry:
         self,
         tool_name: str,
         registry: Any
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Load all plugins for a tool.
         
@@ -276,7 +275,7 @@ class PluginRegistry:
                 loader.unload_plugin(plugin_name)
             del self.loaders[tool_name]
     
-    def get_all_loaded_plugins(self) -> Dict[str, List[str]]:
+    def get_all_loaded_plugins(self) -> dict[str, list[str]]:
         """
         Get all loaded plugins across all tools.
         

@@ -8,11 +8,10 @@ and setting collection intervals.
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ class ExporterConfig:
     """Configuration for a metrics exporter."""
     type: StorageBackend
     enabled: bool = True
-    config: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
         """Validate exporter configuration."""
@@ -64,7 +63,7 @@ class CollectorConfig:
     """Configuration for a metrics collector."""
     type: MetricType
     enabled: bool = True
-    config: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
         """Validate collector configuration."""
@@ -92,8 +91,8 @@ class AlertingConfig:
     """Configuration for alerting system."""
     enabled: bool = False
     evaluation_interval: int = 60000  # 60 seconds
-    rules: List[Dict[str, Any]] = field(default_factory=list)
-    notifiers: List[Dict[str, Any]] = field(default_factory=list)
+    rules: list[dict[str, Any]] = field(default_factory=list)
+    notifiers: list[dict[str, Any]] = field(default_factory=list)
     
     def __post_init__(self):
         """Set default alerting rules if none provided."""
@@ -116,8 +115,8 @@ class AlertingConfig:
 class MonitoringConfig:
     """Main monitoring configuration."""
     enabled: bool = False
-    metrics: Dict[str, Any] = field(default_factory=dict)
-    collectors: Dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    collectors: dict[str, Any] = field(default_factory=dict)
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     
     def __post_init__(self):
@@ -162,7 +161,7 @@ class MonitoringConfig:
             }
 
 
-def load_monitoring_config(config_path: Optional[Union[str, Path]] = None) -> MonitoringConfig:
+def load_monitoring_config(config_path: str | Path | None = None) -> MonitoringConfig:
     """
     Load monitoring configuration from file.
     
@@ -179,7 +178,7 @@ def load_monitoring_config(config_path: Optional[Union[str, Path]] = None) -> Mo
         config_path = Path(config_path)
         if config_path.exists():
             try:
-                with open(config_path, 'r') as f:
+                with Path(config_path).open('r') as f:
                     file_config = json.load(f)
                 
                 # Update config with file values
@@ -203,7 +202,7 @@ def load_monitoring_config(config_path: Optional[Union[str, Path]] = None) -> Mo
             logger.debug(f"Checking for monitoring config at: {path}")
             if path.exists():
                 try:
-                    with open(path, 'r') as f:
+                    with Path(path).open('r') as f:
                         file_config = json.load(f)
                     
                     config = _update_config_from_dict(config, file_config)
@@ -223,7 +222,7 @@ def load_monitoring_config(config_path: Optional[Union[str, Path]] = None) -> Mo
     return config
 
 
-def _update_config_from_dict(config: MonitoringConfig, updates: Dict[str, Any]) -> MonitoringConfig:
+def _update_config_from_dict(config: MonitoringConfig, updates: dict[str, Any]) -> MonitoringConfig:
     """
     Update configuration from dictionary.
     
@@ -253,7 +252,7 @@ def _update_config_from_dict(config: MonitoringConfig, updates: Dict[str, Any]) 
     return config
 
 
-def save_monitoring_config(config: MonitoringConfig, config_path: Union[str, Path]) -> None:
+def save_monitoring_config(config: MonitoringConfig, config_path: str | Path) -> None:
     """
     Save monitoring configuration to file.
     
@@ -279,13 +278,13 @@ def save_monitoring_config(config: MonitoringConfig, config_path: Union[str, Pat
     
     config_dict = convert_enums(config_dict)
     
-    with open(config_path, 'w') as f:
+    with Path(config_path).open('w') as f:
         json.dump(config_dict, f, indent=2, default=str)
     
     logger.info(f"Saved monitoring configuration to {config_path}")
 
 
-def get_monitoring_config(launcher_config: Optional[Any] = None) -> MonitoringConfig:
+def get_monitoring_config(launcher_config: Any | None = None) -> MonitoringConfig:
     """
     Get monitoring configuration from launcher config.
     
@@ -342,7 +341,7 @@ def create_default_monitoring_config() -> MonitoringConfig:
 
 
 # Example configuration generator
-def generate_example_config() -> Dict[str, Any]:
+def generate_example_config() -> dict[str, Any]:
     """
     Generate an example monitoring configuration.
     

@@ -5,7 +5,7 @@ Pydantic models defining the data structures used throughout the UI.
 """
 
 from pydantic import BaseModel, Field, model_validator
-from typing import Any, Dict, List, Optional
+from typing import Any
 from datetime import datetime
 from enum import Enum
 
@@ -37,18 +37,18 @@ class ToolInfo(BaseModel):
     """Information about a tool."""
     name: str
     status: ToolStatus
-    management_url: Optional[str] = None
-    mcp_port: Optional[int] = None
-    capabilities: Optional[Dict[str, Any]] = None
-    last_check: Optional[float] = None  # Timestamp as float
+    management_url: str | None = None
+    mcp_port: int | None = None
+    capabilities: dict[str, Any] | None = None
+    last_check: float | None = None  # Timestamp as float
 
 
 class ExtensionSchema(BaseModel):
     """Schema definition for an extension."""
     type: ExtensionType
     name: str
-    description: Optional[str] = None
-    json_schema: Dict[str, Any] = {}  # JSON Schema for input/output
+    description: str | None = None
+    json_schema: dict[str, Any] = {}  # JSON Schema for input/output
 
 
 class Extension(BaseModel):
@@ -56,10 +56,12 @@ class Extension(BaseModel):
     name: str
     type: ExtensionType
     # Use alias to map 'schema' from API to 'json_schema' in model
-    json_schema: Dict[str, Any] = Field(default_factory=dict, validation_alias='schema')
+    json_schema: dict[str, Any] = Field(default_factory=dict, validation_alias='schema')
     # Map metadata.description to description field
-    description: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None  # For data sources
+    description: str | None = None
+    data: dict[str, Any] | None = None  # For data sources
+    # Store full metadata
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode='before')
     @classmethod
@@ -78,12 +80,12 @@ class ToolDetail(BaseModel):
     """Detailed tool information with extensions."""
     name: str
     status: ToolStatus
-    management_url: Optional[str] = None
-    mcp_port: Optional[int] = None
-    capabilities: Optional[Dict[str, Any]] = None
-    last_check: Optional[float] = None  # Timestamp as float
-    registered_at: Optional[float] = None  # Timestamp as float
-    extensions: List[Extension] = []
+    management_url: str | None = None
+    mcp_port: int | None = None
+    capabilities: dict[str, Any] | None = None
+    last_check: float | None = None  # Timestamp as float
+    registered_at: float | None = None  # Timestamp as float
+    extensions: list[Extension] = []
 
     @property
     def is_active(self) -> bool:
@@ -95,7 +97,7 @@ class ToolDetail(BaseModel):
         """Total number of extensions."""
         return len(self.extensions)
 
-    def get_extension_summary(self) -> Dict[str, int]:
+    def get_extension_summary(self) -> dict[str, int]:
         """Get summary of extension counts by type."""
         counts = {"data_sources": 0, "mutators": 0, "actions": 0}
         for ext in self.extensions:
@@ -111,8 +113,8 @@ class ToolDetail(BaseModel):
 class APIResponse(BaseModel):
     """Generic API response wrapper."""
     success: bool
-    data: Optional[Any] = None
-    error: Optional[str] = None
+    data: Any | None = None
+    error: str | None = None
 
     @classmethod
     def ok(cls, data: Any = None) -> "APIResponse":
@@ -127,11 +129,11 @@ class APIResponse(BaseModel):
 
 class UIState(BaseModel):
     """Global UI state (per-client, managed by NiceGUI)."""
-    selected_tool: Optional[str] = None
+    selected_tool: str | None = None
     is_loading: bool = False
     connection_status: str = "connected"  # connected, disconnected, error
-    last_refresh: Optional[datetime] = None
-    error_message: Optional[str] = None
+    last_refresh: datetime | None = None
+    error_message: str | None = None
 
 
 class LoginForm(BaseModel):
@@ -143,7 +145,7 @@ class LoginForm(BaseModel):
 class MutatorForm(BaseModel):
     """Dynamic mutator form data."""
     extension_name: str
-    values: Dict[str, Any] = {}
+    values: dict[str, Any] = {}
 
 
 class EnvVariable(BaseModel):
@@ -156,7 +158,7 @@ class EnvVariable(BaseModel):
     value_raw: str = ""
     is_set: bool = False
     default: str = ""
-    options: List[str] = []
+    options: list[str] = []
     type: str = "string"  # string, integer, number, boolean
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
+    minimum: float | None = None
+    maximum: float | None = None

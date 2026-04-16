@@ -4,7 +4,7 @@ Auth Box Component.
 Renders per-tool authorization key management in the web UI.
 """
 
-from typing import Optional, Callable
+from collections.abc import Callable
 
 from nicegui import ui
 
@@ -16,8 +16,8 @@ logger = get_logger(__name__)
 def AuthBox(
     tool_name: str,
     is_set: bool,
-    value_masked: Optional[str],
-    on_update: Optional[Callable[[str, str], None]] = None,
+    value_masked: str | None,
+    on_update: Callable[[str, str], None] | None = None,
 ) -> None:
     """
     Render auth configuration box for a tool.
@@ -56,7 +56,7 @@ def AuthBox(
 
 def _show_update_dialog(
     tool_name: str,
-    on_update: Optional[Callable[[str, str], None]],
+    on_update: Callable[[str, str], None] | None,
 ) -> None:
     """Show dialog to update the auth key."""
     new_key = None

@@ -8,7 +8,7 @@ import json
 import logging
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +74,8 @@ class ManagementServerConfig:
     """Configuration for the management server."""
     host: str = "0.0.0.0"
     port: int = field(default_factory=_get_central_management_port)
-    advertised_url: Optional[str] = None
-    api_key: Optional[str] = None
+    advertised_url: str | None = None
+    api_key: str | None = None
     
     @property
     def url(self) -> str:
@@ -96,10 +96,10 @@ class DistributedConfig:
     management_server: ManagementServerConfig = field(
         default_factory=ManagementServerConfig
     )
-    tools: Dict[str, ToolEndpoint] = field(default_factory=dict)
+    tools: dict[str, ToolEndpoint] = field(default_factory=dict)
     tls_enabled: bool = False
-    tls_cert_file: Optional[str] = None
-    tls_key_file: Optional[str] = None
+    tls_cert_file: str | None = None
+    tls_key_file: str | None = None
     
     def add_tool(
         self,
@@ -143,7 +143,7 @@ class DistributedConfig:
             return True
         return False
     
-    def get_tool(self, name: str) -> Optional[ToolEndpoint]:
+    def get_tool(self, name: str) -> ToolEndpoint | None:
         """
         Get a tool endpoint.
         
@@ -155,11 +155,11 @@ class DistributedConfig:
         """
         return self.tools.get(name)
     
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         """List all configured tool names."""
         return list(self.tools.keys())
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         result = {
             "management_server": asdict(self.management_server),
@@ -183,7 +183,7 @@ class DistributedConfig:
         path = Path(config_file).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(path, "w") as f:
+        with Path(path).open("w") as f:
             json.dump(self.to_dict(), f, indent=2)
         
         logger.info(f"Saved distributed config to {path}")
@@ -205,7 +205,7 @@ class DistributedConfig:
             logger.warning(f"Config file not found: {path}")
             return cls()
         
-        with open(path, "r") as f:
+        with Path(path).open("r") as f:
             data = json.load(f)
         
         config = cls()

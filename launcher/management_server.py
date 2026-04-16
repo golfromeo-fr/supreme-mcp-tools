@@ -6,9 +6,8 @@ This server acts as the central hub for the Flexible Extensibility Framework V3.
 """
 
 import asyncio
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,22 +43,22 @@ security = HTTPBearer(auto_error=False)
 # Request/Response Models
 class QueryRequest(BaseModel):
     """Request model for querying data sources."""
-    params: Optional[Dict[str, Any]] = None
+    params: dict[str, Any] | None = None
 
 
 class MutateRequest(BaseModel):
     """Request model for mutating configuration."""
-    params: Dict[str, Any]
+    params: dict[str, Any]
 
 
 class ExecuteRequest(BaseModel):
     """Request model for executing actions."""
-    params: Optional[Dict[str, Any]] = None
+    params: dict[str, Any] | None = None
 
 
 class EnvVarUpdate(BaseModel):
     """Request model for updating environment variables."""
-    variables: Dict[str, str]
+    variables: dict[str, str]
 
 
 class AuthUpdate(BaseModel):
@@ -96,8 +95,8 @@ class ManagementServer:
         service_registry: ServiceRegistry,
         port: int = None,
         host: str = "0.0.0.0",
-        api_key: Optional[str] = None,
-        port_manager: Optional[Any] = None
+        api_key: str | None = None,
+        port_manager: Any | None = None
     ):
         """
         Initialize the management server.
@@ -153,14 +152,14 @@ class ManagementServer:
             allow_headers=["*"],
         )
         
-        self._server: Optional[uvicorn.Server] = None
-        self._task: Optional[asyncio.Task] = None
+        self._server: uvicorn.Server | None = None
+        self._task: asyncio.Task | None = None
         
         self._register_routes()
     
     def _verify_api_key(
         self,
-        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+        credentials: HTTPAuthorizationCredentials | None = Depends(security)
     ) -> bool:
         """Verify API key if configured."""
         if self.api_key is None:
@@ -231,7 +230,7 @@ class ManagementServer:
         @self.app.get("/api/tools/{tool_name}/extensions")
         async def list_tool_extensions(
             tool_name: str,
-            ext_type: Optional[str] = None,
+            ext_type: str | None = None,
             _: bool = Depends(self._verify_api_key)
         ):
             """List extensions for a specific tool."""
@@ -243,7 +242,7 @@ class ManagementServer:
         
         @self.app.get("/api/extensions")
         async def list_all_extensions(
-            ext_type: Optional[str] = None,
+            ext_type: str | None = None,
             _: bool = Depends(self._verify_api_key)
         ):
             """List all extensions across all tools."""
@@ -378,7 +377,7 @@ class ManagementServer:
         @self.app.put("/api/disabled-tools/{server_name}")
         async def set_disabled_tools_endpoint(
             server_name: str,
-            disabled_list: List[str],
+            disabled_list: list[str],
             _: bool = Depends(self._verify_api_key)
         ):
             """Set disabled tools for a specific server."""
@@ -528,14 +527,14 @@ class ManagementServer:
                 raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
 
             try:
-                with open(config_path) as f:
+                with Path(config_path).open() as f:
                     config = json.load(f)
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid config.json")
 
             config.setdefault("auth", {})["api_key"] = request.api_key
 
-            with open(config_path, "w") as f:
+            with Path(config_path).open("w") as f:
                 json.dump(config, f, indent=2)
 
             return {"success": True}

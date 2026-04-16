@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Callable, List, Optional
+from collections.abc import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -36,10 +36,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app: ASGIApp,
-        registry: Optional[MetricsRegistry] = None,
+        registry: MetricsRegistry | None = None,
         collector_name: str = "mcp",
-        exclude_paths: Optional[List[str]] = None,
-        include_paths: Optional[List[str]] = None
+        exclude_paths: list[str] | None = None,
+        include_paths: list[str] | None = None
     ):
         """
         Initialize the metrics middleware.
@@ -212,10 +212,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
 def create_metrics_middleware(
     app: ASGIApp,
-    registry: Optional[MetricsRegistry] = None,
+    registry: MetricsRegistry | None = None,
     collector_name: str = "mcp",
-    exclude_paths: Optional[List[str]] = None,
-    include_paths: Optional[List[str]] = None
+    exclude_paths: list[str] | None = None,
+    include_paths: list[str] | None = None
 ) -> MetricsMiddleware:
     """
     Create and configure metrics middleware.
@@ -242,10 +242,10 @@ def create_metrics_middleware(
 # Convenience function for adding middleware to FastAPI app
 def add_metrics_middleware(
     app: ASGIApp,
-    registry: Optional[MetricsRegistry] = None,
+    registry: MetricsRegistry | None = None,
     collector_name: str = "mcp",
-    exclude_paths: Optional[List[str]] = None,
-    include_paths: Optional[List[str]] = None
+    exclude_paths: list[str] | None = None,
+    include_paths: list[str] | None = None
 ) -> None:
     """
     Add metrics middleware to a FastAPI application.
@@ -286,7 +286,7 @@ class MetricsContext:
         request: Request,
         tool: str,
         operation: str,
-        registry: Optional[MetricsRegistry] = None,
+        registry: MetricsRegistry | None = None,
         collector_name: str = "mcp"
     ):
         """
@@ -352,8 +352,8 @@ class MetricsContext:
 # Decorator for automatic metric recording
 def track_metrics(
     tool: str,
-    operation: Optional[str] = None,
-    registry: Optional[MetricsRegistry] = None,
+    operation: str | None = None,
+    registry: MetricsRegistry | None = None,
     collector_name: str = "mcp"
 ):
     """

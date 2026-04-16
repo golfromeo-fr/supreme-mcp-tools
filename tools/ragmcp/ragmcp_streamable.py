@@ -18,7 +18,8 @@ import subprocess
 import psutil
 import json
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, Optional
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -46,7 +47,7 @@ except ImportError as e:
 
 # Add parent directories to path for importing StreamableHttpTransportBase
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
-supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+supreme_mcp_tools_dir = (Path(__file__).parent / ".." / "..").resolve()
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
@@ -292,7 +293,7 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
             },
         }
     
-    async def _handle_tools_list(self, params, session) -> Dict[str, Any]:
+    async def _handle_tools_list(self, params, session) -> dict[str, Any]:
         """Handle tools/list request."""
         tools = [
             {
@@ -488,7 +489,7 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
             },
         }
 
-    async def _handle_tool_call(self, params, session, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_tool_call(self, params, session, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -629,7 +630,7 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
     # Tool Handlers (adapted from original ragmcp.py)
     # ========================================================================
 
-    async def _handle_search_code_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_search_code_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for semantic code search using Qdrant."""
         logger.debug(f"Processing search_code tool with arguments: {arguments}")
 
@@ -839,7 +840,7 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
                 "result": {"content": [{"type": "text", "text": f"Error: {error_msg}"}]}
             }
 
-    async def _handle_search_code_sparse_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_search_code_sparse_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for sparse vector (lexical/BM25) code search."""
         logger.debug(f"Processing search_code_sparse tool with arguments: {arguments}")
 
@@ -968,7 +969,7 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
                 "result": {"content": [{"type": "text", "text": f"Error: {error_msg}"}]}
             }
 
-    async def _handle_get_copilot_context_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_get_copilot_context_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for getting formatted context for GitHub Copilot injection."""
         logger.debug(f"Processing get_copilot_context tool with arguments: {arguments}")
 
@@ -1092,7 +1093,7 @@ class RAGMCPStreamableHttp(StreamableHttpTransportBase):
                 "result": {"content": [{"type": "text", "text": f"Error: {error_msg}"}]}
             }
 
-    async def _handle_start_indexing_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_start_indexing_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Handler to start background indexing process."""
         logger.debug(f"Processing start_indexing tool with arguments: {arguments}")
 
@@ -1176,7 +1177,7 @@ Collection `{collection_name}` already exists. The `force` parameter is no longe
 
             logger.info(f"Starting indexing process: {' '.join(cmd)}")
 
-            with open(log_file, 'w') as log:
+            with Path(log_file).open('w') as log:
                 process = subprocess.Popen(
                     cmd,
                     stdout=log,
@@ -1188,7 +1189,7 @@ Collection `{collection_name}` already exists. The `force` parameter is no longe
             pid = process.pid
 
             pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
-            with open(pid_file, 'w') as f:
+            with Path(pid_file).open('w') as f:
                 json.dump({
                     "pid": pid,
                     "workspace_root": workspace_root,
@@ -1230,7 +1231,7 @@ The indexing process is running in the background. Use check_indexing_progress t
                 "result": {"content": [{"type": "text", "text": f"Error: {error_msg}"}]}
             }
 
-    async def _handle_check_indexing_progress_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_check_indexing_progress_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Handler to check indexing progress."""
         logger.debug(f"Processing check_indexing_progress tool with arguments: {arguments}")
 
@@ -1239,7 +1240,7 @@ The indexing process is running in the background. Use check_indexing_progress t
         try:
             pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
             if pid_file.exists():
-                with open(pid_file, 'r') as f:
+                with Path(pid_file).open('r') as f:
                     pid_info = json.load(f)
                     if not pid:
                         pid = pid_info.get("pid")
@@ -1269,7 +1270,7 @@ The indexing process is running in the background. Use check_indexing_progress t
                 }
                 return
 
-            with open(log_file, 'r') as f:
+            with Path(log_file).open('r') as f:
                 log_lines = f.readlines()
 
             files_processed = sum(1 for line in log_lines if "Processing [" in line)
@@ -1344,7 +1345,7 @@ The indexing process is running in the background. Use check_indexing_progress t
                 "result": {"content": [{"type": "text", "text": f"Error: {error_msg}"}]}
             }
 
-    async def _handle_list_collections_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_list_collections_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """List all Qdrant collections with their stats"""
         try:
             if not self.qdrant_client:
@@ -1412,7 +1413,7 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
                 "result": {"content": [{"type": "text", "text": f"❌ Error: {error_msg}"}]}
             }
 
-    async def _handle_clear_index_tool(self, arguments: dict, request_id) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _handle_clear_index_tool(self, arguments: dict, request_id) -> AsyncGenerator[dict[str, Any], None]:
         """Clear all indexed code from Qdrant vector database"""
         try:
             collection_name = arguments.get("collection_name", "folder.to.index-application-code")
@@ -1831,7 +1832,7 @@ def get_collection_config() -> dict:
     }
 
 
-def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_vector_db_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get vector database statistics."""
     collections = []
     if transport.qdrant_client:
@@ -1848,7 +1849,7 @@ def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_embedding_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get embedding statistics."""
     return {
         "provider": EMBEDDING_PROVIDER,
@@ -1858,7 +1859,7 @@ def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_collection_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_collection_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get collection statistics."""
     count = 0
     if transport.qdrant_client:
@@ -1875,7 +1876,7 @@ def get_collection_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reindex_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def reindex_action(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Trigger reindexing."""
     collection = params.get("collection", get_collection_config()["default_collection"])
     ragmcp_metrics["index_operations"] += 1

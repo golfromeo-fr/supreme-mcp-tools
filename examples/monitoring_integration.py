@@ -7,8 +7,8 @@ It shows various ways to record metrics, use middleware, and instrument tool cal
 
 import asyncio
 import time
-from typing import Any, Dict, Optional
-from fastapi import Request, Response
+from typing import Any
+from fastapi import Request
 
 # Import monitoring components
 from monitoring.collector import (
@@ -20,11 +20,8 @@ from monitoring.collector import (
     track_duration
 )
 from monitoring.middleware import (
-    MetricsMiddleware,
-    MetricsContext,
     track_metrics
 )
-from monitoring.exporters import create_metrics_app
 
 
 # Example 1: Basic tool with manual metric recording
@@ -36,7 +33,7 @@ class BasicToolExample:
         # Get the default collector
         self.collector = MetricsRegistry.get_instance().get_default_collector()
     
-    async def process_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_request(self, request_data: dict[str, Any]) -> dict[str, Any]:
         """
         Process a request with manual metric recording.
         
@@ -149,7 +146,7 @@ def create_example_fastapi_app():
     
     class QueryRequest(BaseModel):
         query: str
-        max_results: Optional[int] = 10
+        max_results: int | None = 10
     
     class QueryResponse(BaseModel):
         results: list

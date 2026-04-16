@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +22,15 @@ class DeadLetterEntry:
     operation: str
     tool_name: str
     extension_name: str
-    params: Dict[str, Any]
+    params: dict[str, Any]
     error: str
     timestamp: float
     status: str = "pending"  # pending, processed, failed
     attempts: int = 0
-    processed_at: Optional[float] = None
-    result: Optional[Dict[str, Any]] = None
+    processed_at: float | None = None
+    result: dict[str, Any] | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
@@ -64,7 +64,7 @@ class DeadLetterQueue:
         operation: str,
         tool_name: str,
         extension_name: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         error: str
     ) -> str:
         """
@@ -92,7 +92,7 @@ class DeadLetterQueue:
         )
         
         entry_path = self.queue_dir / f"{entry_id}.json"
-        with open(entry_path, "w") as f:
+        with Path(entry_path).open("w") as f:
             json.dump(entry.to_dict(), f, indent=2)
         
         logger.info(f"Added to DLQ: {operation} on {tool_name}/{extension_name}")
@@ -102,7 +102,7 @@ class DeadLetterQueue:
         
         return entry_id
     
-    def get_entry(self, entry_id: str) -> Optional[DeadLetterEntry]:
+    def get_entry(self, entry_id: str) -> DeadLetterEntry | None:
         """
         Get a specific entry by ID.
         
@@ -118,7 +118,7 @@ class DeadLetterQueue:
             return None
         
         try:
-            with open(entry_path, "r") as f:
+            with Path(entry_path).open("r") as f:
                 data = json.load(f)
             return DeadLetterEntry(**data)
         except Exception as e:
@@ -127,10 +127,10 @@ class DeadLetterQueue:
     
     def get_pending(
         self,
-        tool_name: Optional[str] = None,
-        operation: Optional[str] = None,
+        tool_name: str | None = None,
+        operation: str | None = None,
         limit: int = 100
-    ) -> List[DeadLetterEntry]:
+    ) -> list[DeadLetterEntry]:
         """
         Get pending entries.
         
@@ -149,7 +149,7 @@ class DeadLetterQueue:
                 break
             
             try:
-                with open(path, "r") as f:
+                with Path(path).open("r") as f:
                     data = json.load(f)
                 
                 entry = DeadLetterEntry(**data)
@@ -172,9 +172,9 @@ class DeadLetterQueue:
     
     def get_all(
         self,
-        status: Optional[str] = None,
+        status: str | None = None,
         limit: int = 100
-    ) -> List[DeadLetterEntry]:
+    ) -> list[DeadLetterEntry]:
         """
         Get all entries, optionally filtered by status.
         
@@ -192,7 +192,7 @@ class DeadLetterQueue:
                 break
             
             try:
-                with open(path, "r") as f:
+                with Path(path).open("r") as f:
                     data = json.load(f)
                 
                 entry = DeadLetterEntry(**data)
@@ -210,7 +210,7 @@ class DeadLetterQueue:
     def mark_processed(
         self,
         entry_id: str,
-        result: Optional[Dict[str, Any]] = None
+        result: dict[str, Any] | None = None
     ) -> bool:
         """
         Mark an entry as processed.
@@ -228,7 +228,7 @@ class DeadLetterQueue:
             return False
         
         try:
-            with open(entry_path, "r") as f:
+            with Path(entry_path).open("r") as f:
                 data = json.load(f)
             
             data["status"] = "processed"
@@ -236,7 +236,7 @@ class DeadLetterQueue:
             if result:
                 data["result"] = result
             
-            with open(entry_path, "w") as f:
+            with Path(entry_path).open("w") as f:
                 json.dump(data, f, indent=2)
             
             logger.info(f"Marked DLQ entry {entry_id} as processed")
@@ -262,7 +262,7 @@ class DeadLetterQueue:
             return False
         
         try:
-            with open(entry_path, "r") as f:
+            with Path(entry_path).open("r") as f:
                 data = json.load(f)
             
             data["status"] = "failed"
@@ -270,7 +270,7 @@ class DeadLetterQueue:
             data["error"] = error
             data["attempts"] = data.get("attempts", 0) + 1
             
-            with open(entry_path, "w") as f:
+            with Path(entry_path).open("w") as f:
                 json.dump(data, f, indent=2)
             
             logger.info(f"Marked DLQ entry {entry_id} as failed")
@@ -298,7 +298,7 @@ class DeadLetterQueue:
         
         return False
     
-    def clear(self, status: Optional[str] = None) -> int:
+    def clear(self, status: str | None = None) -> int:
         """
         Clear entries from the queue.
         
@@ -313,7 +313,7 @@ class DeadLetterQueue:
         for path in self.queue_dir.glob("*.json"):
             try:
                 if status:
-                    with open(path, "r") as f:
+                    with Path(path).open("r") as f:
                         data = json.load(f)
                     if data.get("status") != status:
                         continue
@@ -327,7 +327,7 @@ class DeadLetterQueue:
         logger.info(f"Cleared {count} DLQ entries")
         return count
     
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """
         Get queue statistics.
         
@@ -338,7 +338,7 @@ class DeadLetterQueue:
         
         for path in self.queue_dir.glob("*.json"):
             try:
-                with open(path, "r") as f:
+                with Path(path).open("r") as f:
                     data = json.load(f)
                 
                 status = data.get("status", "unknown")

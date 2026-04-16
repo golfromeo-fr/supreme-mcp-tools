@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class ServiceRegistryType(Enum):
 class RedisConfig:
     """Redis configuration for shared state."""
     url: str = "redis://localhost:6379"
-    password: Optional[str] = None
+    password: str | None = None
     db: int = 0
     max_connections: int = 10
     socket_timeout: float = 5.0
@@ -45,8 +45,8 @@ class RedisConfig:
 class ConsulConfig:
     """Consul configuration for service discovery."""
     url: str = "http://localhost:8500"
-    token: Optional[str] = None
-    datacenter: Optional[str] = None
+    token: str | None = None
+    datacenter: str | None = None
     health_check_interval: int = 10
 
 
@@ -71,7 +71,7 @@ class HAConfig:
     """
     # Replication
     replicas: int = 1
-    instance_id: Optional[str] = None
+    instance_id: str | None = None
     
     # Session store
     session_store: SessionStoreType = SessionStoreType.MEMORY
@@ -92,7 +92,7 @@ class HAConfig:
     state_sync_interval: int = 5
     state_sync_enabled: bool = True
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "replicas": self.replicas,
@@ -118,7 +118,7 @@ class HAConfig:
         path = Path(config_file).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(path, "w") as f:
+        with Path(path).open("w") as f:
             json.dump(self.to_dict(), f, indent=2)
         
         logger.info(f"Saved HA config to {path}")
@@ -140,7 +140,7 @@ class HAConfig:
             logger.warning(f"Config file not found: {path}")
             return cls()
         
-        with open(path, "r") as f:
+        with Path(path).open("r") as f:
             data = json.load(f)
         
         config = cls()
@@ -214,7 +214,7 @@ class SharedStateManager:
             await self._redis.close()
             self._connected = False
     
-    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """
         Set a shared state value.
         
@@ -266,7 +266,7 @@ class SharedStateManager:
             return result > 0
         return False
     
-    async def keys(self, pattern: str = "*") -> List[str]:
+    async def keys(self, pattern: str = "*") -> list[str]:
         """
         Get keys matching a pattern.
         

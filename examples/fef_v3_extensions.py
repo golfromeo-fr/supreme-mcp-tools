@@ -9,12 +9,12 @@ using the Flexible Extensibility Framework V3.
 import asyncio
 import logging
 import time
-from typing import Any, Dict
+from typing import Any
 
 # Add parent directory to path
 import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import pathlib
+sys.path.insert(0, (pathlib.Path(__file__).parent / "..").resolve())
 
 from launcher.tool_extensions import Extension, ExtensionRegistry, ExtensionType, ExtensionHTTPServer
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Example Extension Handlers
 # ============================================================================
 
-def get_request_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_request_stats(params: dict[str, Any]) -> dict[str, Any]:
     """
     Data source: Get request statistics.
     
@@ -52,7 +52,7 @@ def get_request_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_cache_stats(params: dict[str, Any]) -> dict[str, Any]:
     """
     Data source: Get cache statistics.
     
@@ -72,7 +72,7 @@ def get_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def set_cache_config(params: Dict[str, Any]) -> Dict[str, Any]:
+def set_cache_config(params: dict[str, Any]) -> dict[str, Any]:
     """
     Mutator: Update cache configuration.
     
@@ -96,7 +96,7 @@ def set_cache_config(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def set_api_key(params: Dict[str, Any]) -> Dict[str, Any]:
+def set_api_key(params: dict[str, Any]) -> dict[str, Any]:
     """
     Mutator: Update API key.
     
@@ -120,7 +120,7 @@ def set_api_key(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def clear_cache(params: Dict[str, Any]) -> Dict[str, Any]:
+def clear_cache(params: dict[str, Any]) -> dict[str, Any]:
     """
     Action: Clear the cache.
     
@@ -144,7 +144,7 @@ def clear_cache(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reset_counters(params: Dict[str, Any]) -> Dict[str, Any]:
+def reset_counters(params: dict[str, Any]) -> dict[str, Any]:
     """
     Action: Reset all counters.
     

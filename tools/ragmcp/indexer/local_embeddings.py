@@ -16,7 +16,7 @@ Models used: BAAI/bge-base-en or BAAI/bge-small-en
 """
 
 from sentence_transformers import SentenceTransformer
-from typing import List, Optional, Dict, Any
+from typing import Any
 import logging
 import os
 import numpy as np
@@ -24,7 +24,7 @@ import numpy as np
 logger = logging.getLogger("local_embeddings")
 
 # Global model cache to avoid reloading
-_model_cache: Dict[str, SentenceTransformer] = {}
+_model_cache: dict[str, SentenceTransformer] = {}
 
 # Recommended models (ranked by quality vs speed tradeoff)
 MODELS = {
@@ -38,8 +38,8 @@ DEFAULT_MODEL = "gte-qwen"
 
 
 def get_local_model(
-    model_name: Optional[str] = None,
-    cache_folder: Optional[str] = None
+    model_name: str | None = None,
+    cache_folder: str | None = None
 ) -> SentenceTransformer:
     """
     Get or load local embedding model (cached in memory).
@@ -110,8 +110,8 @@ def get_local_model(
 
 
 def generate_local_embeddings(
-    texts: List[str],
-    model_name: Optional[str] = None,
+    texts: list[str],
+    model_name: str | None = None,
     normalize: bool = True,
     batch_size: int = 32,
     show_progress: bool = False
@@ -162,9 +162,9 @@ def generate_local_embeddings(
 
 def generate_local_embedding(
     text: str,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
     normalize: bool = True
-) -> List[float]:
+) -> list[float]:
     """
     Generate a single embedding (convenience wrapper).
 
@@ -185,7 +185,7 @@ def generate_local_embedding(
     return embeddings[0].tolist()
 
 
-def get_model_info(model_name: Optional[str] = None) -> Dict[str, Any]:
+def get_model_info(model_name: str | None = None) -> dict[str, Any]:
     """
     Get information about a model without loading it fully.
 

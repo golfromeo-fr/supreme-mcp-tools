@@ -9,7 +9,8 @@ import logging
 import json
 from pathlib import Path
 from functools import wraps
-from typing import Optional, Callable, Any, Tuple
+from typing import Any
+from collections.abc import Callable
 
 from nicegui import ui, app
 
@@ -30,7 +31,7 @@ def _load_ui_config() -> dict:
     for path in possible_paths:
         if path.exists():
             try:
-                with open(path) as f:
+                with Path(path).open() as f:
                     return json.load(f)
             except Exception:
                 pass
@@ -57,7 +58,7 @@ _DEFAULT_PASSWORD = os.environ.get("MCP_UI_PASSWORD", "admin")
 _DEFAULT_USERNAME = _get_default_username()
 
 
-def get_credentials() -> tuple[Optional[str], Optional[str]]:
+def get_credentials() -> tuple[str | None, str | None]:
     """
     Get username and password from environment variables.
     

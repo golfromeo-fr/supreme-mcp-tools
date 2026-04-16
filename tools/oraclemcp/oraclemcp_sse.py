@@ -9,8 +9,6 @@ FEF V3 Integration:
 - Actions: clear_cache, reset_connections
 """
 
-import anyio
-import click
 import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.sse import SseServerTransport
@@ -21,9 +19,8 @@ import os
 import logging
 import json
 import re
-import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 from dotenv import load_dotenv
 import openai
 
@@ -84,7 +81,7 @@ if not initialize_server():
 
 # Add parent directory to path for FEF V3 imports
 import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from tools.fef_integration import (
@@ -120,7 +117,7 @@ def get_pool_config() -> dict:
     }
 
 
-def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_query_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get query statistics."""
     avg_query_time = (
         oraclemcp_metrics["total_query_time_ms"] / oraclemcp_metrics["query_count"]
@@ -134,7 +131,7 @@ def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_connection_pool_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get connection pool statistics."""
     return {
         "active_connections": oraclemcp_metrics["connection_count"],
@@ -143,7 +140,7 @@ def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_schema_cache_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get schema cache statistics."""
     return {
         "cached_tables": len(table_columns_cache) if 'table_columns_cache' in globals() else 0,
@@ -151,7 +148,7 @@ def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reset_connections(params: Dict[str, Any]) -> Dict[str, Any]:
+def reset_connections(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Reset database connections."""
     oraclemcp_metrics["connection_count"] = 0
     oraclemcp_metrics["connection_errors"] = 0
@@ -328,7 +325,7 @@ def get_db_connection():
         try:
             user_id = os.getenv('USERID')
             if not user_id:
-                raise EnvironmentError("USERID environment variable not set")
+                raise OSError("USERID environment variable not set")
 
             login, password = user_id.split('/')
 
@@ -336,7 +333,7 @@ def get_db_connection():
             db_port = int(os.getenv('DB_PORT') or 1521)  # Default to 1521 if DB_PORT is not set
             db_service_name = os.getenv('DB_SERVICE_NAME')
             if not db_host or not db_port or not db_service_name:
-                raise EnvironmentError("Database connection environment variables not set")
+                raise OSError("Database connection environment variables not set")
 
             dsn_tns = oracledb.makedsn(db_host, db_port, service_name=db_service_name)
             connection = oracledb.connect(user=login, password=password, dsn=dsn_tns)
@@ -715,7 +712,7 @@ async def handle_optimize_sql_with_ai_tool(arguments: dict) -> list[types.TextCo
                 table_descriptions = None
         # Load optimization rules
         optimization_path = SCRIPT_DIR / "optimization.json"
-        with open(optimization_path, "r", encoding="utf-8") as f:
+        with Path(optimization_path).open("r", encoding="utf-8") as f:
             rules = json.load(f)
         # Prepare prompt for the AI
         prompt = "You are an expert SQL query optimizer."
@@ -791,7 +788,7 @@ async def handle_get_sql_optimization_rules_tool(arguments: dict) -> list[types.
     """Handler for returning SQL optimization rules from optimization.json."""
     try:
         optimization_path = SCRIPT_DIR / "optimization.json"
-        with open(optimization_path, "r", encoding="utf-8") as f:
+        with Path(optimization_path).open("r", encoding="utf-8") as f:
             rules = json.load(f)
         return [types.TextContent(type="text", text=json.dumps(rules, ensure_ascii=False, indent=2))]
     except Exception as e:
@@ -802,7 +799,7 @@ async def handle_get_pro_c_rules_tool(arguments: dict) -> list[types.TextContent
     """Handler for returning Pro*C coding rules from proc_rules.md."""
     try:
         proc_rules_path = SCRIPT_DIR / "proc_rules.md"
-        with open(proc_rules_path, "r", encoding="utf-8") as f:
+        with Path(proc_rules_path).open("r", encoding="utf-8") as f:
             rules = f.read()
         return [types.TextContent(type="text", text=rules)]
     except Exception as e:

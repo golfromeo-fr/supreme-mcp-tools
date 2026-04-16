@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Cache for config.json schemas
-_schema_cache: Dict[str, Dict[str, Any]] = {}
+_schema_cache: dict[str, dict[str, Any]] = {}
 
 
 def find_env_file() -> Path:
@@ -43,7 +43,7 @@ def find_env_file() -> Path:
     return root_env
 
 
-def find_tool_env_file(tool_name: str) -> Optional[Path]:
+def find_tool_env_file(tool_name: str) -> Path | None:
     """
     Check for a legacy per-tool .env file.
 
@@ -74,7 +74,7 @@ def mask_value(value: str) -> str:
     return f"****{value[-4:]}"
 
 
-def load_env_schema(tool_name: str) -> Dict[str, Dict[str, Any]]:
+def load_env_schema(tool_name: str) -> dict[str, dict[str, Any]]:
     """
     Load environment variable schema from a tool's config.json.
 
@@ -98,7 +98,7 @@ def load_env_schema(tool_name: str) -> Dict[str, Dict[str, Any]]:
         return {}
 
     try:
-        with open(config_path) as f:
+        with Path(config_path).open() as f:
             config = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"Failed to read config.json for {tool_name}: {e}")
@@ -115,7 +115,7 @@ def load_env_schema(tool_name: str) -> Dict[str, Dict[str, Any]]:
     return schema
 
 
-def _normalize_env_schema(env_section: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _normalize_env_schema(env_section: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
     Normalize env section to the standard object-per-variable format.
 
@@ -154,7 +154,7 @@ def _normalize_env_schema(env_section: Dict[str, Any]) -> Dict[str, Dict[str, An
     return normalized
 
 
-def _migrate_list_format(env_section: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _migrate_list_format(env_section: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
     Convert legacy list format to standard object format.
 
@@ -184,7 +184,7 @@ def _migrate_list_format(env_section: Dict[str, Any]) -> Dict[str, Dict[str, Any
     return normalized
 
 
-def get_env_values(tool_name: str) -> Dict[str, Dict[str, Any]]:
+def get_env_values(tool_name: str) -> dict[str, dict[str, Any]]:
     """
     Get environment variable values for a tool with metadata.
 
@@ -237,7 +237,7 @@ def get_env_values(tool_name: str) -> Dict[str, Dict[str, Any]]:
     return result
 
 
-def get_all_env_values() -> Dict[str, Dict[str, Dict[str, Any]]]:
+def get_all_env_values() -> dict[str, dict[str, dict[str, Any]]]:
     """
     Get environment variable values for all tools that have config.json.
 
@@ -264,7 +264,7 @@ def get_all_env_values() -> Dict[str, Dict[str, Dict[str, Any]]]:
     return result
 
 
-def _find_var_schema(var_name: str) -> Optional[Dict[str, Any]]:
+def _find_var_schema(var_name: str) -> dict[str, Any] | None:
     """
     Find the schema for a variable by searching all tool config.json files.
 
@@ -286,7 +286,7 @@ def _find_var_schema(var_name: str) -> Optional[Dict[str, Any]]:
             continue
 
         try:
-            with open(config_path) as f:
+            with Path(config_path).open() as f:
                 config = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
@@ -300,7 +300,7 @@ def _find_var_schema(var_name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _validate_env_value(var_name: str, value: str, schema: Dict[str, Any]) -> None:
+def _validate_env_value(var_name: str, value: str, schema: dict[str, Any]) -> None:
     """
     Validate a value against a variable's schema.
 
@@ -408,12 +408,12 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
     # Create file if it doesn't exist
     if not env_path.exists():
         env_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(env_path, "w") as f:
+        with Path(env_path).open("w") as f:
             f.write(f"{var_name}={value}\n")
         logger.info(f"Created .env file at {env_path} with {var_name}")
         return
 
-    with open(env_path, "r") as f:
+    with Path(env_path).open("r") as f:
         lines = f.readlines()
 
     # Find the last active (uncommented) line for this variable
@@ -444,7 +444,7 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
         lines.append(new_line)
         logger.info(f"Added {var_name} to .env")
 
-    with open(env_path, "w") as f:
+    with Path(env_path).open("w") as f:
         f.writelines(lines)
 
 
@@ -459,7 +459,7 @@ def _comment_out_env_line(var_name: str, env_path: Path) -> None:
     if not env_path.exists():
         return
 
-    with open(env_path, "r") as f:
+    with Path(env_path).open("r") as f:
         lines = f.readlines()
 
     now = datetime.now().strftime("%Y-%m-%d")
@@ -472,7 +472,7 @@ def _comment_out_env_line(var_name: str, env_path: Path) -> None:
             modified = True
 
     if modified:
-        with open(env_path, "w") as f:
+        with Path(env_path).open("w") as f:
             f.writelines(lines)
         logger.info(f"Commented out {var_name} in .env")
 
@@ -482,7 +482,7 @@ def clear_schema_cache() -> None:
     _schema_cache.clear()
 
 
-def get_tool_names() -> List[str]:
+def get_tool_names() -> list[str]:
     """
     Get list of tool names that have config.json files.
 
@@ -500,7 +500,7 @@ def get_tool_names() -> List[str]:
     )
 
 
-def load_auth_config(tool_name: str) -> Dict[str, Any]:
+def load_auth_config(tool_name: str) -> dict[str, Any]:
     """
     Load auth config from tool's config.json.
 
@@ -516,7 +516,7 @@ def load_auth_config(tool_name: str) -> Dict[str, Any]:
         return {}
 
     try:
-        with open(config_path) as f:
+        with Path(config_path).open() as f:
             config = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"Failed to read config.json for {tool_name}: {e}")

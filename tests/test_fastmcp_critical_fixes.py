@@ -6,7 +6,6 @@ Covers: bug fixes, security, thread safety, type hints.
 Run with: pytest tests/test_fastmcp_critical_fixes.py -v
 """
 import sys
-import os
 import time
 import threading
 from pathlib import Path

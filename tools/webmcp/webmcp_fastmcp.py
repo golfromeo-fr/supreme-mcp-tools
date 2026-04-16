@@ -10,7 +10,7 @@ import re
 import hashlib
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlencode, urlparse
 import httpx
 
@@ -55,19 +55,19 @@ webmcp_metrics = {
     "max_fetch_time_ms": 0.0,
 }
 
-def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_search_stats(params: dict[str, Any]) -> dict[str, Any]:
     avg_search_time = webmcp_metrics["total_search_time_ms"] / webmcp_metrics["search_count"] if webmcp_metrics["search_count"] > 0 else 0.0
     return {"total_searches": webmcp_metrics["search_count"], "search_errors": webmcp_metrics["search_errors"], "avg_search_time_ms": round(avg_search_time, 2)}
 
-def get_fetch_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_fetch_stats(params: dict[str, Any]) -> dict[str, Any]:
     avg_fetch_time = webmcp_metrics["total_fetch_time_ms"] / webmcp_metrics["fetch_count"] if webmcp_metrics["fetch_count"] > 0 else 0.0
     return {"total_fetches": webmcp_metrics["fetch_count"], "fetch_errors": webmcp_metrics["fetch_errors"], "avg_fetch_time_ms": round(avg_fetch_time, 2)}
 
-def get_search_history(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_search_history(params: dict[str, Any]) -> dict[str, Any]:
     limit = params.get("limit", 10)
     return {"recent_searches": webmcp_metrics.get("recent_searches", [])[-limit:], "total": len(webmcp_metrics.get("recent_searches", []))}
 
-def get_fetch_cache_hits(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_fetch_cache_hits(params: dict[str, Any]) -> dict[str, Any]:
     cache_hits = webmcp_metrics.get("cache_hits", 0)
     cache_misses = webmcp_metrics.get("cache_misses", 0)
     total = cache_hits + cache_misses
@@ -105,7 +105,7 @@ class SimpleCache:
         self.lock = threading.RLock()
         self.default_ttl = default_ttl
     
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         with self.lock:
             if key in self.cache:
                 content, expiry = self.cache[key]
@@ -115,7 +115,7 @@ class SimpleCache:
                     del self.cache[key]
         return None
     
-    def set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
+    def set(self, key: str, value: str, ttl: int | None = None) -> None:
         with self.lock:
             expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
             self.cache[key] = (value, expiry)
@@ -462,7 +462,7 @@ async def brave_search_api(query: str, count: int = 10, timeout: float = 30.0, l
 
         return f"Error: {error_msg}"
 @mcp.tool()
-async def google_search_api(query: str, engine: str = "google", google_domain: str = "google.com", hl: str = "en", gl: str = "us", location: Optional[str] = None, start: int = 0, num: int = 10, safe: str = "active", device: Optional[str] = None, llm_mode: bool = False) -> str:
+async def google_search_api(query: str, engine: str = "google", google_domain: str = "google.com", hl: str = "en", gl: str = "us", location: str | None = None, start: int = 0, num: int = 10, safe: str = "active", device: str | None = None, llm_mode: bool = False) -> str:
     """
     Handler for Google Search API using SerpAPI.
     """
@@ -654,7 +654,7 @@ async def google_search_api(query: str, engine: str = "google", google_domain: s
 
         return f"Error: {error_msg}"
 @mcp.tool()
-async def post_url(url: str, data: Optional[str] = None, headers: Optional[dict] = None, timeout: float = 30.0) -> str:
+async def post_url(url: str, data: str | None = None, headers: dict | None = None, timeout: float = 30.0) -> str:
     """Handler for sending POST requests to a URL with JSON payload support."""
     logger.debug(f"Processing post_url tool with url: {url}")
 
@@ -717,7 +717,7 @@ async def post_url(url: str, data: Optional[str] = None, headers: Optional[dict]
 
         return error_msg
 @mcp.tool()
-async def fetch_url(url: str, timeout: float = 30.0, max_length: int = 50000, start_index: int = 0, format: str = "markdown", follow_redirects: bool = True, headers: Optional[dict] = None, response_type: str = "auto", include_images: bool = True, include_tables: bool = True, include_links: bool = True, use_cache: bool = False, cache_ttl: int = 3600, max_size: int = 10485760) -> str:
+async def fetch_url(url: str, timeout: float = 30.0, max_length: int = 50000, start_index: int = 0, format: str = "markdown", follow_redirects: bool = True, headers: dict | None = None, response_type: str = "auto", include_images: bool = True, include_tables: bool = True, include_links: bool = True, use_cache: bool = False, cache_ttl: int = 3600, max_size: int = 10485760) -> str:
     """
     Enhanced URL fetch tool with comprehensive content processing.
     Based on best practices from mcp-server-fetch and html2md-mcp.

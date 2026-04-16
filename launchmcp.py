@@ -11,7 +11,6 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import List, Optional
 import uvicorn
 
 from launcher import (
@@ -22,7 +21,6 @@ from launcher import (
     ToolDiscovery,
     ToolMetadata,
     ServerStartupError,
-    DiscoveryError,
     PortConflictError,
     LauncherError,
 )
@@ -31,7 +29,7 @@ from launcher.service_registry import ServiceRegistry
 
 # Import monitoring modules
 from monitoring.config import load_monitoring_config, MonitoringConfig
-from monitoring.collector import MetricsCollector, MetricsRegistry
+from monitoring.collector import MetricsRegistry
 from monitoring.exporters import create_metrics_app
 
 
@@ -44,10 +42,10 @@ class JsonFormatter(logging.Formatter):
     
     def format(self, record: logging.LogRecord) -> str:
         import json
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -238,12 +236,12 @@ SERVER_STARTUP_TIMEOUT = 30
 
 
 async def start_servers(
-    tools: List[ToolMetadata],
+    tools: list[ToolMetadata],
     port_manager: PortManager,
     server_manager: ServerManager,
     config: Config,
-    service_registry: Optional[ServiceRegistry] = None
-) -> List[ToolMetadata]:
+    service_registry: ServiceRegistry | None = None
+) -> list[ToolMetadata]:
     """
     Start all MCP tool servers.
     
@@ -280,7 +278,7 @@ async def start_servers(
     # Start servers concurrently
     logging.info(f"Starting {len(ports)} servers...")
     
-    async def start_single_server(tool: ToolMetadata) -> Optional[ServerInstance]:
+    async def start_single_server(tool: ToolMetadata) -> ServerInstance | None:
         """Start a single server with timeout."""
         port = ports.get(tool.name)
         if port is None:
@@ -381,11 +379,11 @@ async def monitor_servers(server_manager: ServerManager, shutdown_event: asyncio
 
 
 # Global variables for monitoring
-_metrics_server_task: Optional[asyncio.Task] = None
-_monitoring_config: Optional[MonitoringConfig] = None
+_metrics_server_task: asyncio.Task | None = None
+_monitoring_config: MonitoringConfig | None = None
 
 
-def get_monitoring_config_path() -> Optional[Path]:
+def get_monitoring_config_path() -> Path | None:
     """
     Get the path to the monitoring configuration file.
     
@@ -529,7 +527,7 @@ def _get_management_port_from_config() -> int:
 async def start_management_api_server(
     shutdown_event: asyncio.Event,
     port: int = None,
-    service_registry: Optional[ServiceRegistry] = None
+    service_registry: ServiceRegistry | None = None
 ) -> None:
     """
     Start the centralized management API server.
@@ -595,8 +593,8 @@ async def start_management_api_server(
 _shutdown_in_progress = False
 
 # Management server task
-_management_server_task: Optional[asyncio.Task] = None
-_service_registry: Optional[ServiceRegistry] = None
+_management_server_task: asyncio.Task | None = None
+_service_registry: ServiceRegistry | None = None
 
 
 async def main() -> int:
@@ -700,7 +698,7 @@ async def main() -> int:
     
     # Create service registry if management is enabled (default)
     # Management server is enabled by default, use --no-management to disable
-    service_registry: Optional[ServiceRegistry] = None
+    service_registry: ServiceRegistry | None = None
     if not args.no_management:
         service_registry = ServiceRegistry()
         await service_registry.start()

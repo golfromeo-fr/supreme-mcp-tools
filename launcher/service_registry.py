@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 
@@ -34,7 +34,7 @@ class ServiceInfo:
     mcp_port: int
     status: str = "unknown"  # healthy, degraded, unhealthy, unknown
     last_check: float = 0.0
-    capabilities: Optional[Dict[str, Any]] = None
+    capabilities: dict[str, Any] | None = None
     registered_at: float = field(default_factory=time.time)
 
 
@@ -61,11 +61,11 @@ class ServiceRegistry:
         self.health_check_interval = health_check_interval
         self.health_check_timeout = health_check_timeout
         
-        self._services: Dict[str, ServiceInfo] = {}
+        self._services: dict[str, ServiceInfo] = {}
         self._lock = asyncio.Lock()
-        self._health_check_task: Optional[asyncio.Task] = None
+        self._health_check_task: asyncio.Task | None = None
         self._running = False
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
     
     async def start(self) -> None:
         """Start the health check background task."""
@@ -100,7 +100,7 @@ class ServiceRegistry:
         name: str,
         management_url: str,
         mcp_port: int,
-        capabilities: Optional[Dict[str, Any]] = None
+        capabilities: dict[str, Any] | None = None
     ) -> None:
         """
         Register a tool service.
@@ -144,7 +144,7 @@ class ServiceRegistry:
                 return True
         return False
     
-    async def list_tools(self) -> List[str]:
+    async def list_tools(self) -> list[str]:
         """
         List all registered tool names.
         
@@ -154,7 +154,7 @@ class ServiceRegistry:
         async with self._lock:
             return list(self._services.keys())
     
-    async def get_endpoint(self, name: str) -> Optional[ServiceInfo]:
+    async def get_endpoint(self, name: str) -> ServiceInfo | None:
         """
         Get endpoint information for a tool.
         
@@ -167,7 +167,7 @@ class ServiceRegistry:
         async with self._lock:
             return self._services.get(name)
     
-    async def get_all_services(self) -> Dict[str, ServiceInfo]:
+    async def get_all_services(self) -> dict[str, ServiceInfo]:
         """
         Get all registered services.
         
@@ -180,7 +180,7 @@ class ServiceRegistry:
     async def update_capabilities(
         self,
         name: str,
-        capabilities: Dict[str, Any]
+        capabilities: dict[str, Any]
     ) -> bool:
         """
         Update capabilities for a registered service.

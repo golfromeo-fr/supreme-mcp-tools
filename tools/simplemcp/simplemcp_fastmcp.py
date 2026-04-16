@@ -11,7 +11,7 @@ import os
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict
+from typing import Any
 
 # ============================================================================
 # Port Configuration (from ports.json only)
@@ -79,7 +79,7 @@ metrics = {
 # FEF V3 Data Sources
 # ============================================================================
 
-def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_tool_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get tool usage statistics."""
     return {
         "double_count": metrics["double_count"],
@@ -93,7 +93,7 @@ def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_api_response_times(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get API response time statistics."""
     has_calls = metrics["total_tool_calls"] > 0
     return {

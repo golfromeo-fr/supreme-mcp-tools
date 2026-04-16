@@ -13,7 +13,7 @@ import time
 import json
 import re
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from typing import Any
 from pathlib import Path
 
 import oracledb
@@ -93,7 +93,7 @@ metrics = {
 # FEF V3 Data Sources
 # ============================================================================
 
-def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_query_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get query statistics."""
     avg_query_time = (
         metrics["total_query_time_ms"] / metrics["query_count"]
@@ -107,7 +107,7 @@ def get_query_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_connection_pool_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get connection pool statistics."""
     return {
         "active_connections": metrics["connection_count"],
@@ -116,7 +116,7 @@ def get_connection_pool_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_schema_cache_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get schema cache statistics."""
     return {
         "cached_tables": len(table_columns_cache) if 'table_columns_cache' in globals() else 0,
@@ -124,7 +124,7 @@ def get_schema_cache_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reset_connections(params: Dict[str, Any]) -> Dict[str, Any]:
+def reset_connections(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Reset database connections."""
     metrics["connection_count"] = 0
     metrics["connection_errors"] = 0
@@ -135,7 +135,7 @@ def reset_connections(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def clear_cache(params: Dict[str, Any]) -> Dict[str, Any]:
+def clear_cache(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Clear schema cache."""
     global table_columns_cache, schema_cache
     table_columns_cache = {}
@@ -182,7 +182,7 @@ def get_db_connection():
         try:
             user_id = os.getenv('USERID')
             if not user_id:
-                raise EnvironmentError("USERID environment variable not set")
+                raise OSError("USERID environment variable not set")
 
             login, password = user_id.split('/')
 
@@ -190,7 +190,7 @@ def get_db_connection():
             db_port = int(os.getenv('DB_PORT') or 1521)
             db_service_name = os.getenv('DB_SERVICE_NAME')
             if not db_host or not db_port or not db_service_name:
-                raise EnvironmentError("Database connection environment variables not set")
+                raise OSError("Database connection environment variables not set")
 
             dsn_tns = oracledb.makedsn(db_host, db_port, service_name=db_service_name)
             connection = oracledb.connect(user=login, password=password, dsn=dsn_tns)
@@ -581,7 +581,7 @@ async def get_sql_optimization_rules() -> str:
     start_time = time.perf_counter()
     try:
         optimization_path = SCRIPT_DIR / "optimization.json"
-        with open(optimization_path, "r", encoding="utf-8") as f:
+        with Path(optimization_path).open("r", encoding="utf-8") as f:
             rules = json.load(f)
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         metrics["query_count"] += 1
@@ -702,7 +702,7 @@ async def optimize_sql_with_ai(sql: str) -> str:
                 logger.error(f"Error fetching table schemas for AI optimization: {e}")
 
         optimization_path = SCRIPT_DIR / "optimization.json"
-        with open(optimization_path, "r", encoding="utf-8") as f:
+        with Path(optimization_path).open("r", encoding="utf-8") as f:
             rules = json.load(f)
 
         prompt = "You are an expert SQL query optimizer."
@@ -772,7 +772,7 @@ async def get_proc_rules() -> str:
     start_time = time.perf_counter()
     try:
         proc_rules_path = SCRIPT_DIR / "proc_rules.md"
-        with open(proc_rules_path, "r", encoding="utf-8") as f:
+        with Path(proc_rules_path).open("r", encoding="utf-8") as f:
             rules = f.read()
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         metrics["query_count"] += 1

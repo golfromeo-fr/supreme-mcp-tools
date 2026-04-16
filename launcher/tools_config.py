@@ -9,7 +9,6 @@ import json
 import asyncio
 import httpx
 from pathlib import Path
-from typing import Dict, List, Optional
 
 # Default config directory
 _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "supreme-mcp-tools"
@@ -21,7 +20,7 @@ def _ensure_config_dir() -> None:
     _DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_tools_config(config_path: Optional[Path] = None) -> Dict:
+def load_tools_config(config_path: Path | None = None) -> dict:
     """
     Load tools configuration from JSON file.
 
@@ -38,13 +37,13 @@ def load_tools_config(config_path: Optional[Path] = None) -> Dict:
         return {"disabled_tools": {}, "tools": {}, "version": 1}
 
     try:
-        with open(path) as f:
+        with Path(path).open() as f:
             return json.load(f)
     except json.JSONDecodeError:
         return {"disabled_tools": {}, "tools": {}, "version": 1}
 
 
-def save_tools_config(config: Dict, config_path: Optional[Path] = None) -> None:
+def save_tools_config(config: dict, config_path: Path | None = None) -> None:
     """
     Save tools configuration to JSON file.
 
@@ -55,11 +54,11 @@ def save_tools_config(config: Dict, config_path: Optional[Path] = None) -> None:
     path = config_path or _DEFAULT_CONFIG_FILE
     _ensure_config_dir()
 
-    with open(path, 'w') as f:
+    with Path(path).open('w') as f:
         json.dump(config, f, indent=2)
 
 
-def get_disabled_tools(server_name: str, config_path: Optional[Path] = None) -> List[str]:
+def get_disabled_tools(server_name: str, config_path: Path | None = None) -> list[str]:
     """
     Get list of disabled tools for a specific MCP server.
 
@@ -74,7 +73,7 @@ def get_disabled_tools(server_name: str, config_path: Optional[Path] = None) -> 
     return config.get("disabled_tools", {}).get(server_name, [])
 
 
-def set_disabled_tools(server_name: str, disabled_list: List[str], config_path: Optional[Path] = None) -> None:
+def set_disabled_tools(server_name: str, disabled_list: list[str], config_path: Path | None = None) -> None:
     """
     Set disabled tools for a specific MCP server.
 
@@ -90,7 +89,7 @@ def set_disabled_tools(server_name: str, disabled_list: List[str], config_path: 
     save_tools_config(config, config_path)
 
 
-def enable_tool(tool_name: str, server_name: str, config_path: Optional[Path] = None) -> None:
+def enable_tool(tool_name: str, server_name: str, config_path: Path | None = None) -> None:
     """
     Enable a specific tool for an MCP server (remove from disabled list).
 
@@ -105,7 +104,7 @@ def enable_tool(tool_name: str, server_name: str, config_path: Optional[Path] = 
         set_disabled_tools(server_name, disabled, config_path)
 
 
-def disable_tool(tool_name: str, server_name: str, config_path: Optional[Path] = None) -> None:
+def disable_tool(tool_name: str, server_name: str, config_path: Path | None = None) -> None:
     """
     Disable a specific tool for an MCP server (add to disabled list).
 
@@ -120,7 +119,7 @@ def disable_tool(tool_name: str, server_name: str, config_path: Optional[Path] =
         set_disabled_tools(server_name, disabled, config_path)
 
 
-def get_all_disabled_tools(config_path: Optional[Path] = None) -> Dict[str, List[str]]:
+def get_all_disabled_tools(config_path: Path | None = None) -> dict[str, list[str]]:
     """
     Get all disabled tools configuration.
 
@@ -134,7 +133,7 @@ def get_all_disabled_tools(config_path: Optional[Path] = None) -> Dict[str, List
     return config.get("disabled_tools", {})
 
 
-def get_server_tools(server_name: str, config_path: Optional[Path] = None) -> List[str]:
+def get_server_tools(server_name: str, config_path: Path | None = None) -> list[str]:
     """
     Get list of known tools for a specific MCP server from config.
 
@@ -149,7 +148,7 @@ def get_server_tools(server_name: str, config_path: Optional[Path] = None) -> Li
     return config.get("tools", {}).get(server_name, [])
 
 
-def set_server_tools(server_name: str, tools_list: List[str], config_path: Optional[Path] = None) -> None:
+def set_server_tools(server_name: str, tools_list: list[str], config_path: Path | None = None) -> None:
     """
     Set the list of tools for a specific MCP server in config.
 
@@ -165,7 +164,7 @@ def set_server_tools(server_name: str, tools_list: List[str], config_path: Optio
     save_tools_config(config, config_path)
 
 
-async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_key: str = None) -> List[str]:
+async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_key: str = None) -> list[str]:
     """
     Discover tools from an MCP server by performing an initialize handshake
     then calling tools/list via the Streamable HTTP transport.
@@ -251,10 +250,10 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_
 
 
 def discover_all_tools(
-    server_urls: Dict[str, str],
+    server_urls: dict[str, str],
     timeout: float = 5.0,
-    auth_keys: Dict[str, str] = None
-) -> Dict[str, List[str]]:
+    auth_keys: dict[str, str] = None
+) -> dict[str, list[str]]:
     """
     Discover tools from all configured MCP servers.
 
@@ -295,11 +294,11 @@ def discover_all_tools(
 
 
 def update_config_with_discovered_tools(
-    server_urls: Dict[str, str],
-    config_path: Optional[Path] = None,
+    server_urls: dict[str, str],
+    config_path: Path | None = None,
     timeout: float = 5.0,
-    auth_keys: Optional[Dict[str, str]] = None
-) -> Dict[str, List[str]]:
+    auth_keys: dict[str, str] | None = None
+) -> dict[str, list[str]]:
     """
     Discover tools from all servers and update the config file.
 
@@ -325,7 +324,7 @@ def update_config_with_discovered_tools(
     return discovered
 
 
-def validate_and_cleanup_config(config_path: Optional[Path] = None) -> Dict[str, List[str]]:
+def validate_and_cleanup_config(config_path: Path | None = None) -> dict[str, list[str]]:
     """
     Validate the config and clean up:
     - Remove disabled tools that no longer exist in the server's tool list
@@ -360,10 +359,10 @@ def validate_and_cleanup_config(config_path: Optional[Path] = None) -> Dict[str,
 
 
 def filter_tools_by_disabled(
-    tools: List[Dict],
+    tools: list[dict],
     server_name: str,
-    config_path: Optional[Path] = None
-) -> List[Dict]:
+    config_path: Path | None = None
+) -> list[dict]:
     """
     Filter a list of tools, removing disabled ones.
 

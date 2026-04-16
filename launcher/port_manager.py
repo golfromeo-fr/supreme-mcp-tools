@@ -14,7 +14,7 @@ Port Types:
 
 import logging
 import socket
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from .errors import PortConflictError
 
@@ -37,14 +37,14 @@ class PortManager:
     
     def __init__(
         self,
-        ports_config: Dict[str, Any],
+        ports_config: dict[str, Any],
         mode: str = "auto",
-        base_port: Optional[int] = None,
-        port_range: Optional[List[int]] = None,
-        manual_ports: Optional[Dict[str, int]] = None,
-        port_ranges: Optional[Dict[str, Tuple[int, int]]] = None,
-        reserved_ports: Optional[Dict[str, int]] = None,
-        manual_ports_by_type: Optional[Dict[str, Dict[str, int]]] = None
+        base_port: int | None = None,
+        port_range: list[int] | None = None,
+        manual_ports: dict[str, int] | None = None,
+        port_ranges: dict[str, tuple[int, int]] | None = None,
+        reserved_ports: dict[str, int] | None = None,
+        manual_ports_by_type: dict[str, dict[str, int]] | None = None
     ):
         """
         Initialize the port manager.
@@ -102,15 +102,15 @@ class PortManager:
         # Legacy port_range for backward compatibility
         self.legacy_port_range = port_range or [8000, 9000]
         
-        self.allocated_ports: Set[int] = set()
-        self.tool_ports: Dict[str, int] = {}
+        self.allocated_ports: set[int] = set()
+        self.tool_ports: dict[str, int] = {}
         # Track next available port per type for auto-allocation
-        self._next_port_by_type: Dict[str, int] = {
+        self._next_port_by_type: dict[str, int] = {
             ptype: ranges[0] for ptype, ranges in self.port_ranges.items()
         }
         self.next_port = self.base_port  # Legacy support
     
-    def _get_range_for_type(self, port_type: str) -> Tuple[int, int]:
+    def _get_range_for_type(self, port_type: str) -> tuple[int, int]:
         """Get the port range for a given port type.
         
         Raises:
@@ -123,11 +123,11 @@ class PortManager:
             )
         return self.port_ranges[port_type]
     
-    def _get_manual_ports_for_type(self, port_type: str) -> Dict[str, int]:
+    def _get_manual_ports_for_type(self, port_type: str) -> dict[str, int]:
         """Get manual ports for a given type."""
         return self.manual_ports_by_type.get(port_type, {})
     
-    def _is_port_available(self, port: int, port_type: Optional[str] = None) -> bool:
+    def _is_port_available(self, port: int, port_type: str | None = None) -> bool:
         """
         Check if a port is available for use.
         
@@ -153,10 +153,10 @@ class PortManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(("0.0.0.0", port))
                 return True
-        except (OSError, socket.error):
+        except OSError:
             return False
     
-    def validate_ranges(self) -> List[str]:
+    def validate_ranges(self) -> list[str]:
         """
         Validate that port ranges don't overlap.
         
@@ -176,7 +176,7 @@ class PortManager:
         
         return errors
     
-    def validate_reserved_ports_in_ranges(self) -> List[str]:
+    def validate_reserved_ports_in_ranges(self) -> list[str]:
         """
         Validate that reserved ports fall within their appropriate ranges.
         
@@ -219,7 +219,7 @@ class PortManager:
         self,
         name: str,
         port_type: str = PortType.MCP,
-        preferred_port: Optional[int] = None
+        preferred_port: int | None = None
     ) -> int:
         """
         Allocate a port for a service.
@@ -314,14 +314,14 @@ class PortManager:
             f"No available ports in range for type {port_type}: [{min_port}, {max_port}]"
         )
     
-    def _get_port_type_for_port(self, port: int) -> Optional[str]:
+    def _get_port_type_for_port(self, port: int) -> str | None:
         """Infer the port type from the port number."""
         for ptype, (min_port, max_port) in self.port_ranges.items():
             if min_port <= port <= max_port:
                 return ptype
         return None
     
-    def release_port(self, tool_name: str) -> Optional[int]:
+    def release_port(self, tool_name: str) -> int | None:
         """
         Release a port allocated to a tool.
         
@@ -356,7 +356,7 @@ class PortManager:
         }
         logger.info("Released all allocated ports")
     
-    def get_port(self, tool_name: str) -> Optional[int]:
+    def get_port(self, tool_name: str) -> int | None:
         """
         Get the port allocated to a tool.
         
@@ -368,7 +368,7 @@ class PortManager:
         """
         return self.tool_ports.get(tool_name)
     
-    def get_all_ports(self, port_type: Optional[str] = None) -> Dict[str, int]:
+    def get_all_ports(self, port_type: str | None = None) -> dict[str, int]:
         """
         Get all port allocations, optionally filtered by type.
         
@@ -389,7 +389,7 @@ class PortManager:
                 result[name] = port
         return result
     
-    def get_ports_by_type(self, port_type: str) -> Dict[str, int]:
+    def get_ports_by_type(self, port_type: str) -> dict[str, int]:
         """
         Get all ports for a specific type.
         
@@ -422,7 +422,7 @@ class PortManager:
         logger.info(f"Reserved system port {port} for {name}")
         return True
     
-    def get_allocated_ports(self) -> Set[int]:
+    def get_allocated_ports(self) -> set[int]:
         """
         Get all currently allocated ports.
         
@@ -477,7 +477,7 @@ class PortManager:
             return True
         return False
     
-    def get_next_available_port(self, port_type: str = PortType.MCP) -> Optional[int]:
+    def get_next_available_port(self, port_type: str = PortType.MCP) -> int | None:
         """
         Get the next available port without allocating it.
         
@@ -497,7 +497,7 @@ class PortManager:
         
         return None
     
-    def get_port_status(self) -> Dict[str, any]:
+    def get_port_status(self) -> dict[str, any]:
         """
         Get status information about port allocation.
         

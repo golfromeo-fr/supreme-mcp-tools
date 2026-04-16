@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Any
+from typing import TYPE_CHECKING, Any
 
 from .logging_config import get_logger, get_trace_id
 
@@ -37,8 +37,8 @@ class AppState:
 
     # Data state
     tools: list = field(default_factory=list)
-    selected_tool: Optional[str] = None
-    selected_tool_detail: Optional[Any] = None  # ToolDetail or similar
+    selected_tool: str | None = None
+    selected_tool_detail: Any | None = None  # ToolDetail or similar
     tool_detail_cache: dict = field(default_factory=dict)  # tool_name -> ToolDetail
     env_variables: list = field(default_factory=list)  # List[EnvVariable] for selected tool
     env_cache: dict = field(default_factory=dict)  # tool_name -> list[EnvVariable]
@@ -50,7 +50,7 @@ class AppState:
     connection_status: str = "connected"
 
     # Error state
-    last_error: Optional[str] = None
+    last_error: str | None = None
 
     # Internal lock for thread safety
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -63,7 +63,7 @@ class AppState:
             f"names={[t.name if hasattr(t, 'name') else str(t) for t in tools]}"
         )
 
-    def select_tool(self, tool_name: Optional[str]) -> None:
+    def select_tool(self, tool_name: str | None) -> None:
         """Select a tool by name."""
         if tool_name is None:
             self.selected_tool = None
@@ -85,7 +85,7 @@ class AppState:
 
         logger.debug(f"[{get_trace_id()}] State: loading_{what}={loading}")
 
-    def set_error(self, error: Optional[str]) -> None:
+    def set_error(self, error: str | None) -> None:
         """Set/clear error with logging."""
         self.last_error = error
         if error:
@@ -117,7 +117,7 @@ class AppState:
 
 
 # Global state instance (single instance for the application)
-_state: Optional[AppState] = None
+_state: AppState | None = None
 
 
 def get_state() -> AppState:

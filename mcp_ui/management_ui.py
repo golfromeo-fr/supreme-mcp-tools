@@ -16,7 +16,8 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
+from collections.abc import Callable
 
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
@@ -46,7 +47,7 @@ def _load_ports_config() -> dict:
     for path in possible_paths:
         if path.exists():
             try:
-                with open(path) as f:
+                with Path(path).open() as f:
                     return json.load(f)
             except Exception:
                 pass
@@ -57,7 +58,7 @@ def _load_ports_config() -> dict:
     )
 
 
-def _get_ui_port_from_config() -> Optional[int]:
+def _get_ui_port_from_config() -> int | None:
     """Get the UI port from ports.json."""
     try:
         ports_config = _load_ports_config()
@@ -111,7 +112,7 @@ def _get_storage_secret() -> str:
     secrets_file = Path.home() / ".mcp_ui" / "secrets"
     if secrets_file.exists():
         try:
-            with open(secrets_file) as f:
+            with Path(secrets_file).open() as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#"):
@@ -140,14 +141,11 @@ passwords = {"admin": "admin"}
 # Imports
 # =============================================================================
 
-from .auth import is_auth_enabled, verify_credentials
-from .api_client import get_client, close_client
-from .models import ToolInfo, ToolDetail, ExtensionType
+from .api_client import get_client
 from .state import get_state
 from .components import ToolList, ToolCard, show_success, show_error, show_global_tool_settings
 from .components.auth_box import AuthBox
 from .components.env_var_editor import parse_env_vars_from_api
-from .logging_config import generate_trace_id, set_trace_id
 
 
 # =============================================================================
@@ -298,7 +296,7 @@ async def _open_tool_settings(state) -> None:
     await show_global_tool_settings(servers)
 
 
-async def _render_sidebar(state, content_refresh: callable = None, initial_load: bool = True) -> None:
+async def _render_sidebar(state, content_refresh: Callable = None, initial_load: bool = True) -> None:
     """Render the sidebar with tool list."""
     logger.debug("_render_sidebar called")
 
@@ -410,7 +408,7 @@ async def _render_content(state) -> None:
             tool_auth = auth_response.data.get("api_key", {})
             state.tool_auth[selected_tool_detail.name] = tool_auth
 
-    async def on_query(ext_name: str, params: Optional[Dict[str, Any]] = None) -> None:
+    async def on_query(ext_name: str, params: dict[str, Any] | None = None) -> None:
         state = get_state()
         if not state.selected_tool:
             return
@@ -432,7 +430,7 @@ async def _render_content(state) -> None:
         finally:
             state.loading_detail = False
 
-    async def on_execute(ext_name: str, params: Optional[Dict[str, Any]] = None) -> None:
+    async def on_execute(ext_name: str, params: dict[str, Any] | None = None) -> None:
         state = get_state()
         if not state.selected_tool:
             return
@@ -584,7 +582,6 @@ logger.info("NiceGUI initialization complete")
 
 def run_ui() -> None:
     """Run the UI server."""
-    import uvicorn
     import signal
     import os
     import sys

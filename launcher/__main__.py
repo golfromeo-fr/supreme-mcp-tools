@@ -27,7 +27,6 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -57,7 +56,7 @@ def setup_logging(debug: bool = False) -> None:
     )
 
 
-def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="MCP Launcher - Start and manage MCP tools with FEF V3",
@@ -182,7 +181,7 @@ class Launcher:
         )
         
         # Management server
-        self.management_server: Optional[ManagementServer] = None
+        self.management_server: ManagementServer | None = None
         
         # Tool discovery
         self.tool_discovery = ToolDiscovery(
@@ -318,7 +317,7 @@ class Launcher:
         print("=" * 60 + "\n")
 
 
-async def main(args: Optional[List[str]] = None) -> None:
+async def main(args: list[str] | None = None) -> None:
     """Main entry point."""
     parsed_args = parse_args(args)
     

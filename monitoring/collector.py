@@ -9,7 +9,6 @@ This module provides the core metrics collection infrastructure including:
 Follows Prometheus best practices for metric naming and labeling.
 """
 
-import asyncio
 import bisect
 import logging
 import threading
@@ -18,7 +17,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Optional
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ class MetricSample:
     name: str
     value: float
     timestamp: float
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     metric_type: MetricType = MetricType.COUNTER
 
 
@@ -59,7 +58,7 @@ class BaseMetric(ABC):
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = ""
     ):
         """
@@ -75,20 +74,20 @@ class BaseMetric(ABC):
         self.description = description
         self.label_names = label_names or []
         self.unit = unit
-        self._samples: Deque[MetricSample] = deque(maxlen=10000)
+        self._samples: deque[MetricSample] = deque(maxlen=10000)
         self._lock = threading.RLock()
     
     @abstractmethod
-    def record(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def record(self, value: float, labels: dict[str, str] | None = None) -> None:
         """Record a value for this metric."""
         pass
     
     @abstractmethod
-    def get_value(self, labels: Optional[Dict[str, str]] = None) -> float:
+    def get_value(self, labels: dict[str, str] | None = None) -> float:
         """Get the current value of this metric."""
         pass
     
-    def get_all_values(self) -> Dict[Tuple, Any]:
+    def get_all_values(self) -> dict[tuple, Any]:
         """
         Get all current values for this metric, keyed by label tuple.
         
@@ -100,8 +99,8 @@ class BaseMetric(ABC):
     def _create_sample(
         self,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
-        timestamp: Optional[float] = None
+        labels: dict[str, str] | None = None,
+        timestamp: float | None = None
     ) -> MetricSample:
         """Create a metric sample."""
         # Filter to only include defined label names
@@ -124,7 +123,7 @@ class BaseMetric(ABC):
         """Get the metric type."""
         pass
     
-    def get_samples(self) -> List[MetricSample]:
+    def get_samples(self) -> list[MetricSample]:
         """Get all samples for this metric."""
         with self._lock:
             return list(self._samples)
@@ -147,13 +146,13 @@ class Counter(BaseMetric):
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = ""
     ):
         super().__init__(name, description, label_names, unit)
-        self._values: Dict[Tuple, float] = defaultdict(float)
+        self._values: dict[tuple, float] = defaultdict(float)
     
-    def record(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def record(self, value: float, labels: dict[str, str] | None = None) -> None:
         """
         Increment the counter by the given value.
         
@@ -170,11 +169,11 @@ class Counter(BaseMetric):
             sample = self._create_sample(self._values[label_key], labels)
             self._samples.append(sample)
     
-    def increment(self, labels: Optional[Dict[str, str]] = None) -> None:
+    def increment(self, labels: dict[str, str] | None = None) -> None:
         """Increment the counter by 1."""
         self.record(1.0, labels)
     
-    def get_all_values(self) -> Dict[Tuple, float]:
+    def get_all_values(self) -> dict[tuple, float]:
         """
         Get all current counter values, keyed by label tuple.
         
@@ -184,7 +183,7 @@ class Counter(BaseMetric):
         with self._lock:
             return dict(self._values)
     
-    def get_value(self, labels: Optional[Dict[str, str]] = None) -> float:
+    def get_value(self, labels: dict[str, str] | None = None) -> float:
         """Get the current counter value."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -193,7 +192,7 @@ class Counter(BaseMetric):
     def _get_metric_type(self) -> MetricType:
         return MetricType.COUNTER
     
-    def _get_label_key(self, labels: Optional[Dict[str, str]]) -> Tuple:
+    def _get_label_key(self, labels: dict[str, str] | None) -> tuple:
         """Get a hashable key for the given labels."""
         if not labels:
             return ()
@@ -212,13 +211,13 @@ class Gauge(BaseMetric):
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = ""
     ):
         super().__init__(name, description, label_names, unit)
-        self._values: Dict[Tuple, float] = defaultdict(float)
+        self._values: dict[tuple, float] = defaultdict(float)
     
-    def record(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def record(self, value: float, labels: dict[str, str] | None = None) -> None:
         """Set the gauge to the given value."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -226,7 +225,7 @@ class Gauge(BaseMetric):
             sample = self._create_sample(value, labels)
             self._samples.append(sample)
     
-    def increment(self, labels: Optional[Dict[str, str]] = None) -> None:
+    def increment(self, labels: dict[str, str] | None = None) -> None:
         """Increment the gauge by 1."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -234,7 +233,7 @@ class Gauge(BaseMetric):
             sample = self._create_sample(self._values[label_key], labels)
             self._samples.append(sample)
     
-    def decrement(self, labels: Optional[Dict[str, str]] = None) -> None:
+    def decrement(self, labels: dict[str, str] | None = None) -> None:
         """Decrement the gauge by 1."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -242,7 +241,7 @@ class Gauge(BaseMetric):
             sample = self._create_sample(self._values[label_key], labels)
             self._samples.append(sample)
     
-    def get_all_values(self) -> Dict[Tuple, float]:
+    def get_all_values(self) -> dict[tuple, float]:
         """
         Get all current gauge values, keyed by label tuple.
         
@@ -252,7 +251,7 @@ class Gauge(BaseMetric):
         with self._lock:
             return dict(self._values)
     
-    def get_value(self, labels: Optional[Dict[str, str]] = None) -> float:
+    def get_value(self, labels: dict[str, str] | None = None) -> float:
         """Get the current gauge value."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -261,7 +260,7 @@ class Gauge(BaseMetric):
     def _get_metric_type(self) -> MetricType:
         return MetricType.GAUGE
     
-    def _get_label_key(self, labels: Optional[Dict[str, str]]) -> Tuple:
+    def _get_label_key(self, labels: dict[str, str] | None) -> tuple:
         """Get a hashable key for the given labels."""
         if not labels:
             return ()
@@ -283,19 +282,19 @@ class Histogram(BaseMetric):
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = "",
-        buckets: Optional[Tuple[float, ...]] = None
+        buckets: tuple[float, ...] | None = None
     ):
         super().__init__(name, description, label_names, unit)
         self.buckets = buckets or self.DEFAULT_BUCKETS
-        self._sums: Dict[Tuple, float] = defaultdict(float)
-        self._counts: Dict[Tuple, int] = defaultdict(int)
-        self._bucket_counts: Dict[Tuple, Dict[float, int]] = defaultdict(
+        self._sums: dict[tuple, float] = defaultdict(float)
+        self._counts: dict[tuple, int] = defaultdict(int)
+        self._bucket_counts: dict[tuple, dict[float, int]] = defaultdict(
             lambda: defaultdict(int)
         )
     
-    def record(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def record(self, value: float, labels: dict[str, str] | None = None) -> None:
         """Record an observation in the histogram."""
         if value < 0:
             raise ValueError("Histogram values must be non-negative")
@@ -320,7 +319,7 @@ class Histogram(BaseMetric):
             sample = self._create_sample(value, labels)
             self._samples.append(sample)
     
-    def get_value(self, labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def get_value(self, labels: dict[str, str] | None = None) -> dict[str, Any]:
         """Get histogram statistics."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -338,13 +337,13 @@ class Histogram(BaseMetric):
     def _get_metric_type(self) -> MetricType:
         return MetricType.HISTOGRAM
     
-    def _get_label_key(self, labels: Optional[Dict[str, str]]) -> Tuple:
+    def _get_label_key(self, labels: dict[str, str] | None) -> tuple:
         """Get a hashable key for the given labels."""
         if not labels:
             return ()
         return tuple(labels.get(name, "") for name in self.label_names)
     
-    def get_samples(self) -> List[MetricSample]:
+    def get_samples(self) -> list[MetricSample]:
         """Get all samples including bucket samples."""
         samples = []
         with self._lock:
@@ -388,13 +387,13 @@ class Histogram(BaseMetric):
         
         return samples
     
-    def _labels_from_key(self, label_key: Tuple) -> Dict[str, str]:
+    def _labels_from_key(self, label_key: tuple) -> dict[str, str]:
         """Convert label key back to labels dictionary."""
         if not label_key:
             return {}
         return {name: value for name, value in zip(self.label_names, label_key)}
     
-    def get_all_values(self) -> Dict[Tuple, Dict[str, Any]]:
+    def get_all_values(self) -> dict[tuple, dict[str, Any]]:
         """
         Get all current histogram statistics, keyed by label tuple.
         
@@ -429,19 +428,19 @@ class Summary(BaseMetric):
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = "",
-        percentiles: Optional[List[float]] = None,
+        percentiles: list[float] | None = None,
         max_values: int = 1000
     ):
         super().__init__(name, description, label_names, unit)
         self.percentiles = percentiles or [0.5, 0.9, 0.95, 0.99]
         self.max_values = max_values
-        self._values: Dict[Tuple, deque] = defaultdict(lambda: deque(maxlen=max_values))
-        self._sums: Dict[Tuple, float] = defaultdict(float)
-        self._counts: Dict[Tuple, int] = defaultdict(int)
+        self._values: dict[tuple, deque] = defaultdict(lambda: deque(maxlen=max_values))
+        self._sums: dict[tuple, float] = defaultdict(float)
+        self._counts: dict[tuple, int] = defaultdict(int)
     
-    def record(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def record(self, value: float, labels: dict[str, str] | None = None) -> None:
         """Record an observation in the summary."""
         if value < 0:
             raise ValueError("Summary values must be non-negative")
@@ -455,7 +454,7 @@ class Summary(BaseMetric):
             sample = self._create_sample(value, labels)
             self._samples.append(sample)
     
-    def get_value(self, labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def get_value(self, labels: dict[str, str] | None = None) -> dict[str, Any]:
         """Get summary statistics including percentiles."""
         label_key = self._get_label_key(labels)
         with self._lock:
@@ -483,7 +482,7 @@ class Summary(BaseMetric):
     def _get_metric_type(self) -> MetricType:
         return MetricType.SUMMARY
     
-    def get_all_values(self) -> Dict[Tuple, Dict[str, Any]]:
+    def get_all_values(self) -> dict[tuple, dict[str, Any]]:
         """
         Get all current summary statistics, keyed by label tuple.
         
@@ -523,7 +522,7 @@ class Summary(BaseMetric):
                     }
             return result
     
-    def _get_label_key(self, labels: Optional[Dict[str, str]]) -> Tuple:
+    def _get_label_key(self, labels: dict[str, str] | None) -> tuple:
         """Get a hashable key for the given labels."""
         if not labels:
             return ()
@@ -546,7 +545,7 @@ class MetricsCollector:
             name: Prefix for all metric names
         """
         self.name = name
-        self._metrics: Dict[str, BaseMetric] = {}
+        self._metrics: dict[str, BaseMetric] = {}
         self._lock = threading.RLock()
         self._start_time = time.time()
         
@@ -614,7 +613,7 @@ class MetricsCollector:
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = ""
     ) -> Counter:
         """
@@ -644,7 +643,7 @@ class MetricsCollector:
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = ""
     ) -> Gauge:
         """
@@ -674,9 +673,9 @@ class MetricsCollector:
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = "",
-        buckets: Optional[Tuple[float, ...]] = None
+        buckets: tuple[float, ...] | None = None
     ) -> Histogram:
         """
         Create or get a histogram metric.
@@ -707,9 +706,9 @@ class MetricsCollector:
         self,
         name: str,
         description: str,
-        label_names: Optional[List[str]] = None,
+        label_names: list[str] | None = None,
         unit: str = "",
-        percentiles: Optional[List[float]] = None
+        percentiles: list[float] | None = None
     ) -> Summary:
         """
         Create or get a summary metric.
@@ -835,7 +834,7 @@ class MetricsCollector:
                 {"tool": tool}
             )
     
-    def set_server_start_time(self, tool: str, timestamp: Optional[float] = None) -> None:
+    def set_server_start_time(self, tool: str, timestamp: float | None = None) -> None:
         """Set server start time."""
         with self._lock:
             self._metrics["server_start_time_seconds"].record(
@@ -843,12 +842,12 @@ class MetricsCollector:
                 {"tool": tool}
             )
     
-    def get_all_metrics(self) -> Dict[str, BaseMetric]:
+    def get_all_metrics(self) -> dict[str, BaseMetric]:
         """Get all metrics."""
         with self._lock:
             return self._metrics.copy()
     
-    def get_metrics_for_tool(self, tool: str) -> Dict[str, Any]:
+    def get_metrics_for_tool(self, tool: str) -> dict[str, Any]:
         """Get metrics for a specific tool."""
         result = {}
         with self._lock:
@@ -932,8 +931,8 @@ class MetricsRegistry:
     
     def _initialize(self) -> None:
         """Initialize the registry. Called exactly once from __new__."""
-        self._collectors: Dict[str, MetricsCollector] = {}
-        self._default_collector: Optional[MetricsCollector] = None
+        self._collectors: dict[str, MetricsCollector] = {}
+        self._default_collector: MetricsCollector | None = None
         self._enabled = True
     
     def __init__(self):
@@ -972,7 +971,7 @@ class MetricsRegistry:
         self,
         name: str = "mcp",
         create_if_not_exists: bool = True
-    ) -> Optional[MetricsCollector]:
+    ) -> MetricsCollector | None:
         """
         Get or create a metrics collector.
         
@@ -995,7 +994,7 @@ class MetricsRegistry:
             
             return self._collectors[name]
     
-    def get_default_collector(self) -> Optional[MetricsCollector]:
+    def get_default_collector(self) -> MetricsCollector | None:
         """Get or create the default collector."""
         if not self._enabled:
             return None
@@ -1065,7 +1064,7 @@ class MetricsRegistry:
         if collector:
             collector.record_error(tool, error_type)
     
-    def get_all_collectors(self) -> Dict[str, MetricsCollector]:
+    def get_all_collectors(self) -> dict[str, MetricsCollector]:
         """Get all collectors."""
         with self._lock:
             return self._collectors.copy()
@@ -1077,7 +1076,7 @@ def track_duration(
     collector: MetricsCollector,
     tool: str,
     tool_name: str,
-    status_var: Optional[Dict[str, str]] = None
+    status_var: dict[str, str] | None = None
 ):
     """
     Context manager for tracking operation duration.
@@ -1115,12 +1114,12 @@ def track_duration(
 
 
 # Convenience functions
-def get_collector(name: str = "mcp") -> Optional[MetricsCollector]:
+def get_collector(name: str = "mcp") -> MetricsCollector | None:
     """Get a metrics collector by name."""
     return MetricsRegistry.get_instance().get_or_create_collector(name)
 
 
-def get_default_collector() -> Optional[MetricsCollector]:
+def get_default_collector() -> MetricsCollector | None:
     """Get the default metrics collector."""
     return MetricsRegistry.get_instance().get_default_collector()
 

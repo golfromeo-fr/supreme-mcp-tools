@@ -115,5 +115,5 @@ __all__ = [
     "EventStore",
     "Event",
     # FEF V3 - Plugins
-    "PluginLoader",
+    "PluginLoader", "DistributedConfigPersistence", "FileConfigPersistence",
 ]

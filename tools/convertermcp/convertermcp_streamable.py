@@ -11,9 +11,9 @@ import sys
 import os
 import tempfile
 import logging
-import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, Optional
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -34,7 +34,7 @@ except ImportError as e:
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
 # Script is at: tools/convertermcp/convertermcp_streamable.py
 # supreme-mcp-tools is at: . (relative path)
-supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+supreme_mcp_tools_dir = (Path(__file__).parent / ".." / "..").resolve()
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
@@ -249,9 +249,9 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle tools/list request."""
         tools = [
             {
@@ -292,10 +292,10 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
 
     async def _handle_tool_call(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any],
+        params: dict[str, Any],
+        session: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -411,9 +411,9 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_convert_docx_to_text(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for converting DOCX to text from local path or URL; optionally writes to output_path."""
         source = arguments.get("source")
         output_path_arg = arguments.get("output_path")
@@ -500,7 +500,7 @@ class ConverterMCPStreamableHttp(StreamableHttpTransportBase):
                     }
                     return
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(out_path, "w", encoding="utf-8") as f:
+                with Path(out_path).open("w", encoding="utf-8") as f:
                     f.write(text)
                 docx_size = docx_path.stat().st_size if docx_path.exists() else 0
                 txt_size = out_path.stat().st_size
@@ -813,7 +813,7 @@ def get_output_config() -> dict:
     }
 
 
-def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_conversion_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get conversion statistics."""
     return {
         "total_conversions": converter_metrics["conversions"],
@@ -823,12 +823,12 @@ def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_format_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get format usage breakdown."""
     return converter_metrics["format_counts"].copy()
 
 
-def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_conversion_queue(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get current conversion queue status."""
     return {
         "pending_conversions": converter_metrics.get("pending", 0),
@@ -837,7 +837,7 @@ def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_storage_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_storage_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get storage usage by output."""
     return {
         "total_bytes_processed": converter_metrics["total_bytes_processed"],

@@ -5,7 +5,7 @@ Renders the sidebar tool list with status indicators and icons.
 """
 
 from nicegui import ui
-from typing import List, Callable, Optional
+from collections.abc import Callable
 
 from ..models import ToolInfo, ToolStatus
 from ..logging_config import get_logger
@@ -45,10 +45,10 @@ def _get_tool_icon(status: ToolStatus) -> str:
 
 
 def ToolList(
-    tools: List[ToolInfo],
-    selected_tool: Optional[str] = None,
-    on_select: Optional[Callable[[str], None]] = None,
-    on_refresh: Optional[Callable[[], None]] = None,
+    tools: list[ToolInfo],
+    selected_tool: str | None = None,
+    on_select: Callable[[str], None] | None = None,
+    on_refresh: Callable[[], None] | None = None,
     loading: bool = False
 ) -> None:
     """
@@ -88,7 +88,7 @@ def ToolList(
 def _tool_list_item(
     tool: ToolInfo,
     is_selected: bool,
-    on_select: Optional[Callable[[str], None]]
+    on_select: Callable[[str], None] | None
 ) -> None:
     """Render a single tool list item."""
     # Capture tool.name in a local variable to avoid closure issue

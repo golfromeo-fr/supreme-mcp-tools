@@ -7,10 +7,9 @@ Provides API key verification and permission-based access control.
 import os
 import secrets
 import logging
-from typing import Optional, Dict, List, Callable
 from functools import wraps
 
-from fastapi import HTTPException, Security, Depends, Request
+from fastapi import HTTPException, Security, Depends
 from fastapi.security import APIKeyHeader
 
 logger = logging.getLogger(__name__)
@@ -27,8 +26,8 @@ class APIKeyAuth:
     
     def __init__(
         self,
-        api_keys: Optional[Dict[str, Dict]] = None,
-        config_file: Optional[str] = None
+        api_keys: dict[str, dict] | None = None,
+        config_file: str | None = None
     ):
         """
         Initialize the API key auth manager.
@@ -37,7 +36,7 @@ class APIKeyAuth:
             api_keys: Dictionary of API keys to permissions
             config_file: Optional path to JSON config file
         """
-        self.api_keys: Dict[str, Dict] = api_keys or {}
+        self.api_keys: dict[str, dict] = api_keys or {}
         
         if config_file:
             self._load_from_file(config_file)
@@ -50,7 +49,7 @@ class APIKeyAuth:
         path = Path(config_file).expanduser()
         if path.exists():
             try:
-                with open(path, "r") as f:
+                with Path(path).open("r") as f:
                     config = json.load(f)
                     self.api_keys.update(config.get("api_keys", {}))
                 logger.info(f"Loaded {len(self.api_keys)} API keys from {config_file}")
@@ -61,8 +60,8 @@ class APIKeyAuth:
         self,
         key: str,
         role: str = "readonly",
-        tools: Optional[List[str]] = None,
-        permissions: Optional[List[str]] = None
+        tools: list[str] | None = None,
+        permissions: list[str] | None = None
     ) -> None:
         """
         Add an API key.
@@ -96,7 +95,7 @@ class APIKeyAuth:
             return True
         return False
     
-    def verify(self, key: Optional[str]) -> Dict:
+    def verify(self, key: str | None) -> dict:
         """
         Verify an API key and return permissions.
         
@@ -125,9 +124,9 @@ class APIKeyAuth:
     
     def check_permission(
         self,
-        permissions: Dict,
-        tool_name: Optional[str] = None,
-        permission: Optional[str] = None
+        permissions: dict,
+        tool_name: str | None = None,
+        permission: str | None = None
     ) -> bool:
         """
         Check if permissions allow access.
@@ -165,7 +164,7 @@ class APIKeyAuth:
 
 
 # Default instance with environment-based keys
-def _load_default_keys() -> Dict[str, Dict]:
+def _load_default_keys() -> dict[str, dict]:
     """Load default API keys from environment variables."""
     keys = {}
     
@@ -181,7 +180,7 @@ def _load_default_keys() -> Dict[str, Dict]:
 
 
 # Global auth instance
-_auth_instance: Optional[APIKeyAuth] = None
+_auth_instance: APIKeyAuth | None = None
 
 
 def get_auth() -> APIKeyAuth:
@@ -193,7 +192,7 @@ def get_auth() -> APIKeyAuth:
 
 
 async def verify_api_key(
-    api_key: Optional[str] = Security(API_KEY_HEADER)
+    api_key: str | None = Security(API_KEY_HEADER)
 ) -> dict:
     """
     FastAPI dependency to verify API key.

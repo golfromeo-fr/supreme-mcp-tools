@@ -5,13 +5,12 @@ FEF V3 Automated Test Runner
 Comprehensive test suite for the Flexible Extensibility Framework V3.
 Tests all MCP tools with their FEF V3 extensions.
 """
-import asyncio
 import json
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -29,7 +28,7 @@ except ImportError:
     print("Warning: 'rich' package not installed. Install with: pip install rich")
 
 
-def curl_request(method: str, url: str, data: Optional[Dict] = None, timeout: int = 30) -> Tuple[int, Dict]:
+def curl_request(method: str, url: str, data: dict | None = None, timeout: int = 30) -> tuple[int, dict]:
     """
     Make HTTP request using curl subprocess.
     
@@ -80,7 +79,7 @@ class TestResult:
     status: TestStatus
     duration_ms: float
     message: str = ""
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -88,9 +87,9 @@ class ToolTestResults:
     """Test results for a single tool."""
     tool_name: str
     base_url: str
-    results: List[TestResult] = field(default_factory=list)
+    results: list[TestResult] = field(default_factory=list)
     start_time: float = field(default_factory=time.time)
-    end_time: Optional[float] = None
+    end_time: float | None = None
     
     @property
     def total_duration_ms(self) -> float:
@@ -176,7 +175,7 @@ class FEFTestRunner:
         }
     }
     
-    def __init__(self, tools: Optional[List[str]] = None, verbose: bool = False):
+    def __init__(self, tools: list[str] | None = None, verbose: bool = False):
         """
         Initialize the test runner.
         
@@ -187,7 +186,7 @@ class FEFTestRunner:
         self.tools_to_test = tools or list(self.TOOLS.keys())
         self.verbose = verbose
         self.console = Console() if RICH_AVAILABLE else None
-        self.all_results: List[ToolTestResults] = []
+        self.all_results: list[ToolTestResults] = []
         
         # Filter tools to test
         self.tools_to_test = [t for t in self.tools_to_test if t in self.TOOLS]
@@ -252,7 +251,7 @@ class FEFTestRunner:
         tool_name: str,
         base_url: str,
         extension_name: str,
-        params: Dict[str, Any] = None
+        params: dict[str, Any] = None
     ) -> TestResult:
         """
         Test executing an extension with parameters.
@@ -387,7 +386,7 @@ class FEFTestRunner:
                 message=f"Error listing extensions: {str(e)}"
             )
     
-    def test_common_extensions(self, tool_name: str, base_url: str) -> List[TestResult]:
+    def test_common_extensions(self, tool_name: str, base_url: str) -> list[TestResult]:
         """
         Test common FEF V3 extensions.
         
@@ -419,7 +418,7 @@ class FEFTestRunner:
         self,
         tool_name: str,
         base_url: str
-    ) -> List[TestResult]:
+    ) -> list[TestResult]:
         """
         Test tool-specific extensions.
         
@@ -481,7 +480,7 @@ class FEFTestRunner:
         
         return results
     
-    def test_error_handling(self, tool_name: str, base_url: str) -> List[TestResult]:
+    def test_error_handling(self, tool_name: str, base_url: str) -> list[TestResult]:
         """
         Test error handling for invalid requests.
         
@@ -703,7 +702,7 @@ class FEFTestRunner:
                 message=f"Error testing performance: {str(e)}"
             )
     
-    def run_all_tests(self) -> List[ToolTestResults]:
+    def run_all_tests(self) -> list[ToolTestResults]:
         """
         Run tests for all configured tools.
         

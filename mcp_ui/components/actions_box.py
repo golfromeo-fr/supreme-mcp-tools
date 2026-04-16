@@ -5,7 +5,8 @@ Renders actions panel with execute buttons.
 """
 
 from nicegui import ui
-from typing import List, Dict, Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 from ..models import Extension
 from .mutators_box import _generate_form
@@ -31,8 +32,8 @@ def _get_action_status(ext: Extension) -> tuple[str, str]:
 
 
 def ActionsBox(
-    extensions: List[Extension],
-    on_execute: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    extensions: list[Extension],
+    on_execute: Callable[[str, dict[str, Any]], None] | None = None,
     loading: bool = False
 ) -> None:
     """
@@ -77,15 +78,15 @@ def ActionsBox(
                     execute_btn.disable()
 
 
-def _generate_action_form(schema: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
+def _generate_action_form(schema: dict[str, Any]) -> Callable[[], dict[str, Any]]:
     """Generate form for action parameters."""
     return _generate_form(schema)
 
 
 async def _confirm_and_execute(
     extension_name: str,
-    get_values: Callable[[], Dict[str, Any]],
-    on_execute: Optional[Callable[[str, Dict[str, Any]], None]]
+    get_values: Callable[[], dict[str, Any]],
+    on_execute: Callable[[str, dict[str, Any]], None] | None
 ) -> None:
     """Show confirmation dialog and execute action."""
     with ui.dialog() as dialog, ui.card():

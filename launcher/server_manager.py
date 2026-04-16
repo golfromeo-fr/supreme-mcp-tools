@@ -12,17 +12,14 @@ import logging
 import os
 import secrets
 import time
-from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode, urlparse, parse_qs
+from typing import Any
 
 import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
-from starlette.routing import Route
 
 from .errors import ServerStartupError, ServerRuntimeError
 from .tool_discovery import ToolMetadata
@@ -56,8 +53,8 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
         self.server_url = server_url  # e.g. "http://127.0.0.1:8002"
 
         # In-memory stores for OAuth flow (per-tool, per-server process)
-        self._pending_codes: Dict[str, tuple[str, str]] = {}  # code -> (client_id, redirect_uri)
-        self._registered_clients: Dict[str, dict] = {}  # client_id -> client_info
+        self._pending_codes: dict[str, tuple[str, str]] = {}  # code -> (client_id, redirect_uri)
+        self._registered_clients: dict[str, dict] = {}  # client_id -> client_info
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -261,12 +258,12 @@ class ServerInstance:
     server_config: uvicorn.Config
     server: uvicorn.Server
     status: str = "stopped"  # stopped, starting, running, error
-    start_time: Optional[datetime] = None
-    error: Optional[Exception] = None
+    start_time: datetime | None = None
+    error: Exception | None = None
     # FEF V3 fields
-    mgmt_port: Optional[int] = None
-    mgmt_server: Optional[ExtensionHTTPServer] = None
-    extension_registry: Optional[ExtensionRegistry] = None
+    mgmt_port: int | None = None
+    mgmt_server: ExtensionHTTPServer | None = None
+    extension_registry: ExtensionRegistry | None = None
     
     def __repr__(self) -> str:
         return f"ServerInstance(tool={self.tool_name}, port={self.port}, status={self.status})"
@@ -279,7 +276,7 @@ class ServerManager:
         self,
         host: str = "0.0.0.0",
         log_level: str = "info",
-        service_registry: Optional[ServiceRegistry] = None,
+        service_registry: ServiceRegistry | None = None,
         enable_management: bool = True
     ):
         """
@@ -296,15 +293,15 @@ class ServerManager:
         self.service_registry = service_registry
         self.enable_management = enable_management
         
-        self.servers: Dict[str, ServerInstance] = {}
-        self.tasks: Dict[str, asyncio.Task] = {}
+        self.servers: dict[str, ServerInstance] = {}
+        self.tasks: dict[str, asyncio.Task] = {}
         self.running = False
     
     async def start_server(
         self,
         tool_metadata: ToolMetadata,
         port: int,
-        mgmt_port: Optional[int] = None
+        mgmt_port: int | None = None
     ) -> ServerInstance:
         """
         Start a single MCP tool server with optional management server.
@@ -428,8 +425,8 @@ class ServerManager:
     
     async def start_all_servers(
         self,
-        tools_ports: Dict[str, int]
-    ) -> Dict[str, ServerInstance]:
+        tools_ports: dict[str, int]
+    ) -> dict[str, ServerInstance]:
         """
         Start all servers concurrently.
         
@@ -565,7 +562,7 @@ class ServerManager:
         
         logger.info("All servers stopped")
     
-    def get_server_status(self, tool_name: str) -> Optional[str]:
+    def get_server_status(self, tool_name: str) -> str | None:
         """
         Get status of a specific server.
         
@@ -578,7 +575,7 @@ class ServerManager:
         instance = self.servers.get(tool_name)
         return instance.status if instance else None
     
-    def get_all_statuses(self) -> Dict[str, str]:
+    def get_all_statuses(self) -> dict[str, str]:
         """
         Get status of all servers.
         
@@ -590,7 +587,7 @@ class ServerManager:
             for name, instance in self.servers.items()
         }
     
-    def get_server_instance(self, tool_name: str) -> Optional[ServerInstance]:
+    def get_server_instance(self, tool_name: str) -> ServerInstance | None:
         """
         Get a server instance by name.
         
@@ -602,7 +599,7 @@ class ServerManager:
         """
         return self.servers.get(tool_name)
     
-    def get_all_instances(self) -> Dict[str, ServerInstance]:
+    def get_all_instances(self) -> dict[str, ServerInstance]:
         """
         Get all server instances.
         
@@ -624,7 +621,7 @@ class ServerManager:
         status = self.get_server_status(tool_name)
         return status == "running"
     
-    def get_running_servers(self) -> List[str]:
+    def get_running_servers(self) -> list[str]:
         """
         Get list of running server names.
         
@@ -637,7 +634,7 @@ class ServerManager:
             if status == "running"
         ]
     
-    def get_error_servers(self) -> List[str]:
+    def get_error_servers(self) -> list[str]:
         """
         Get list of servers with errors.
         
@@ -650,7 +647,7 @@ class ServerManager:
             if status == "error"
         ]
     
-    def get_summary(self) -> Dict[str, any]:
+    def get_summary(self) -> dict[str, any]:
         """
         Get summary of all servers.
         
@@ -682,11 +679,11 @@ class ServerManager:
 
 
 async def run_servers_concurrently(
-    tools_metadata: List[ToolMetadata],
-    ports: Dict[str, int],
+    tools_metadata: list[ToolMetadata],
+    ports: dict[str, int],
     host: str = "0.0.0.0",
     log_level: str = "info"
-) -> Dict[str, ServerInstance]:
+) -> dict[str, ServerInstance]:
     """
     Run multiple Uvicorn servers concurrently.
     
@@ -702,7 +699,7 @@ async def run_servers_concurrently(
     manager = ServerManager(host=host, log_level=log_level)
     instances = {}
     
-    async def start_and_run(tool_metadata: ToolMetadata) -> Optional[ServerInstance]:
+    async def start_and_run(tool_metadata: ToolMetadata) -> ServerInstance | None:
         """Start and run a single server."""
         tool_name = tool_metadata.name
         port = ports.get(tool_name)

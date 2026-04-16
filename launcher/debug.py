@@ -20,10 +20,9 @@ import argparse
 import asyncio
 import json
 import logging
-import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 
@@ -60,7 +59,7 @@ class DiagnosticTool:
     
     def __init__(
         self,
-        management_url: Optional[str] = None,
+        management_url: str | None = None,
         tools_dir: str = "tools"
     ):
         # Get management URL from ports.json if not provided
@@ -68,7 +67,7 @@ class DiagnosticTool:
             management_url = _get_default_management_url()
         self.management_url = management_url
         self.tools_dir = Path(tools_dir)
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -83,7 +82,7 @@ class DiagnosticTool:
         if self._session and not self._session.closed:
             await self._session.close()
     
-    async def diagnose(self) -> Dict[str, Any]:
+    async def diagnose(self) -> dict[str, Any]:
         """
         Run full diagnostic check.
         
@@ -91,7 +90,7 @@ class DiagnosticTool:
             Dictionary with diagnostic results
         """
         results = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "management_server": await self._check_management_server(),
             "tools": await self._check_tools(),
             "configuration": self._check_configuration(),
@@ -109,7 +108,7 @@ class DiagnosticTool:
         
         return results
     
-    async def _check_management_server(self) -> Dict[str, Any]:
+    async def _check_management_server(self) -> dict[str, Any]:
         """Check management server status."""
         try:
             session = await self._get_session()
@@ -140,7 +139,7 @@ class DiagnosticTool:
                 "error": str(e)
             }
     
-    async def _check_tools(self) -> Dict[str, Any]:
+    async def _check_tools(self) -> dict[str, Any]:
         """Check tool status."""
         try:
             session = await self._get_session()
@@ -173,7 +172,7 @@ class DiagnosticTool:
                 "error": str(e)
             }
     
-    def _check_configuration(self) -> Dict[str, Any]:
+    def _check_configuration(self) -> dict[str, Any]:
         """Check configuration files."""
         config_dir = Path.home() / ".config" / "supreme-mcp-tools"
         
@@ -190,7 +189,7 @@ class DiagnosticTool:
             fef_config = config_dir / "fef_v3.json"
             if fef_config.exists():
                 try:
-                    with open(fef_config, "r") as f:
+                    with Path(fef_config).open("r") as f:
                         data = json.load(f)
                     results["fef_v3_config"] = {
                         "status": "ok",
@@ -210,7 +209,7 @@ class DiagnosticTool:
         results["status"] = "ok" if config_dir.exists() else "warning"
         return results
     
-    def _check_dependencies(self) -> Dict[str, Any]:
+    def _check_dependencies(self) -> dict[str, Any]:
         """Check required dependencies."""
         dependencies = {
             "fastapi": False,
@@ -234,7 +233,7 @@ class DiagnosticTool:
             "missing": [k for k, v in dependencies.items() if not v]
         }
     
-    def _check_disk_space(self) -> Dict[str, Any]:
+    def _check_disk_space(self) -> dict[str, Any]:
         """Check disk space."""
         import shutil
         
@@ -256,7 +255,7 @@ class DiagnosticTool:
                 "error": str(e)
             }
     
-    async def check_health(self) -> Dict[str, Any]:
+    async def check_health(self) -> dict[str, Any]:
         """
         Check health of all services.
         
@@ -265,7 +264,7 @@ class DiagnosticTool:
         """
         return await self._check_management_server()
     
-    async def check_circuit_breakers(self) -> Dict[str, Any]:
+    async def check_circuit_breakers(self) -> dict[str, Any]:
         """
         Check circuit breaker states.
         
@@ -284,7 +283,7 @@ class DiagnosticTool:
         except Exception as e:
             return {"error": str(e)}
     
-    async def check_cache(self) -> Dict[str, Any]:
+    async def check_cache(self) -> dict[str, Any]:
         """
         Check cache statistics.
         
@@ -303,7 +302,7 @@ class DiagnosticTool:
         except Exception as e:
             return {"error": str(e)}
     
-    def check_config(self) -> Dict[str, Any]:
+    def check_config(self) -> dict[str, Any]:
         """
         Check configuration.
         
@@ -312,7 +311,7 @@ class DiagnosticTool:
         """
         return self._check_configuration()
     
-    def check_logs(self, lines: int = 50) -> Dict[str, Any]:
+    def check_logs(self, lines: int = 50) -> dict[str, Any]:
         """
         Show recent logs.
         
@@ -336,7 +335,7 @@ class DiagnosticTool:
         latest_log = max(log_files, key=lambda f: f.stat().st_mtime)
         
         try:
-            with open(latest_log, "r") as f:
+            with Path(latest_log).open("r") as f:
                 all_lines = f.readlines()
                 recent_lines = all_lines[-lines:]
             
@@ -350,7 +349,7 @@ class DiagnosticTool:
             return {"error": str(e)}
 
 
-def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="FEF V3 Debug and Troubleshooting Tool",
@@ -399,7 +398,7 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
-async def main(args: Optional[List[str]] = None) -> None:
+async def main(args: list[str] | None = None) -> None:
     """Main entry point."""
     parsed_args = parse_args(args)
     
@@ -437,7 +436,7 @@ async def main(args: Optional[List[str]] = None) -> None:
         await tool.close()
 
 
-def _print_result(command: str, result: Dict[str, Any]) -> None:
+def _print_result(command: str, result: dict[str, Any]) -> None:
     """Print result in human-readable format."""
     print(f"\n{'=' * 60}")
     print(f"FEF V3 Diagnostic: {command.upper()}")

@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +24,12 @@ class Event:
     tool_name: str
     extension_name: str
     operation: str
-    params: Dict[str, Any]
-    result: Optional[Dict[str, Any]] = None
-    user: Optional[str] = None
-    correlation_id: Optional[str] = None
+    params: dict[str, Any]
+    result: dict[str, Any] | None = None
+    user: str | None = None
+    correlation_id: str | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
@@ -100,10 +100,10 @@ class EventStore:
         tool_name: str,
         extension_name: str,
         operation: str,
-        params: Dict[str, Any],
-        result: Optional[Dict[str, Any]] = None,
-        user: Optional[str] = None,
-        correlation_id: Optional[str] = None
+        params: dict[str, Any],
+        result: dict[str, Any] | None = None,
+        user: str | None = None,
+        correlation_id: str | None = None
     ) -> str:
         """
         Append an event to the store.
@@ -160,7 +160,7 @@ class EventStore:
         logger.debug(f"Appended event {event_id} for {tool_name}.{extension_name}")
         return event_id
     
-    def get_event(self, event_id: str) -> Optional[Event]:
+    def get_event(self, event_id: str) -> Event | None:
         """
         Get a specific event by ID.
         
@@ -186,12 +186,12 @@ class EventStore:
     def get_history(
         self,
         tool_name: str,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
-        operation: Optional[str] = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        operation: str | None = None,
         limit: int = 100,
         offset: int = 0
-    ) -> List[Event]:
+    ) -> list[Event]:
         """
         Get event history for a tool.
         
@@ -232,11 +232,11 @@ class EventStore:
     
     def get_all_history(
         self,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
         limit: int = 100,
         offset: int = 0
-    ) -> List[Event]:
+    ) -> list[Event]:
         """
         Get event history across all tools.
         
@@ -269,7 +269,7 @@ class EventStore:
             
             return [self._row_to_event(row) for row in cursor.fetchall()]
     
-    def get_by_correlation_id(self, correlation_id: str) -> List[Event]:
+    def get_by_correlation_id(self, correlation_id: str) -> list[Event]:
         """
         Get all events for a correlation ID.
         
@@ -292,7 +292,7 @@ class EventStore:
         self,
         tool_name: str,
         target_time: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Replay events to reconstruct state at a specific time.
         
@@ -333,7 +333,7 @@ class EventStore:
         
         return state
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get event store statistics.
         
@@ -415,7 +415,7 @@ class EventStore:
 
 
 # Global event store instance
-_event_store: Optional[EventStore] = None
+_event_store: EventStore | None = None
 
 
 def get_event_store(

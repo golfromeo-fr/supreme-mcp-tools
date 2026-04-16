@@ -10,9 +10,8 @@ FEF V3 Integration:
 import sys
 import os
 import logging
-import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 
 # Check for required dependencies before importing
 try:
@@ -56,7 +55,7 @@ except Exception as e:
 # ============================================================================
 
 # Add parent directory to path for FEF V3 imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from tools.fef_integration import (
@@ -88,7 +87,7 @@ def get_timeout_config() -> dict:
     }
 
 
-def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_tool_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get tool usage statistics."""
     return {
         "double_count": simplemcp_metrics["double_count"],
@@ -101,7 +100,7 @@ def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_api_response_times(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get API response time statistics."""
     return {
         "min_time_ms": 0,

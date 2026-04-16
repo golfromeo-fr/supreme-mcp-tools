@@ -17,7 +17,6 @@ Performance characteristics:
 
 import re
 import math
-from typing import Dict, List, Tuple, Set, Optional
 from collections import Counter, defaultdict
 import logging
 
@@ -69,11 +68,11 @@ class CodeSparseVectorGenerator:
     ]
 
     def __init__(self):
-        self.term_to_id: Dict[str, int] = {}
-        self.id_to_term: Dict[int, str] = {}
+        self.term_to_id: dict[str, int] = {}
+        self.id_to_term: dict[int, str] = {}
         self.next_term_id = 0
         self.doc_count = 0
-        self.term_doc_freq: Dict[str, int] = Counter()
+        self.term_doc_freq: dict[str, int] = Counter()
         self.avg_doc_length = 0.0
         self.total_doc_length = 0
 
@@ -85,7 +84,7 @@ class CodeSparseVectorGenerator:
             self.next_term_id += 1
         return self.term_to_id[term]
 
-    def _tokenize_code(self, text: str) -> List[Tuple[str, str]]:
+    def _tokenize_code(self, text: str) -> list[tuple[str, str]]:
         """
         Tokenize code text with domain awareness.
 
@@ -164,7 +163,7 @@ class CodeSparseVectorGenerator:
         df = self.term_doc_freq.get(term, 0)
         return math.log((self.doc_count - df + 0.5) / (df + 0.5) + 1)
 
-    def update_statistics(self, doc_length: int, term_set: Set[str]):
+    def update_statistics(self, doc_length: int, term_set: set[str]):
         """Update global statistics for IDF computation."""
         self.doc_count += 1
         self.total_doc_length += doc_length
@@ -176,8 +175,8 @@ class CodeSparseVectorGenerator:
     def generate_sparse_vector(
         self,
         text: str,
-        metadata: Optional[Dict] = None
-    ) -> Dict[int, float]:
+        metadata: dict | None = None
+    ) -> dict[int, float]:
         """
         Generate sparse vector for code text.
 
@@ -246,11 +245,11 @@ class CodeSparseVectorGenerator:
         """Get current vocabulary size."""
         return len(self.term_to_id)
 
-    def get_term_by_id(self, term_id: int) -> Optional[str]:
+    def get_term_by_id(self, term_id: int) -> str | None:
         """Get term by ID."""
         return self.id_to_term.get(term_id)
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """Get current statistics."""
         return {
             'vocabulary_size': self.get_vocabulary_size(),
@@ -261,7 +260,7 @@ class CodeSparseVectorGenerator:
 
 
 # Singleton instance for global use
-_global_generator: Optional[CodeSparseVectorGenerator] = None
+_global_generator: CodeSparseVectorGenerator | None = None
 
 
 def get_global_generator() -> CodeSparseVectorGenerator:
@@ -272,7 +271,7 @@ def get_global_generator() -> CodeSparseVectorGenerator:
     return _global_generator
 
 
-def generate_sparse_vector(text: str, metadata: Optional[Dict] = None) -> Dict[int, float]:
+def generate_sparse_vector(text: str, metadata: dict | None = None) -> dict[int, float]:
     """
     Convenience function to generate sparse vector using global generator.
 

@@ -5,8 +5,7 @@ Provides Prometheus metrics integration for the Flexible Extensibility Framework
 """
 
 import logging
-import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ class FEFMetrics:
     - HTTP request latencies
     """
     
-    def __init__(self, port: Optional[int] = None):
+    def __init__(self, port: int | None = None):
         """
         Initialize FEF V3 metrics.
         
@@ -39,7 +38,7 @@ class FEFMetrics:
             port: Optional port to start Prometheus HTTP server
         """
         self.port = port
-        self._metrics: Dict[str, Any] = {}
+        self._metrics: dict[str, Any] = {}
         
         if PROMETHEUS_AVAILABLE:
             self._init_metrics()
@@ -401,10 +400,10 @@ class FEFMetrics:
 
 
 # Global metrics instance
-_fef_metrics: Optional[FEFMetrics] = None
+_fef_metrics: FEFMetrics | None = None
 
 
-def get_fef_metrics(port: Optional[int] = None) -> FEFMetrics:
+def get_fef_metrics(port: int | None = None) -> FEFMetrics:
     """
     Get or create the global FEF metrics instance.
     

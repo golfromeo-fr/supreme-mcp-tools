@@ -16,7 +16,7 @@ import subprocess
 import psutil
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 # Check for required dependencies before importing
 try:
@@ -226,7 +226,7 @@ except Exception as e:
 # FEF V3 Integration
 # ============================================================================
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from tools.fef_integration import (
@@ -261,7 +261,7 @@ def get_collection_config() -> dict:
     }
 
 
-def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_vector_db_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get vector database statistics."""
     collections = []
     if qdrant_client:
@@ -278,7 +278,7 @@ def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_embedding_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get embedding statistics."""
     return {
         "provider": EMBEDDING_PROVIDER,
@@ -288,7 +288,7 @@ def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
+def reindex(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Trigger reindexing."""
     collection = params.get("collection", get_collection_config()["default_collection"])
     ragmcp_metrics["index_operations"] += 1
@@ -908,7 +908,7 @@ Collection `{collection_name}` already exists. The `force` parameter is no longe
         # Start process in background
         logger.info(f"Starting indexing process: {' '.join(cmd)}")
 
-        with open(log_file, 'w') as log:
+        with Path(log_file).open('w') as log:
             process = subprocess.Popen(
                 cmd,
                 stdout=log,
@@ -921,7 +921,7 @@ Collection `{collection_name}` already exists. The `force` parameter is no longe
 
         # Save PID to file in logs/ subfolder for later reference
         pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
-        with open(pid_file, 'w') as f:
+        with Path(pid_file).open('w') as f:
             json.dump({
                 "pid": pid,
                 "workspace_root": workspace_root,
@@ -969,7 +969,7 @@ async def handle_check_indexing_progress_tool(arguments: dict) -> list[types.Tex
         # Load PID info from file if not provided (in logs/ subfolder)
         pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
         if pid_file.exists():
-            with open(pid_file, 'r') as f:
+            with Path(pid_file).open('r') as f:
                 pid_info = json.load(f)
                 if not pid:
                     pid = pid_info.get("pid")
@@ -997,7 +997,7 @@ async def handle_check_indexing_progress_tool(arguments: dict) -> list[types.Tex
             return [types.TextContent(type="text",
                 text="No indexing log found. Start indexing first with start_indexing tool.")]
 
-        with open(log_file, 'r') as f:
+        with Path(log_file).open('r') as f:
             log_lines = f.readlines()
 
         # Parse progress from logs

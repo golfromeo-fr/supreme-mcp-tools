@@ -5,11 +5,11 @@ Especially for PL/SQL packages - extract individual procedures/functions.
 """
 
 import re
-from typing import List, Dict, Any
+from typing import Any
 from pathlib import Path
 
 
-def chunk_plsql_by_function(content: str, file_path: str) -> List[Dict[str, Any]]:
+def chunk_plsql_by_function(content: str, file_path: str) -> list[dict[str, Any]]:
     """
     Smart chunking for PL/SQL packages.
     Extracts each PROCEDURE and FUNCTION as a separate chunk.
@@ -123,7 +123,7 @@ def chunk_plsql_by_function(content: str, file_path: str) -> List[Dict[str, Any]
     return chunks
 
 
-def chunk_proc_by_function(content: str, file_path: str) -> List[Dict[str, Any]]:
+def chunk_proc_by_function(content: str, file_path: str) -> list[dict[str, Any]]:
     """
     Smart chunking for Pro*C files.
     Extracts C functions with their EXEC SQL blocks.
@@ -233,7 +233,7 @@ def chunk_proc_by_function(content: str, file_path: str) -> List[Dict[str, Any]]
     return chunks
 
 
-def chunk_java_by_method(content: str, file_path: str) -> List[Dict[str, Any]]:
+def chunk_java_by_method(content: str, file_path: str) -> list[dict[str, Any]]:
     """
     Smart chunking for Java files.
     Extracts each method as a separate chunk.

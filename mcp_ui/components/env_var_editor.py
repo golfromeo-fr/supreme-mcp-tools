@@ -5,7 +5,7 @@ Renders a collapsible panel for viewing and editing environment variables
 associated with a tool. Secret values are masked; inline editing with save/cancel.
 """
 
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from nicegui import ui
 
@@ -17,9 +17,9 @@ logger = get_logger(__name__)
 
 def EnvVarEditor(
     tool_name: str,
-    variables: List[EnvVariable],
-    on_update: Optional[Callable[[str, str, str], None]] = None,
-    on_delete: Optional[Callable[[str, str], None]] = None,
+    variables: list[EnvVariable],
+    on_update: Callable[[str, str, str], None] | None = None,
+    on_delete: Callable[[str, str], None] | None = None,
 ) -> None:
     """
     Render environment variable editor for a tool.
@@ -48,8 +48,8 @@ def EnvVarEditor(
 def _render_var_row(
     tool_name: str,
     var: EnvVariable,
-    on_update: Optional[Callable],
-    on_delete: Optional[Callable],
+    on_update: Callable | None,
+    on_delete: Callable | None,
 ) -> None:
     """Render a single environment variable row with inline editing."""
     with ui.card().classes("w-full") as row_card:
@@ -92,8 +92,8 @@ def _toggle_edit(
     card: ui.card,
     tool_name: str,
     var: EnvVariable,
-    on_update: Optional[Callable],
-    on_delete: Optional[Callable],
+    on_update: Callable | None,
+    on_delete: Callable | None,
 ) -> None:
     """Replace the card content with an edit form."""
     card.clear()
@@ -227,7 +227,7 @@ def _toggle_edit(
                     )
 
 
-def parse_env_vars_from_api(data: dict) -> List[EnvVariable]:
+def parse_env_vars_from_api(data: dict) -> list[EnvVariable]:
     """
     Parse environment variables from the management API response.
 

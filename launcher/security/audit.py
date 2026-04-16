@@ -6,11 +6,10 @@ Provides security event logging for compliance and debugging.
 
 import logging
 import json
-import time
-from datetime import datetime
-from typing import Any, Dict, Optional, List
+from datetime import datetime, timezone
+from typing import Any
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from enum import Enum
 
 logger = logging.getLogger("audit")
@@ -39,12 +38,12 @@ class AuditEntry:
     action: str
     user: str
     tool_name: str
-    details: Dict[str, Any]
+    details: dict[str, Any]
     success: bool = True
-    ip_address: Optional[str] = None
-    correlation_id: Optional[str] = None
+    ip_address: str | None = None
+    correlation_id: str | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
     
@@ -82,7 +81,7 @@ class AuditLogger:
         self.max_files = max_files
         self.buffer_size = buffer_size
         
-        self._buffer: List[AuditEntry] = []
+        self._buffer: list[AuditEntry] = []
         self._lock = None
     
     async def _get_lock(self):
@@ -97,10 +96,10 @@ class AuditLogger:
         action: str,
         user: str,
         tool_name: str,
-        details: Dict[str, Any],
+        details: dict[str, Any],
         success: bool = True,
-        ip_address: Optional[str] = None,
-        correlation_id: Optional[str] = None
+        ip_address: str | None = None,
+        correlation_id: str | None = None
     ) -> None:
         """
         Log an audit event (synchronous).
@@ -115,7 +114,7 @@ class AuditLogger:
             correlation_id: Request correlation ID
         """
         entry = AuditEntry(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             action=action,
             user=user,
             tool_name=tool_name,
@@ -136,10 +135,10 @@ class AuditLogger:
         action: str,
         user: str,
         tool_name: str,
-        details: Dict[str, Any],
+        details: dict[str, Any],
         success: bool = True,
-        ip_address: Optional[str] = None,
-        correlation_id: Optional[str] = None
+        ip_address: str | None = None,
+        correlation_id: str | None = None
     ) -> None:
         """
         Log an audit event (asynchronous with buffering).
@@ -154,7 +153,7 @@ class AuditLogger:
             correlation_id: Request correlation ID
         """
         entry = AuditEntry(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             action=action,
             user=user,
             tool_name=tool_name,
@@ -180,7 +179,7 @@ class AuditLogger:
         try:
             self._rotate_if_needed()
             
-            with open(self.log_file, "a") as f:
+            with Path(self.log_file).open("a") as f:
                 f.write(entry.to_json() + "\n")
         except Exception as e:
             logger.error(f"Error writing audit log: {e}")
@@ -193,7 +192,7 @@ class AuditLogger:
         try:
             self._rotate_if_needed()
             
-            with open(self.log_file, "a") as f:
+            with Path(self.log_file).open("a") as f:
                 for entry in self._buffer:
                     f.write(entry.to_json() + "\n")
             
@@ -233,14 +232,14 @@ class AuditLogger:
     
     def query(
         self,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-        action: Optional[str] = None,
-        user: Optional[str] = None,
-        tool_name: Optional[str] = None,
-        success: Optional[bool] = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        action: str | None = None,
+        user: str | None = None,
+        tool_name: str | None = None,
+        success: bool | None = None,
         limit: int = 100
-    ) -> List[AuditEntry]:
+    ) -> list[AuditEntry]:
         """
         Query audit log entries.
         
@@ -262,7 +261,7 @@ class AuditLogger:
             return entries
         
         try:
-            with open(self.log_file, "r") as f:
+            with Path(self.log_file).open("r") as f:
                 for line in f:
                     if len(entries) >= limit:
                         break
@@ -300,7 +299,7 @@ class AuditLogger:
 
 
 # Global audit logger instance
-_audit_logger: Optional[AuditLogger] = None
+_audit_logger: AuditLogger | None = None
 
 
 def get_audit_logger(

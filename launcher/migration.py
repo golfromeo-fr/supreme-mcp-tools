@@ -19,10 +19,9 @@ import asyncio
 import json
 import logging
 import shutil
-import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class MigrationStatus:
     def _load(self) -> None:
         """Load migration status from file."""
         if self.status_file.exists():
-            with open(self.status_file, "r") as f:
+            with Path(self.status_file).open("r") as f:
                 self._data = json.load(f)
         else:
             self._data = {
@@ -50,7 +49,7 @@ class MigrationStatus:
     
     def _save(self) -> None:
         """Save migration status to file."""
-        with open(self.status_file, "w") as f:
+        with Path(self.status_file).open("w") as f:
             json.dump(self._data, f, indent=2)
     
     @property
@@ -65,7 +64,7 @@ class MigrationStatus:
         self._save()
     
     @property
-    def migrated_at(self) -> Optional[str]:
+    def migrated_at(self) -> str | None:
         """Get migration timestamp."""
         return self._data.get("migrated_at")
     
@@ -76,7 +75,7 @@ class MigrationStatus:
         self._save()
     
     @property
-    def phases_completed(self) -> List[str]:
+    def phases_completed(self) -> list[str]:
         """Get completed phases."""
         return self._data.get("phases_completed", [])
     
@@ -87,7 +86,7 @@ class MigrationStatus:
             self._save()
     
     @property
-    def backup_path(self) -> Optional[str]:
+    def backup_path(self) -> str | None:
         """Get backup path."""
         return self._data.get("backup_path")
     
@@ -107,7 +106,7 @@ class MigrationManager:
         self.backup_dir = Path.home() / ".config" / "supreme-mcp-tools" / "backups"
         self.backup_dir.mkdir(parents=True, exist_ok=True)
     
-    def check_status(self) -> Dict[str, Any]:
+    def check_status(self) -> dict[str, Any]:
         """
         Check current migration status.
         
@@ -123,7 +122,7 @@ class MigrationManager:
             "migration_needed": self.status.version != "v3"
         }
     
-    def _discover_tools(self) -> List[str]:
+    def _discover_tools(self) -> list[str]:
         """Discover available tools."""
         tools = []
         if self.tools_dir.exists():
@@ -132,7 +131,7 @@ class MigrationManager:
                     tools.append(path.name)
         return tools
     
-    async def migrate(self, dry_run: bool = False) -> Dict[str, Any]:
+    async def migrate(self, dry_run: bool = False) -> dict[str, Any]:
         """
         Run migration from V1 to V3.
         
@@ -180,7 +179,7 @@ class MigrationManager:
             # Update version
             if not dry_run:
                 self.status.version = "v3"
-                self.status.migrated_at = datetime.utcnow().isoformat()
+                self.status.migrated_at = datetime.now(timezone.utc).isoformat()
             
             result["success"] = True
             
@@ -190,7 +189,7 @@ class MigrationManager:
         
         return result
     
-    async def _phase_backup(self, dry_run: bool) -> Dict[str, Any]:
+    async def _phase_backup(self, dry_run: bool) -> dict[str, Any]:
         """Phase 1: Create backup."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = self.backup_dir / f"backup_{timestamp}"
@@ -214,7 +213,7 @@ class MigrationManager:
         except Exception as e:
             return {"success": False, "message": f"Backup failed: {e}"}
     
-    async def _phase_add_management(self, dry_run: bool) -> Dict[str, Any]:
+    async def _phase_add_management(self, dry_run: bool) -> dict[str, Any]:
         """Phase 2: Add management servers to tools."""
         tools = self._discover_tools()
         results = []
@@ -283,7 +282,7 @@ from launcher.config.manager import ConfigManager
         main_file.write_text(content)
         return True
     
-    async def _phase_update_config(self, dry_run: bool) -> Dict[str, Any]:
+    async def _phase_update_config(self, dry_run: bool) -> dict[str, Any]:
         """Phase 3: Update configuration files."""
         config_dir = Path.home() / ".config" / "supreme-mcp-tools"
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -308,14 +307,14 @@ from launcher.config.manager import ConfigManager
             }
             
             if not dry_run:
-                with open(fef_config, "w") as f:
+                with Path(fef_config).open("w") as f:
                     json.dump(config, f, indent=2)
             
             return {"success": True, "message": f"Created {fef_config}"}
         
         return {"success": True, "message": "Config already exists"}
     
-    async def _phase_validate(self, dry_run: bool) -> Dict[str, Any]:
+    async def _phase_validate(self, dry_run: bool) -> dict[str, Any]:
         """Phase 4: Validate migration."""
         checks = []
         
@@ -345,7 +344,7 @@ from launcher.config.manager import ConfigManager
             ]
         }
     
-    async def rollback(self) -> Dict[str, Any]:
+    async def rollback(self) -> dict[str, Any]:
         """
         Rollback to previous version.
         
@@ -388,7 +387,7 @@ from launcher.config.manager import ConfigManager
             return {"success": False, "message": f"Rollback failed: {e}"}
 
 
-def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="FEF V3 Migration Tool",
@@ -423,7 +422,7 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
-async def main(args: Optional[List[str]] = None) -> None:
+async def main(args: list[str] | None = None) -> None:
     """Main entry point."""
     parsed_args = parse_args(args)
     

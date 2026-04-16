@@ -13,12 +13,12 @@ This script:
 
 import sys
 from pathlib import Path
-from typing import List, Set, Dict, Tuple, Optional, Any
+from typing import Any
 import logging
 import os
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 import asyncio
 import httpx
@@ -28,18 +28,18 @@ import tiktoken
 if __name__ == "__main__":
     # When run directly, add parent directory to path
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from indexer.file_filters import EXCLUSION_PATTERNS, VALID_PATTERNS, should_keep_file
+    from indexer.file_filters import should_keep_file
     from indexer.metadata_config import get_metadata_path
     from indexer.smart_chunkers import get_smart_chunker
-    from indexer.sparse_vector_gen import generate_sparse_vector, get_global_generator
-    from indexer.local_embeddings import generate_local_embeddings, get_local_model
+    from indexer.sparse_vector_gen import generate_sparse_vector
+    from indexer.local_embeddings import generate_local_embeddings
 else:
     # When imported as module, use relative imports
-    from .file_filters import EXCLUSION_PATTERNS, VALID_PATTERNS, should_keep_file
+    from .file_filters import should_keep_file
     from .metadata_config import get_metadata_path
     from .smart_chunkers import get_smart_chunker
-    from .sparse_vector_gen import generate_sparse_vector, get_global_generator
-    from .local_embeddings import generate_local_embeddings, get_local_model
+    from .sparse_vector_gen import generate_sparse_vector
+    from .local_embeddings import generate_local_embeddings
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, Distance, VectorParams, SparseVector, SparseVectorParams, SparseIndexParams
@@ -116,11 +116,11 @@ class MetadataStore:
         self.metadata_file = metadata_file
         self.data = self._load()
 
-    def _load(self) -> Dict:
+    def _load(self) -> dict:
         """Load metadata from file."""
         if self.metadata_file.exists():
             try:
-                with open(self.metadata_file, 'r') as f:
+                with Path(self.metadata_file).open('r') as f:
                     return json.load(f)
             except Exception as e:
                 logger.warning(f"Could not load metadata: {e}")
@@ -129,10 +129,10 @@ class MetadataStore:
     def save(self):
         """Save metadata to file."""
         self.metadata_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.metadata_file, 'w') as f:
+        with Path(self.metadata_file).open('w') as f:
             json.dump(self.data, f, indent=2)
 
-    def get_file_metadata(self, rel_path: str) -> Optional[Dict]:
+    def get_file_metadata(self, rel_path: str) -> dict | None:
         """Get metadata for a file."""
         return self.data['files'].get(rel_path)
 
@@ -147,7 +147,7 @@ class MetadataStore:
             'size': size,
             'hash': hash_val,
             'chunks': chunks,
-            'indexed_at': datetime.utcnow().isoformat()
+            'indexed_at': datetime.now(timezone.utc).isoformat()
         }
 
     def remove_file_metadata(self, rel_path: str):
@@ -157,10 +157,10 @@ class MetadataStore:
 
     def mark_index_complete(self):
         """Mark indexing as complete."""
-        self.data['last_index'] = datetime.utcnow().isoformat()
+        self.data['last_index'] = datetime.now(timezone.utc).isoformat()
 
 
-def should_index_file(file_path: Path, workspace_root: Path) -> Tuple[bool, str]:
+def should_index_file(file_path: Path, workspace_root: Path) -> tuple[bool, str]:
     """Dual filtering: blacklist + whitelist. Wrapper around should_keep_file."""
     try:
         rel_path = str(file_path.relative_to(workspace_root))
@@ -174,7 +174,7 @@ def compute_file_hash(file_path: Path) -> str:
     """Compute SHA256 hash of file."""
     sha256 = hashlib.sha256()
     try:
-        with open(file_path, 'rb') as f:
+        with Path(file_path).open('rb') as f:
             while True:
                 chunk = f.read(65536)
                 if not chunk:
@@ -185,7 +185,7 @@ def compute_file_hash(file_path: Path) -> str:
         return ""
 
 
-def get_qdrant_files(collection_name: str, workspace_root: Path) -> Set[str]:
+def get_qdrant_files(collection_name: str, workspace_root: Path) -> set[str]:
     """Get set of files already in Qdrant."""
     try:
         qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
@@ -231,8 +231,8 @@ def get_qdrant_files(collection_name: str, workspace_root: Path) -> Set[str]:
         return set()
 
 
-def categorize_files(workspace_root: Path, directories: List[str], metadata_store: MetadataStore,
-                     qdrant_files: Set[str]) -> Dict[str, List]:
+def categorize_files(workspace_root: Path, directories: list[str], metadata_store: MetadataStore,
+                     qdrant_files: set[str]) -> dict[str, list]:
     """Categorize files as new, modified, or unchanged."""
     extensions = {'.pc', '.sql', '.sh', '.pkg', '.pkb', '.h', '.c', '.cpp', '.hpp',
                   '.py', '.pyx', '.pyi', '.js', '.jsx', '.ts', '.tsx', '.mjs',
@@ -340,13 +340,13 @@ def should_pre_split_chunk(chunk_text: str) -> bool:
     return False
 
 
-def chunk_file_simple(file_path: Path) -> List[Dict[str, Any]]:
+def chunk_file_simple(file_path: Path) -> list[dict[str, Any]]:
     """
     Simple line-based chunking strategy.
     Returns list of chunks with metadata.
     """
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with Path(file_path).open('r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
     except Exception as e:
         logger.error(f"Error reading {file_path}: {e}")
@@ -430,7 +430,7 @@ def chunk_file_simple(file_path: Path) -> List[Dict[str, Any]]:
     return chunks
 
 
-async def generate_embeddings_azure(texts: List[str]) -> List[List[float]]:
+async def generate_embeddings_azure(texts: list[str]) -> list[list[float]]:
     """Generate embeddings using Azure OpenAI API."""
     if not AZURE_API_KEY:
         raise ValueError("AI_API_KEY environment variable not set")
@@ -463,7 +463,7 @@ async def generate_embeddings_azure(texts: List[str]) -> List[List[float]]:
             raise
 
 
-def generate_embeddings_local_sync(texts: List[str]) -> List[List[float]]:
+def generate_embeddings_local_sync(texts: list[str]) -> list[list[float]]:
     """Generate embeddings using local BGE model (synchronous)."""
     try:
         embeddings_np = generate_local_embeddings(
@@ -480,7 +480,7 @@ def generate_embeddings_local_sync(texts: List[str]) -> List[List[float]]:
         raise
 
 
-async def get_embeddings(texts: List[str]) -> List[List[float]]:
+async def get_embeddings(texts: list[str]) -> list[list[float]]:
     """Get embeddings using configured provider."""
     if EMBEDDING_PROVIDER == 'local':
         # Run local embeddings in executor to avoid blocking
@@ -495,7 +495,7 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
     """Index a single file. Returns number of chunks indexed."""
     try:
         rel_path = str(file_path.relative_to(workspace_root))
-        logger.info(f"Indexing: {rel_path}")
+        logger.debug(f"Indexing: {rel_path}")
 
         # Chunk file using smart chunker if available
         smart_chunker = get_smart_chunker(file_path) if USE_SMART_CHUNKING else None
@@ -503,7 +503,7 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
         if smart_chunker:
             logger.debug(f"Using smart chunker for {file_path}")
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                with Path(file_path).open('r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 chunks = smart_chunker(content, str(file_path))
             except Exception as e:
@@ -641,7 +641,7 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
                     'filePath': str(file_path),
                     'codeChunk': chunk['code_chunk'],
                     'contentHash': file_hash,
-                    'indexedAt': datetime.utcnow().isoformat(),
+                    'indexedAt': datetime.now(timezone.utc).isoformat(),
                     'fileMtime': file_mtime,
                     'fileSize': file_size,
                     'chunkIndex': i,
@@ -661,7 +661,7 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
         # Update metadata
         metadata_store.update_file_metadata(rel_path, file_mtime, file_size, file_hash, len(points))
 
-        logger.info(f"✓ Indexed {rel_path}: {len(points)} chunks")
+        logger.debug(f"✓ Indexed {rel_path}: {len(points)} chunks")
         return len(points)
 
     except Exception as e:
@@ -669,7 +669,7 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
         return 0
 
 
-def remove_stale_files(stale_files: List[str], collection_name: str,
+def remove_stale_files(stale_files: list[str], collection_name: str,
                       qdrant_client: QdrantClient, metadata_store: MetadataStore):
     """Remove stale files from Qdrant."""
     if not stale_files:
@@ -715,8 +715,17 @@ def main():
     parser.add_argument('--force', action='store_true', help='Force reindex all files')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     parser.add_argument('--metadata-file', type=str, help='Override default metadata file location')
+    parser.add_argument('--log-level', type=str, default='info',
+                       choices=['debug', 'info', 'warning', 'error'],
+                       help='Log level: debug (every file), info (progress + large files), warning, error')
 
     args = parser.parse_args()
+
+    # Configure logging level
+    import logging
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.getLogger().setLevel(log_level)
+    logger.setLevel(log_level)
 
     # Override sparse vector configuration if --mode is specified
     global USE_SPARSE_VECTORS, SPARSE_ONLY_MODE
@@ -811,7 +820,7 @@ def main():
                 "embedding_provider": EMBEDDING_PROVIDER,
                 "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
                 "embedding_dimensions": EMBEDDING_DIMENSIONS,
-                "indexed_at": datetime.utcnow().isoformat(),
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
                 "indexer_version": "2.0"
             }
             logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
@@ -853,17 +862,45 @@ def main():
     to_index = categories['new'] + categories['modified']
 
     if to_index:
-        logger.info(f"📝 Indexing {len(to_index)} files...")
+        import time
+        from collections import deque
 
+        total_files = len(to_index)
         total_chunks = 0
+        start_time = time.time()
+        recent_times = deque(maxlen=50)  # Rolling average for ETA
+
+        logger.info(f"📝 Indexing {total_files} files...")
+
         for i, file_path in enumerate(to_index, 1):
             rel_path = file_path.relative_to(workspace_path)
-            logger.info(f"   [{i}/{len(to_index)}] {rel_path}")
+            file_start = time.time()
+
+            # Log per-file at DEBUG level only
+            logger.debug(f"Indexing: {rel_path}")
 
             chunks = asyncio.run(index_file(file_path, workspace_path, args.collection, qdrant_client, metadata_store))
             total_chunks += chunks
 
-        logger.info(f"   ✅ Indexed {total_chunks} chunks")
+            # Track timing for ETA
+            file_duration = time.time() - file_start
+            if chunks > 0:
+                recent_times.append(file_duration)
+
+            # Log large files (10+ chunks) at INFO
+            if chunks >= 10:
+                logger.info(f"📄 {rel_path}: {chunks} chunks (took {file_duration:.1f}s)")
+
+            # Progress every 50 files
+            if i % 50 == 0 or i == total_files:
+                elapsed = time.time() - start_time
+                rate = i / elapsed if elapsed > 0 else 0
+                avg_time = sum(recent_times) / len(recent_times) if recent_times else 0
+                remaining = total_files - i
+                eta_seconds = (remaining * avg_time) if avg_time > 0 else 0
+                logger.info(f"   [{i}/{total_files}] {total_chunks} chunks, {rate:.1f} files/sec, ETA: {eta_seconds/60:.0f}min")
+
+        logger.info(f"   ✅ Indexed {total_chunks} chunks in {time.time() - start_time:.0f}s")
         logger.info("")
 
     # Remove stale files

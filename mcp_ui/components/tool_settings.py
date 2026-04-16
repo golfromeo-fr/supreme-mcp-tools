@@ -7,10 +7,9 @@ UI for managing tool settings including disabled tools.
 import json
 from pathlib import Path
 from nicegui import ui
-from typing import List, Dict, Callable, Optional
+from collections.abc import Callable
 
 from ..logging_config import get_logger
-from ..api_client import get_client
 
 logger = get_logger(__name__)
 
@@ -24,7 +23,7 @@ def _load_tools_config() -> dict:
         return {"disabled_tools": {}, "tools": {}, "version": 1}
 
     try:
-        with open(TOOLS_CONFIG_FILE) as f:
+        with Path(TOOLS_CONFIG_FILE).open() as f:
             return json.load(f)
     except Exception:
         return {"disabled_tools": {}, "tools": {}, "version": 1}
@@ -33,23 +32,23 @@ def _load_tools_config() -> dict:
 def _save_tools_config(config: dict) -> None:
     """Save tools configuration to file."""
     TOOLS_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(TOOLS_CONFIG_FILE, 'w') as f:
+    with Path(TOOLS_CONFIG_FILE).open('w') as f:
         json.dump(config, f, indent=2)
 
 
-def get_server_tools(server_name: str) -> List[str]:
+def get_server_tools(server_name: str) -> list[str]:
     """Get known tools for a server from config."""
     config = _load_tools_config()
     return config.get("tools", {}).get(server_name, [])
 
 
-def get_disabled_tools(server_name: str) -> List[str]:
+def get_disabled_tools(server_name: str) -> list[str]:
     """Get disabled tools for a server from config."""
     config = _load_tools_config()
     return config.get("disabled_tools", {}).get(server_name, [])
 
 
-def set_disabled_tools(server_name: str, disabled_list: List[str]) -> None:
+def set_disabled_tools(server_name: str, disabled_list: list[str]) -> None:
     """Set disabled tools for a server in config."""
     config = _load_tools_config()
     if "disabled_tools" not in config:
@@ -58,7 +57,7 @@ def set_disabled_tools(server_name: str, disabled_list: List[str]) -> None:
     _save_tools_config(config)
 
 
-def get_all_servers() -> List[str]:
+def get_all_servers() -> list[str]:
     """Get list of all servers from config."""
     config = _load_tools_config()
     tools = config.get("tools", {})
@@ -71,8 +70,8 @@ class ToolSettingsDialog:
     def __init__(
         self,
         server_name: str,
-        available_tools: List[str],
-        on_save: Optional[Callable] = None,
+        available_tools: list[str],
+        on_save: Callable | None = None,
     ):
         """
         Initialize tool settings dialog.
@@ -85,11 +84,11 @@ class ToolSettingsDialog:
         self.server_name = server_name
         self.available_tools = available_tools
         self.on_save = on_save
-        self.disabled_tools: List[str] = []
+        self.disabled_tools: list[str] = []
         self._dialog = None
-        self._checkboxes: Dict[str, ui.checkbox] = {}
+        self._checkboxes: dict[str, ui.checkbox] = {}
 
-    def load_disabled_tools(self) -> List[str]:
+    def load_disabled_tools(self) -> list[str]:
         """Load disabled tools from config file."""
         return get_disabled_tools(self.server_name)
 
@@ -158,7 +157,7 @@ class ToolSettingsDialog:
 class GlobalToolSettingsDialog:
     """Global dialog for managing tool settings across all servers."""
 
-    def __init__(self, servers: List[str], on_save: Optional[Callable] = None):
+    def __init__(self, servers: list[str], on_save: Callable | None = None):
         """
         Initialize global tool settings dialog.
 
@@ -168,7 +167,7 @@ class GlobalToolSettingsDialog:
         """
         self.servers = servers
         self.on_save = on_save
-        self.selected_server: Optional[str] = None
+        self.selected_server: str | None = None
         self._dialog = None
 
     def _build_ui(self) -> None:
@@ -252,7 +251,7 @@ class GlobalToolSettingsDialog:
         self._dialog.open()
 
 
-async def show_tool_settings(server_name: str, available_tools: List[str]) -> None:
+async def show_tool_settings(server_name: str, available_tools: list[str]) -> None:
     """
     Show tool settings dialog for a server.
 
@@ -264,7 +263,7 @@ async def show_tool_settings(server_name: str, available_tools: List[str]) -> No
     dialog.open()
 
 
-async def show_global_tool_settings(servers: List[str]) -> None:
+async def show_global_tool_settings(servers: list[str]) -> None:
     """
     Show global tool settings dialog.
 

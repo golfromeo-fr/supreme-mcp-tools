@@ -8,21 +8,18 @@ It formats metrics in Prometheus text format and provides HTTP endpoints.
 import logging
 import time
 import hmac
-from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, Request, Response, Depends, Header, HTTPException, APIRouter
+from typing import Any
+from fastapi import FastAPI, Request, Depends, HTTPException, APIRouter
 from fastapi.responses import PlainTextResponse
 from fastapi.security import APIKeyHeader
 
 from .collector import (
     MetricsCollector,
     MetricsRegistry,
-    MetricType,
-    BaseMetric,
     Counter,
     Gauge,
     Histogram,
-    Summary,
-    MetricSample
+    Summary
 )
 
 logger = logging.getLogger(__name__)
@@ -45,9 +42,9 @@ class PrometheusExporter:
     
     def __init__(
         self,
-        collector: Optional[MetricsCollector] = None,
+        collector: MetricsCollector | None = None,
         include_start_time: bool = True,
-        api_key: Optional[str] = None
+        api_key: str | None = None
     ):
         """
         Initialize the Prometheus exporter.
@@ -61,7 +58,7 @@ class PrometheusExporter:
         self.include_start_time = include_start_time
         self.api_key = api_key
     
-    def _check_auth(self, api_key_header: Optional[str]) -> bool:
+    def _check_auth(self, api_key_header: str | None) -> bool:
         """
         Check if the provided API key matches the configured key.
         If no API key is configured, authentication is disabled.
@@ -88,7 +85,7 @@ class PrometheusExporter:
         Returns:
             Metrics in Prometheus text format
         """
-        lines: List[str] = []
+        lines: list[str] = []
         
         if not self.collector:
             return ""
@@ -118,7 +115,7 @@ class PrometheusExporter:
         
         return "\n".join(lines)
     
-    def _format_counter(self, counter: Counter) -> List[str]:
+    def _format_counter(self, counter: Counter) -> list[str]:
         """Format a counter metric."""
         lines = []
         
@@ -135,7 +132,7 @@ class PrometheusExporter:
         
         return lines
     
-    def _format_gauge(self, gauge: Gauge) -> List[str]:
+    def _format_gauge(self, gauge: Gauge) -> list[str]:
         """Format a gauge metric."""
         lines = []
         
@@ -152,7 +149,7 @@ class PrometheusExporter:
         
         return lines
     
-    def _format_histogram(self, histogram: Histogram) -> List[str]:
+    def _format_histogram(self, histogram: Histogram) -> list[str]:
         """Format a histogram metric."""
         lines = []
         
@@ -163,7 +160,7 @@ class PrometheusExporter:
         
         return lines
     
-    def _format_summary(self, summary: Summary) -> List[str]:
+    def _format_summary(self, summary: Summary) -> list[str]:
         """Format a summary metric."""
         lines = []
         
@@ -194,7 +191,7 @@ class PrometheusExporter:
         
         return lines
     
-    def _format_labels(self, labels: Dict[str, str]) -> str:
+    def _format_labels(self, labels: dict[str, str]) -> str:
         """Format labels for Prometheus output."""
         if not labels:
             return ""
@@ -204,9 +201,9 @@ class PrometheusExporter:
 
 
 def create_metrics_app(
-    collector: Optional[MetricsCollector] = None,
+    collector: MetricsCollector | None = None,
     app_name: str = "mcp-monitoring",
-    api_key: Optional[str] = None
+    api_key: str | None = None
 ) -> FastAPI:
     """
     Create a FastAPI application with metrics endpoints.
@@ -228,7 +225,7 @@ def create_metrics_app(
     exporter = PrometheusExporter(collector, api_key=api_key)
     
     @app.get("/metrics", response_class=PlainTextResponse)
-    async def metrics(api_key_header: Optional[str] = Depends(api_key_header)) -> str:
+    async def metrics(api_key_header: str | None = Depends(api_key_header)) -> str:
         """Get Prometheus-formatted metrics."""
         if not exporter._check_auth(api_key_header):
             raise HTTPException(status_code=401, detail="Unauthorized")
@@ -237,7 +234,7 @@ def create_metrics_app(
         return ""
     
     @app.get("/health")
-    async def health(api_key_header: Optional[str] = Depends(api_key_header)) -> Dict[str, Any]:
+    async def health(api_key_header: str | None = Depends(api_key_header)) -> dict[str, Any]:
         """Get health status."""
         if not exporter._check_auth(api_key_header):
             raise HTTPException(status_code=401, detail="Unauthorized")
@@ -248,7 +245,7 @@ def create_metrics_app(
         }
     
     @app.get("/stats")
-    async def stats(api_key_header: Optional[str] = Depends(api_key_header)) -> Dict[str, Any]:
+    async def stats(api_key_header: str | None = Depends(api_key_header)) -> dict[str, Any]:
         """Get basic statistics."""
         if not exporter._check_auth(api_key_header):
             raise HTTPException(status_code=401, detail="Unauthorized")
@@ -283,9 +280,9 @@ class MetricsEndpoint:
     
     def __init__(
         self,
-        registry: Optional[MetricsRegistry] = None,
+        registry: MetricsRegistry | None = None,
         collector_name: str = "mcp",
-        api_key: Optional[str] = None
+        api_key: str | None = None
     ):
         """
         Initialize the metrics endpoint.
@@ -298,9 +295,9 @@ class MetricsEndpoint:
         self.registry = registry or MetricsRegistry.get_instance()
         self.collector_name = collector_name
         self.api_key = api_key
-        self._exporter: Optional[PrometheusExporter] = None
+        self._exporter: PrometheusExporter | None = None
     
-    def _check_auth(self, api_key: Optional[str]) -> bool:
+    def _check_auth(self, api_key: str | None) -> bool:
         """
         Check if the provided API key matches the configured key.
         If no API key is configured, authentication is disabled.
@@ -340,7 +337,7 @@ class MetricsEndpoint:
             media_type=PrometheusExporter.CONTENT_TYPE
         )
     
-    async def get_health(self, request: Request) -> Dict[str, Any]:
+    async def get_health(self, request: Request) -> dict[str, Any]:
         """Get health status."""
         # Extract API key from header
         api_key = request.headers.get(API_KEY_NAME)
@@ -354,7 +351,7 @@ class MetricsEndpoint:
             "timestamp": time.time()
         }
     
-    async def get_stats(self, request: Request) -> Dict[str, Any]:
+    async def get_stats(self, request: Request) -> dict[str, Any]:
         """Get statistics."""
         # Extract API key from header
         api_key = request.headers.get(API_KEY_NAME)
@@ -392,9 +389,9 @@ class MetricsEndpoint:
 
 
 def create_metrics_router(
-    registry: Optional[MetricsRegistry] = None,
+    registry: MetricsRegistry | None = None,
     collector_name: str = "mcp",
-    api_key: Optional[str] = None
+    api_key: str | None = None
 ):
     """
     Create a metrics router for FastAPI.
@@ -431,10 +428,10 @@ def create_metrics_router(
 # Utility function to add metrics to an existing FastAPI app
 def add_metrics_routes(
     app: FastAPI,
-    registry: Optional[MetricsRegistry] = None,
+    registry: MetricsRegistry | None = None,
     collector_name: str = "mcp",
     path: str = "/metrics",
-    api_key: Optional[str] = None
+    api_key: str | None = None
 ) -> None:
     """
     Add metrics routes to an existing FastAPI application.

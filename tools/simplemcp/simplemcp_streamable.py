@@ -10,9 +10,9 @@ FEF V3 Integration:
 import sys
 import os
 import logging
-import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, Optional
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -30,7 +30,7 @@ except ImportError as e:
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
 # Script is at: tools/simplemcp/simplemcp_streamable.py
 # supreme-mcp-tools is at: . (relative path)
-supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+supreme_mcp_tools_dir = (Path(__file__).parent / ".." / "..").resolve()
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
@@ -136,9 +136,9 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle tools/list request."""
         tools = [
             {
@@ -212,10 +212,10 @@ class SimpleMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tool_call(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any],
+        params: dict[str, Any],
+        session: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -597,7 +597,7 @@ def get_timeout_config() -> dict:
     }
 
 
-def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_tool_usage(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get tool usage statistics."""
     return {
         "double_count": simplemcp_metrics["double_count"],
@@ -611,7 +611,7 @@ def get_tool_usage(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_api_response_times(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_api_response_times(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get API response time statistics."""
     has_calls = simplemcp_metrics["total_tool_calls"] > 0
     return {

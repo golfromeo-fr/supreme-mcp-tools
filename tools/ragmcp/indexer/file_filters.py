@@ -7,7 +7,6 @@ Supports any language: Python, JavaScript, TypeScript, Java, C/C++, Go, Rust, SQ
 
 import re
 from pathlib import Path
-from typing import Tuple
 
 EXCLUSION_PATTERNS = [
     r'.*\.\d{3}\.\w+$',
@@ -61,7 +60,7 @@ VALID_PATTERNS = {}
 SCAN_DIRS = {}
 
 
-def should_keep_file(rel_path: str) -> Tuple[bool, str]:
+def should_keep_file(rel_path: str) -> tuple[bool, str]:
     for pattern in EXCLUSION_PATTERNS:
         if re.match(pattern, rel_path, re.IGNORECASE):
             return False, f"blacklist: {pattern}"

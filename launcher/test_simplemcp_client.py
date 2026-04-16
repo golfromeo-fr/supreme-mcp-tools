@@ -42,7 +42,7 @@ def _load_tool_api_key(tool_name: str) -> str | None:
     """Auto-load API key from the tool's config.json."""
     config_path = Path(__file__).parent.parent / "tools" / tool_name / "config.json"
     if config_path.exists():
-        with open(config_path) as f:
+        with Path(config_path).open() as f:
             cfg = json.load(f)
         return cfg.get("auth", {}).get("api_key")
     return None

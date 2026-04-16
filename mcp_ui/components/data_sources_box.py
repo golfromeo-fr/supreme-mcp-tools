@@ -5,7 +5,8 @@ Renders read-only data sources panel with inline metrics display.
 """
 
 from nicegui import ui
-from typing import List, Dict, Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 from ..models import Extension
 
@@ -46,9 +47,9 @@ def _get_extension_status(ext: Extension) -> tuple[str, str]:
 
 
 def DataSourcesBox(
-    extensions: List[Extension],
-    on_query: Optional[Callable[[str], None]] = None,
-    on_refresh: Optional[Callable[[str], None]] = None
+    extensions: list[Extension],
+    on_query: Callable[[str], None] | None = None,
+    on_refresh: Callable[[str], None] | None = None
 ) -> None:
     """
     Render read-only data sources box with inline metrics.
@@ -79,8 +80,9 @@ def DataSourcesBox(
                     ui.label(ext.description).classes('text-grey mb-2')
 
                 if ext.data:
-                    # Show inline summary cards for key metrics
-                    _inline_metrics(ext.data)
+                    # Show inline summary cards for key metrics (pass category from metadata)
+                    category = ext.metadata.get('category') if ext.metadata else None
+                    _inline_metrics(ext.data, category=category)
                     # Show full data table
                     ui.separator()
                     _data_table(ext.data)
@@ -105,19 +107,25 @@ def DataSourcesBox(
 def _build_summary(ext: Extension) -> str:
     """
     Build a summary string for the expansion header based on available data.
-    
+
     Args:
         ext: Extension object with data.
-    
+
     Returns:
         Summary string for display in header.
     """
     if not ext.data:
         return ext.name
-    
+
+    # Special handling for collections category - show count of collections
+    if hasattr(ext, 'metadata') and ext.metadata and ext.metadata.get('category') == 'collections':
+        if 'total' in ext.data:
+            return f"{ext.name} ({ext.data['total']} collections)"
+        return ext.name
+
     # Look for common metric keys to display inline
     summary_parts = [ext.name]
-    
+
     # Try to find total/count metrics
     if 'total' in ext.data:
         summary_parts.append(f"total: {ext.data['total']}")
@@ -127,17 +135,49 @@ def _build_summary(ext: Extension) -> str:
         summary_parts.append(f"count: {ext.data['count']}")
     elif 'avg_time_ms' in ext.data:
         summary_parts.append(f"avg: {ext.data['avg_time_ms']}ms")
-    
+
     return f"{summary_parts[0]} ({', '.join(summary_parts[1:])})" if len(summary_parts) > 1 else summary_parts[0]
 
 
-def _inline_metrics(data: Dict[str, Any]) -> None:
+def _render_collections_data(data: dict[str, Any]) -> None:
+    """
+    Render collections data in a user-friendly table format.
+
+    Args:
+        data: Dictionary with collection names as keys and stats as values.
+    """
+    # Filter out 'total' from collections display
+    collections = {k: v for k, v in data.items() if k != 'total'}
+
+    if not collections:
+        ui.label('No collections indexed').classes('text-grey')
+        return
+
+    # Render as a table with Collection | Stats columns
+    rows = [{'collection': k, 'stats': v} for k, v in collections.items()]
+    ui.table(
+        columns=[
+            {'name': 'collection', 'label': 'Collection', 'field': 'collection'},
+            {'name': 'stats', 'label': 'Stats', 'field': 'stats'}
+        ],
+        rows=rows,
+        row_key='collection'
+    ).classes('w-full').props('flat dense')
+
+
+def _inline_metrics(data: dict[str, Any], category: str = None) -> None:
     """
     Render key metrics as inline chips/badges for quick visibility.
-    
+
     Args:
         data: Dictionary of metric data.
+        category: Optional category to determine rendering style.
     """
+    # Special rendering for collections
+    if category == 'collections':
+        _render_collections_data(data)
+        return
+
     # Show key metrics as chips in a row
     with ui.row().classes('gap-2 flex-wrap'):
         for key, value in data.items():
@@ -175,7 +215,7 @@ def _get_metric_color(key: str) -> str:
         return 'grey'
 
 
-def _data_table(data: Dict[str, Any]) -> None:
+def _data_table(data: dict[str, Any]) -> None:
     """Render data as a key-value table."""
     rows = [{'key': k, 'value': str(v)} for k, v in data.items()]
     

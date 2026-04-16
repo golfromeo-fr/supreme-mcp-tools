@@ -10,12 +10,12 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
 from .logging_config import get_logger, generate_trace_id, set_trace_id, get_trace_id
-from .models import APIResponse, ToolInfo, ToolDetail, Extension, ExtensionType
+from .models import APIResponse, ToolInfo, ToolDetail, Extension
 
 logger = get_logger(__name__)
 
@@ -41,7 +41,7 @@ def _load_ports_config() -> dict:
     for path in possible_paths:
         if path.exists():
             try:
-                with open(path) as f:
+                with Path(path).open() as f:
                     data = json.load(f)
                 logger.debug(f"Loaded ports config from {path}")
                 return data
@@ -100,7 +100,7 @@ class APIClient:
     Uses lazy session creation and comprehensive logging.
     """
 
-    def __init__(self, base_url: Optional[str] = None, timeout: Optional[float] = None):
+    def __init__(self, base_url: str | None = None, timeout: float | None = None):
         """
         Initialize the API client.
 
@@ -110,7 +110,7 @@ class APIClient:
         """
         self.base_url = (_get_default_base_url() if base_url is None else base_url).rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout if timeout is not None else _get_api_timeout())
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self.api_key = os.environ.get("MCP_API_KEY")
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -281,7 +281,7 @@ class APIClient:
         self,
         tool_name: str,
         extension_name: str,
-        params: Optional[dict] = None,
+        params: dict | None = None,
     ) -> APIResponse:
         """Query a data source extension."""
         payload = params or {}
@@ -308,7 +308,7 @@ class APIClient:
         self,
         tool_name: str,
         extension_name: str,
-        params: Optional[dict] = None,
+        params: dict | None = None,
     ) -> APIResponse:
         """Execute an action extension."""
         payload = params or {}
@@ -443,7 +443,7 @@ APIError = Exception
 
 
 # Global client instance (lazy)
-_client: Optional[APIClient] = None
+_client: APIClient | None = None
 
 
 def get_client() -> APIClient:

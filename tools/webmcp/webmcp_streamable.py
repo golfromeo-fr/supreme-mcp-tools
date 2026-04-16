@@ -17,10 +17,10 @@ import os
 import hashlib
 import logging
 import time
-import re
 import json
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, Optional
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -50,7 +50,7 @@ except ImportError as e:
 # The supreme-mcp-tools directory (parent of tools and launcher) needs to be in the path
 # Script is at: supreme-mcp-tools/tools/webmcp/webmcp_streamable.py
 # supreme-mcp-tools is at: supreme-mcp-tools
-supreme_mcp_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+supreme_mcp_tools_dir = (Path(__file__).parent / ".." / "..").resolve()
 if supreme_mcp_tools_dir not in sys.path:
     sys.path.insert(0, supreme_mcp_tools_dir)
 
@@ -119,7 +119,7 @@ class SimpleCache:
         self.cache: dict[str, tuple[str, float]] = {}
         self.default_ttl = default_ttl
     
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         if key in self.cache:
             content, expiry = self.cache[key]
             if time.time() < expiry:
@@ -128,7 +128,7 @@ class SimpleCache:
                 del self.cache[key]
         return None
     
-    def set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
+    def set(self, key: str, value: str, ttl: int | None = None) -> None:
         expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
         self.cache[key] = (value, expiry)
     
@@ -305,9 +305,9 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        session: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle tools/list request."""
         tools = [
             {
@@ -602,10 +602,10 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_tool_call(
         self,
-        params: Dict[str, Any],
-        session: Dict[str, Any],
+        params: dict[str, Any],
+        session: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handle tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -804,9 +804,9 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_brave_search_web(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Handler for Brave web search with enhanced features (web scraping)"""
         query = arguments.get("query")
         count = arguments.get("count", 10)
@@ -916,9 +916,9 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_brave_search_api(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Handler for Brave Search API with enhanced features
         
@@ -1251,9 +1251,9 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_google_search_api(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Handler for Google Search API using SerpAPI
         
@@ -1568,9 +1568,9 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_fetch_url(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Enhanced URL fetch tool with comprehensive content processing
         
@@ -1901,9 +1901,9 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
     
     async def _handle_post_url(
         self,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         request_id: Any
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Handler for sending POST requests to a URL with JSON payload support.
         
@@ -2239,7 +2239,7 @@ def get_search_config() -> dict:
     }
 
 
-def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_search_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get search statistics."""
     avg_search_time = (
         webmcp_metrics["total_search_time_ms"] / webmcp_metrics["search_count"]
@@ -2253,7 +2253,7 @@ def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_fetch_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_fetch_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get fetch statistics."""
     avg_fetch_time = (
         webmcp_metrics["total_fetch_time_ms"] / webmcp_metrics["fetch_count"]
@@ -2266,7 +2266,7 @@ def get_fetch_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_search_history(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_search_history(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get recent search queries."""
     limit = params.get("limit", 10)
     return {
@@ -2275,7 +2275,7 @@ def get_search_history(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_fetch_cache_hits(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_fetch_cache_hits(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get fetch cache hit ratio."""
     cache_hits = webmcp_metrics.get("cache_hits", 0)
     cache_misses = webmcp_metrics.get("cache_misses", 0)

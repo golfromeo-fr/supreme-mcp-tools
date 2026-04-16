@@ -6,9 +6,8 @@ This server provides REST endpoints and WebSocket support for cross-process comm
 """
 
 import asyncio
-import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +15,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 import uvicorn
 
-from .registry import ExtensionRegistry, ExtensionType
+from .registry import ExtensionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +23,17 @@ logger = logging.getLogger(__name__)
 # Request/Response Models
 class QueryRequest(BaseModel):
     """Request model for querying data sources."""
-    params: Optional[Dict[str, Any]] = None
+    params: dict[str, Any] | None = None
 
 
 class MutateRequest(BaseModel):
     """Request model for mutating configuration."""
-    params: Dict[str, Any]
+    params: dict[str, Any]
 
 
 class ExecuteRequest(BaseModel):
     """Request model for executing actions."""
-    params: Optional[Dict[str, Any]] = None
+    params: dict[str, Any] | None = None
 
 
 # API Key header for authentication
@@ -55,7 +54,7 @@ class ExtensionHTTPServer:
     """
     
     @staticmethod
-    def _get_default_mgmt_port(tool_name: str) -> Optional[int]:
+    def _get_default_mgmt_port(tool_name: str) -> int | None:
         """Get the default management port for a tool from ports.json.
         
         Args:
@@ -78,10 +77,10 @@ class ExtensionHTTPServer:
         self,
         tool_name: str,
         registry: ExtensionRegistry,
-        config_manager: Optional[Any] = None,
-        port: Optional[int] = None,
+        config_manager: Any | None = None,
+        port: int | None = None,
         host: str = "0.0.0.0",
-        api_key: Optional[str] = None
+        api_key: str | None = None
     ):
         """
         Initialize the extension HTTP server.
@@ -129,12 +128,12 @@ class ExtensionHTTPServer:
             allow_headers=["*"],
         )
         
-        self._server: Optional[uvicorn.Server] = None
-        self._task: Optional[asyncio.Task] = None
+        self._server: uvicorn.Server | None = None
+        self._task: asyncio.Task | None = None
 
         self._register_routes()
 
-    def _verify_api_key(self, key: Optional[str] = Depends(API_KEY_HEADER)) -> bool:
+    def _verify_api_key(self, key: str | None = Depends(API_KEY_HEADER)) -> bool:
         """Verify API key if configured. If no key is configured, allow access."""
         if self.api_key is None:
             return True  # No auth configured
@@ -278,7 +277,7 @@ class ExtensionHTTPServer:
             return self.config_manager.get_all()
 
         @self.app.post("/config/{key}")
-        async def set_config(key: str, value: Dict[str, Any], _: bool = Depends(self._verify_api_key)):
+        async def set_config(key: str, value: dict[str, Any], _: bool = Depends(self._verify_api_key)):
             """Set a configuration value."""
             if self.config_manager is None:
                 raise HTTPException(

@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class ConfigPersistence:
         """Get path to tool's config file."""
         return self.config_dir / f"{tool_name}.json"
     
-    def load(self, tool_name: str) -> Dict[str, Any]:
+    def load(self, tool_name: str) -> dict[str, Any]:
         """
         Load persisted configuration for a tool.
         
@@ -48,7 +48,7 @@ class ConfigPersistence:
         
         if config_path.exists():
             try:
-                with open(config_path, "r") as f:
+                with Path(config_path).open("r") as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Error loading config for {tool_name}: {e}")
@@ -59,8 +59,8 @@ class ConfigPersistence:
         self,
         tool_name: str,
         extension_name: str,
-        params: Dict[str, Any],
-        user: Optional[str] = None
+        params: dict[str, Any],
+        user: str | None = None
     ) -> None:
         """
         Save a configuration change.
@@ -88,7 +88,7 @@ class ConfigPersistence:
         })
         
         # Save to file
-        with open(config_path, "w") as f:
+        with Path(config_path).open("w") as f:
             json.dump(config, f, indent=2)
         
         logger.info(f"Saved config for {tool_name}.{extension_name}")
@@ -97,7 +97,7 @@ class ConfigPersistence:
         self,
         tool_name: str,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get configuration change history for a tool.
         
@@ -133,7 +133,7 @@ class ConfigPersistence:
         
         return False
     
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         """
         List all tools with persisted configuration.
         

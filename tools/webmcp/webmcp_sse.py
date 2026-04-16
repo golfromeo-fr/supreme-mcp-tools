@@ -14,8 +14,7 @@ FEF V3 Integration:
 import sys
 import os
 import hashlib
-from functools import lru_cache
-from typing import Optional, Dict, Any
+from typing import Any
 from pathlib import Path
 
 # Check for required dependencies before importing
@@ -82,7 +81,7 @@ except Exception as e:
 # ============================================================================
 
 # Add parent directory to path for FEF V3 imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from tools.fef_integration import (
@@ -118,7 +117,7 @@ def get_search_config() -> dict:
     }
 
 
-def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_search_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get search statistics."""
     avg_search_time = (
         webmcp_metrics["total_search_time_ms"] / webmcp_metrics["search_count"]
@@ -132,7 +131,7 @@ def get_search_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_fetch_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_fetch_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get fetch statistics."""
     avg_fetch_time = (
         webmcp_metrics["total_fetch_time_ms"] / webmcp_metrics["fetch_count"]
@@ -145,7 +144,7 @@ def get_fetch_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_search_history(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_search_history(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get recent search queries."""
     limit = params.get("limit", 10)
     return {
@@ -154,7 +153,7 @@ def get_search_history(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_fetch_cache_hits(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_fetch_cache_hits(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get fetch cache hit ratio."""
     cache_hits = webmcp_metrics.get("cache_hits", 0)
     cache_misses = webmcp_metrics.get("cache_misses", 0)
@@ -276,7 +275,7 @@ class SimpleCache:
         self.cache: dict[str, tuple[str, float]] = {}
         self.default_ttl = default_ttl
     
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         if key in self.cache:
             content, expiry = self.cache[key]
             if time.time() < expiry:
@@ -285,7 +284,7 @@ class SimpleCache:
                 del self.cache[key]
         return None
     
-    def set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
+    def set(self, key: str, value: str, ttl: int | None = None) -> None:
         expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
         self.cache[key] = (value, expiry)
     

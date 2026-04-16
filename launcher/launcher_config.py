@@ -8,7 +8,7 @@ configuration from JSON files and environment variables.
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 import logging
 
 from .errors import ConfigError
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 
-def load_ports_config(config_dir: Optional[Path] = None) -> Dict[str, Any]:
+def load_ports_config(config_dir: Path | None = None) -> dict[str, Any]:
     """
     Load ports configuration from ports.json.
     
@@ -48,7 +48,7 @@ def load_ports_config(config_dir: Optional[Path] = None) -> Dict[str, Any]:
         )
     
     try:
-        with open(ports_path, 'r') as f:
+        with Path(ports_path).open('r') as f:
             config = json.load(f)
     except json.JSONDecodeError as e:
         raise ConfigError(f"Invalid ports.json: {e}")
@@ -123,14 +123,14 @@ class Config:
         }
     }
     
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: str | None = None):
         """
         Initialize the configuration manager.
         
         Args:
             config_path: Path to configuration file (optional)
         """
-        self.config: Dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
         self.config_path = config_path
         self._load_config()
     
@@ -196,7 +196,7 @@ class Config:
                 logger.warning(f"Config file not found: {config_path}, using defaults")
                 return
             
-            with open(path, 'r') as f:
+            with Path(path).open('r') as f:
                 file_config = json.load(f)
             
             # Resolve relative paths in toolDirectories
@@ -225,7 +225,7 @@ class Config:
         except Exception as e:
             raise ConfigError(f"Failed to load config file: {e}")
     
-    def _migrate_port_config(self, config: Dict[str, Any]) -> None:
+    def _migrate_port_config(self, config: dict[str, Any]) -> None:
         """
         Migrate legacy port allocation config to new format.
         
@@ -359,7 +359,7 @@ class Config:
         else:
             raise ValueError(f"Unknown value type: {value_type}")
     
-    def _merge_config(self, base: Dict, override: Dict) -> None:
+    def _merge_config(self, base: dict, override: dict) -> None:
         """
         Recursively merge override config into base config.
         
@@ -373,7 +373,7 @@ class Config:
             else:
                 base[key] = value
     
-    def _set_nested_value(self, config: Dict, path: str, value: Any) -> None:
+    def _set_nested_value(self, config: dict, path: str, value: Any) -> None:
         """
         Set a nested configuration value using dot notation.
         
@@ -452,7 +452,7 @@ class Config:
         if not isinstance(fail_fast, bool):
             raise ConfigError(f"failFast must be a boolean, got: {fail_fast}")
     
-    def get_tool_directories(self) -> List[str]:
+    def get_tool_directories(self) -> list[str]:
         """Get list of tool directories."""
         return self.config.get("toolDirectories", [])
     
@@ -478,7 +478,7 @@ class Config:
             )
         return base_port
     
-    def get_port_range(self) -> List[int]:
+    def get_port_range(self) -> list[int]:
         """Get port range for allocation.
         
         Returns:
@@ -496,7 +496,7 @@ class Config:
             )
         return port_range
     
-    def get_manual_ports(self) -> Dict[str, int]:
+    def get_manual_ports(self) -> dict[str, int]:
         """Get manual port assignments for backward compatibility.
         
         Returns a flat dictionary with MCP endpoint ports.
@@ -513,7 +513,7 @@ class Config:
         # Fallback to legacy format
         return self.config.get("portAllocation", {}).get("ports", {}).copy()
     
-    def get_all_manual_ports(self) -> Dict[str, int]:
+    def get_all_manual_ports(self) -> dict[str, int]:
         """Get all manual port assignments with type suffixes.
         
         Returns a dictionary with both MCP endpoint ports and management ports.
@@ -535,7 +535,7 @@ class Config:
         
         return ports
     
-    def get_management_ports(self) -> Dict[str, int]:
+    def get_management_ports(self) -> dict[str, int]:
         """Get management port assignments from config.
         
         These are pre-configured management ports but tools get their
@@ -543,7 +543,7 @@ class Config:
         """
         return self.config.get("portAllocation", {}).get("managementPorts", {}).copy()
     
-    def get_port_ranges(self) -> Dict[str, Tuple[int, int]]:
+    def get_port_ranges(self) -> dict[str, tuple[int, int]]:
         """Get port ranges per type.
         
         Returns:
@@ -555,7 +555,7 @@ class Config:
             raise ConfigError("Port ranges not configured. Ensure ports.json exists.")
         return ranges
     
-    def get_reserved_ports(self) -> Dict[str, int]:
+    def get_reserved_ports(self) -> dict[str, int]:
         """Get reserved system service ports.
         
         Returns:
@@ -567,7 +567,7 @@ class Config:
             raise ConfigError("Reserved ports not configured. Ensure ports.json exists.")
         return ports
     
-    def get_manual_ports_by_type(self) -> Dict[str, Dict[str, int]]:
+    def get_manual_ports_by_type(self) -> dict[str, dict[str, int]]:
         """Get manual port assignments organized by type.
         
         Returns:
@@ -603,7 +603,7 @@ class Config:
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
     
-    def get_log_file(self) -> Optional[str]:
+    def get_log_file(self) -> str | None:
         """Get log file path (None for console only)."""
         return self.config.get("logging", {}).get("file")
     
@@ -637,6 +637,6 @@ class Config:
         
         return current
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return configuration as dictionary."""
         return self.config.copy()

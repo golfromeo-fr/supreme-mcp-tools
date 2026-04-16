@@ -12,7 +12,7 @@ import tempfile
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse, parse_qs
 import re
 from contextlib import asynccontextmanager
@@ -105,7 +105,7 @@ def is_under_allowed_roots(p: Path, allowed_roots: list[Path]) -> bool:
     return False
 
 
-async def download_docx_to_temp(url: str, max_size_mb: int = MAX_DOCX_SIZE_MB, headers: Optional[Dict[str, str]] = None) -> Path:
+async def download_docx_to_temp(url: str, max_size_mb: int = MAX_DOCX_SIZE_MB, headers: dict[str, str] | None = None) -> Path:
     """Download DOCX from URL to a temporary file with size checks and optional auth headers."""
     import httpx
 
@@ -188,7 +188,7 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def convert_docx_to_text(source: str, output_path: Optional[str] = None, headers: Optional[Dict[str, str]] = None) -> str:
+async def convert_docx_to_text(source: str, output_path: str | None = None, headers: dict[str, str] | None = None) -> str:
     """Converts a DOCX file (local path or URL) to plain text; writes to output_path if provided, otherwise returns text.
 
     Args:
@@ -196,7 +196,7 @@ async def convert_docx_to_text(source: str, output_path: Optional[str] = None, h
         output_path: Optional local path to write the extracted text
         headers: Optional dict of HTTP headers for URL downloads (e.g., auth)
     """
-    temp_path: Optional[Path] = None
+    temp_path: Path | None = None
     start_time = time.perf_counter()
     success = False
 
@@ -238,7 +238,7 @@ async def convert_docx_to_text(source: str, output_path: Optional[str] = None, h
                     )
                 return f"Error: Output path not allowed: {out_path}"
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(out_path, "w", encoding="utf-8") as f:
+            with Path(out_path).open("w", encoding="utf-8") as f:
                 f.write(text)
             docx_size = docx_path.stat().st_size if docx_path.exists() else 0
             txt_size = out_path.stat().st_size
@@ -286,7 +286,7 @@ async def convert_docx_to_text(source: str, output_path: Optional[str] = None, h
 # FEF V3 Data Sources
 # ============================================================================
 
-def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_conversion_stats(params: dict[str, Any]) -> dict[str, Any]:
     avg_time = (
         metrics["total_conversion_time_ms"] / metrics["total_conversions"]
         if metrics["total_conversions"] > 0 else 0.0
@@ -299,14 +299,14 @@ def get_conversion_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_format_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_format_usage(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "formats": format_usage,
         "total": sum(format_usage.values())
     }
 
 
-def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_conversion_queue(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "pending_conversions": metrics.get("pending", 0),
         "active_conversions": metrics.get("active", 0),
@@ -314,7 +314,7 @@ def get_conversion_queue(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_storage_usage(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_storage_usage(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "total_bytes_processed": metrics["bytes_processed"],
         "estimated_disk_usage_mb": round(metrics["bytes_processed"] / (1024 * 1024), 2)

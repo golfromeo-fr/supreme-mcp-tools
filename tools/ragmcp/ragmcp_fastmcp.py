@@ -14,7 +14,7 @@ import subprocess
 import psutil
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any
 from contextlib import asynccontextmanager
 
 # Check for required dependencies before importing
@@ -234,7 +234,7 @@ logger.info("="*80)
 # FEF V3 Integration
 # ============================================================================
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from tools.fef_integration import (
@@ -316,7 +316,7 @@ def get_collection_config() -> dict:
     }
 
 
-def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_vector_db_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get vector database statistics."""
     collections = []
     if qdrant_client:
@@ -333,7 +333,7 @@ def get_vector_db_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_embedding_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get embedding statistics."""
     return {
         "provider": EMBEDDING_PROVIDER,
@@ -343,7 +343,7 @@ def get_embedding_stats(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_collection_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+def get_collection_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get collection statistics."""
     collection_name = params.get("collection", get_collection_config()["default_collection"])
     if not qdrant_client:
@@ -357,10 +357,173 @@ def get_collection_stats(params: Dict[str, Any]) -> Dict[str, Any]:
             "vectors_size": collection_info.config.params.vectors.size
         }
     except Exception as e:
-        return {"error": str(e)}
+        # Return user-friendly message instead of raw error
+        err_str = str(e)
+        if "doesn't exist" in err_str or "Not found" in err_str:
+            return {"error": f"Collection '{collection_name}' not found", "exists": False}
+        return {"error": err_str}
 
 
-def reindex(params: Dict[str, Any]) -> Dict[str, Any]:
+def list_collections_handler(params: dict[str, Any]) -> dict[str, Any]:
+    """Data source: List all indexed collections with stats."""
+    if not qdrant_client:
+        return {"error": "Qdrant not connected", "collections": []}
+
+    try:
+        collections = qdrant_client.get_collections().collections
+        result = {}
+        for coll in collections:
+            info = qdrant_client.get_collection(coll.name)
+            vectors_config = info.config.params.vectors
+
+            # Handle both single vector and hybrid (dict) configurations
+            if isinstance(vectors_config, dict):
+                dims_parts = []
+                for name, cfg in vectors_config.items():
+                    if hasattr(cfg, 'size'):
+                        dims_parts.append(f"{name}={cfg.size}d")
+                    else:
+                        dims_parts.append(f"{name}=sparse")
+                dims = ", ".join(dims_parts) if dims_parts else "unknown"
+            else:
+                dims = f"{vectors_config.size}d" if vectors_config and hasattr(vectors_config, 'size') else "unknown"
+
+            result[coll.name] = f"{info.points_count:,} chunks @ {dims}"
+
+        result["total"] = len(collections)
+        return result
+    except Exception as e:
+        return {"error": str(e), "collections": []}
+
+
+def check_indexing_progress_handler(params: dict[str, Any]) -> dict[str, Any]:
+    """Data source: Get current indexing progress."""
+    pid = params.get('pid')
+
+    # Load from PID file
+    pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
+    if not pid_file.exists():
+        return {"status": "no_active_indexing", "message": "No indexing in progress"}
+
+    try:
+        with Path(pid_file).open('r') as f:
+            pid_info = json.load(f)
+            pid = pid_info.get("pid")
+            log_file = Path(pid_info.get("log_file", str(SCRIPT_DIR / "logs" / "indexing.log")))
+            workspace_root = pid_info.get("workspace_root", "Unknown")
+            collection_name = pid_info.get("collection_name", "Unknown")
+            started_at = pid_info.get("started_at", 0)
+
+        # Check if process is still running
+        try:
+            process = psutil.Process(pid)
+            is_running = process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except (psutil.NoSuchProcess, AttributeError):
+            is_running = False
+
+        status = "running" if is_running else "completed_stopped"
+
+        # Parse log for progress info and completion status
+        progress_info = ""
+        completed = False
+        if log_file.exists():
+            with Path(log_file).open('r') as f:
+                lines = f.readlines()
+
+            # Find last progress line with ETA
+            for line in reversed(lines):
+                if "[50/2738]" in line or "[100/" in line or "[/" in line:
+                    progress_info = line.strip()
+                    break
+                if "✅" in line and "INDEXING COMPLETE" in line:
+                    progress_info = "Indexing complete"
+                    completed = True
+                    break
+
+        # Determine if indexing actually completed
+        if not is_running and not completed:
+            status = "incomplete"
+
+        # Calculate runtime
+        runtime = "unknown"
+        if started_at > 0:
+            elapsed = int(time.time() - started_at)
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            runtime = f"{minutes}m {seconds}s"
+
+        return {
+            "status": status,
+            "pid": pid,
+            "workspace": workspace_root,
+            "collection": collection_name,
+            "runtime": runtime,
+            "progress": progress_info
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
+    """Action: Start indexing a workspace."""
+    workspace_root = params.get('workspace_root', '')
+    collection_name = params.get('collection_name', 'code-index')
+    embedding_model = params.get('embedding_model', 'auto')
+
+    if not workspace_root:
+        return {"success": False, "error": "workspace_root is required"}
+
+    if not qdrant_client:
+        return {"success": False, "error": "Qdrant not initialized"}
+
+    try:
+        preset = EMBEDDING_MODEL_PRESETS.get(embedding_model, EMBEDDING_MODEL_PRESETS["auto"])
+
+        indexer_dir = os.getenv('RAGMCP_INDEXER_DIR', '')
+        if indexer_dir:
+            indexer_script = Path(indexer_dir) / "incremental_indexer.py"
+            indexer_cwd = Path(indexer_dir).parent
+        else:
+            indexer_script = SCRIPT_DIR / "indexer" / "incremental_indexer.py"
+            indexer_cwd = SCRIPT_DIR
+
+        cmd = ["python3", str(indexer_script), workspace_root, "--collection", collection_name]
+
+        env = os.environ.copy()
+        env['EMBEDDING_PROVIDER'] = preset['provider']
+        if preset['provider'] == 'local':
+            env['LOCAL_EMBEDDING_MODEL'] = preset['model']
+
+        logs_dir = SCRIPT_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_file = logs_dir / f"indexing_{collection_name}.log"
+
+        with Path(log_file).open('w') as log:
+            process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=indexer_cwd, env=env, start_new_session=True)
+
+        new_pid = process.pid
+
+        pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
+        with Path(pid_file).open('w') as f:
+            json.dump({
+                "pid": new_pid,
+                "workspace_root": workspace_root,
+                "collection_name": collection_name,
+                "log_file": str(log_file),
+                "started_at": time.time()
+            }, f)
+
+        return {
+            "success": True,
+            "pid": new_pid,
+            "message": f"Indexing started for {workspace_root} -> {collection_name}",
+            "log_file": str(log_file)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def reindex(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Trigger reindexing."""
     collection = params.get("collection", get_collection_config()["default_collection"])
     ragmcp_metrics["index_operations"] += 1
@@ -426,6 +589,16 @@ def validate_search_request(collection_name: str, query_vector: list, using_vect
         }
     except Exception as e:
         return {"valid": True, "warning": f"Validation skipped: {e}"}
+
+
+def _get_collection_dimensions(collection_info) -> int | None:
+    """Get the dense vector dimensions from a collection info object."""
+    vectors = collection_info.config.params.vectors
+    if isinstance(vectors, dict):
+        if 'dense' in vectors:
+            return vectors['dense'].size
+        return None
+    return vectors.size if vectors else None
 
 
 def setup_fef_v3():
@@ -498,6 +671,44 @@ def setup_fef_v3():
             handler=reindex,
             metadata={"description": "Trigger reindexing of a collection", "category": "maintenance"}
         ),
+        Extension(
+            name="list_collections",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {"type": "object"}
+            },
+            handler=list_collections_handler,
+            metadata={"description": "List all indexed collections with stats", "category": "collections"}
+        ),
+        Extension(
+            name="check_indexing_progress",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {"pid": {"type": "integer", "description": "Optional PID to check"}}},
+                "output": {"type": "object"}
+            },
+            handler=check_indexing_progress_handler,
+            metadata={"description": "Show current indexing progress with ETA", "category": "collections"}
+        ),
+        Extension(
+            name="start_indexing",
+            ext_type=ExtensionType.ACTION,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "workspace_root": {"type": "string", "description": "Path to workspace to index"},
+                        "collection_name": {"type": "string", "description": "Target collection name"},
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "balanced", "high-quality"], "description": "Embedding model preset"}
+                    },
+                    "required": ["workspace_root"]
+                },
+                "output": {"type": "object"}
+            },
+            handler=start_indexing_handler,
+            metadata={"description": "Start indexing a workspace into a collection", "category": "collections"}
+        ),
     ]
 
     return setup_tool_extensions(
@@ -543,8 +754,8 @@ mcp = FastMCP(
 async def search_code(
     query: str,
     limit: int = 5,
-    file_type: Optional[str] = None,
-    function_name: Optional[str] = None,
+    file_type: str | None = None,
+    function_name: str | None = None,
     collection_name: str = "folder.to.index-database-code"
 ) -> str:
     """
@@ -736,8 +947,8 @@ async def search_code(
 async def search_code_sparse(
     query: str,
     limit: int = 5,
-    file_type: Optional[str] = None,
-    function_name: Optional[str] = None,
+    file_type: str | None = None,
+    function_name: str | None = None,
     collection_name: str = "folder.to.index-database-code"
 ) -> str:
     """
@@ -857,9 +1068,9 @@ async def search(
     limit: int = 5,
     collection_name: str = "folder.to.index-database-code",
     mode: str = "auto",  # auto | dense | sparse | hybrid
-    file_type: Optional[str] = None,
-    function_name: Optional[str] = None,
-    copilot_format: Optional[str] = None,  # "comment" | "sidebar"
+    file_type: str | None = None,
+    function_name: str | None = None,
+    copilot_format: str | None = None,  # "comment" | "sidebar"
     language: str = "c",
     max_lines: int = 50
 ) -> str:
@@ -925,7 +1136,7 @@ async def search(
 
 
 async def _search_dense(query: str, limit: int, collection_name: str,
-                        file_type: Optional[str], function_name: Optional[str]) -> str:
+                        file_type: str | None, function_name: str | None) -> str:
     """Internal: dense semantic search."""
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -1021,7 +1232,7 @@ async def _search_dense(query: str, limit: int, collection_name: str,
 
 
 async def _search_sparse(query: str, limit: int, collection_name: str,
-                         file_type: Optional[str], function_name: Optional[str]) -> str:
+                         file_type: str | None, function_name: str | None) -> str:
     """Internal: sparse BM25 lexical search."""
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -1057,9 +1268,8 @@ async def _search_sparse(query: str, limit: int, collection_name: str,
 
 
 async def _search_hybrid(query: str, limit: int, collection_name: str,
-                         file_type: Optional[str], function_name: Optional[str]) -> str:
+                         file_type: str | None, function_name: str | None) -> str:
     """Internal: combined dense + sparse search."""
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
 
     # Get both search results and combine
     try:
@@ -1073,7 +1283,7 @@ async def _search_hybrid(query: str, limit: int, collection_name: str,
 
 
 async def _search_copilot(query: str, limit: int, collection_name: str,
-                          file_type: Optional[str], function_name: Optional[str],
+                          file_type: str | None, function_name: str | None,
                           copilot_format: str, language: str, max_lines: int) -> str:
     """Internal: search with copilot formatting."""
     if not COPILOT_INJECTOR_AVAILABLE:
@@ -1270,9 +1480,10 @@ async def get_copilot_context(
 async def index_code(
     workspace_root: str,
     collection_name: str = "folder.to.index-database-code",
-    directories: Optional[List[str]] = None,
+    directories: list[str] | None = None,
     embedding_model: str = "auto",  # auto | fast | balanced | high-quality
-    force: bool = False
+    force: bool = False,
+    log_level: str = "info"  # debug | info | warning | error
 ) -> str:
     """
     Index code files into Qdrant for semantic search.
@@ -1309,6 +1520,18 @@ async def index_code(
         else:
             return f"Error: Error checking collection: {str(e)}"
 
+    # Validate embedding dimensions match existing collection
+    if collection_exists:
+        try:
+            existing_info = qdrant_client.get_collection(collection_name)
+            existing_dims = _get_collection_dimensions(existing_info)
+            preset_dims = preset['dimensions']
+            if existing_dims and preset_dims != existing_dims:
+                logger.warning(f"Collection '{collection_name}' has {existing_dims}d vectors but preset '{embedding_model}' uses {preset_dims}d. "
+                               f"Will use existing collection dimensions for incremental indexing.")
+        except Exception as dim_e:
+            logger.warning(f"Could not validate collection dimensions: {dim_e}")
+
     # If force=True and collection exists, warn but don't delete automatically
     if force and collection_exists:
         return f"""Warning: Collection Already Exists
@@ -1342,6 +1565,8 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
     if force:
         cmd.append("--force")
 
+    cmd.extend(["--log-level", log_level])
+
     if directories:
         cmd.extend(["--dirs"] + directories)
     else:
@@ -1365,7 +1590,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
     # Start process in background
     logger.info(f"Starting indexing process: {' '.join(cmd)}")
 
-    with open(log_file, 'w') as log:
+    with Path(log_file).open('w') as log:
         process = subprocess.Popen(
             cmd,
             stdout=log,
@@ -1379,7 +1604,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
 
     # Save PID to file in logs/ subfolder for later reference
     pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
-    with open(pid_file, 'w') as f:
+    with Path(pid_file).open('w') as f:
         json.dump({
             "pid": pid,
             "workspace_root": workspace_root,
@@ -1417,11 +1642,11 @@ The indexing process is running in the background. Use check_indexing_progress t
 async def start_indexing(
     workspace_root: str = "/path/to/your/workspace",
     collection_name: str = "folder.to.index-database-code",
-    mode: Optional[str] = None,
+    mode: str | None = None,
     force: bool = False,
-    directories: Optional[List[str]] = None,
-    embedding_provider: Optional[str] = None,
-    local_embedding_model: Optional[str] = None
+    directories: list[str] | None = None,
+    embedding_provider: str | None = None,
+    local_embedding_model: str | None = None
 ) -> str:
     """
     Start background indexing of code files into Qdrant.
@@ -1435,134 +1660,10 @@ async def start_indexing(
                             directories=directories, force=force,
                             embedding_model=local_embedding_model)  # simplified mapping
 
-    if not qdrant_client:
-        return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT environment variables."
-
-    # Auto-create collection if it doesn't exist (with correct dimensions)
-    collection_exists = False
-    try:
-        qdrant_client.get_collection(collection_name)
-        collection_exists = True
-        logger.info(f"Collection '{collection_name}' already exists")
-    except Exception as e:
-        if "Not found" in str(e) or "doesn't exist" in str(e):
-            logger.info(f"Collection '{collection_name}' does not exist, will be auto-created by indexer")
-            collection_exists = False
-        else:
-            return f"Error: Error checking collection: {str(e)}"
-
-    # If force=True and collection exists, warn but don't delete automatically
-    if force and collection_exists:
-        return f"""Warning: Collection Already Exists
-
-Collection `{collection_name}` already exists. The `force` parameter is no longer used to delete existing collections for safety.
-
-Options:
-1. Continue indexing (recommended): Remove `force=true` and rerun. The indexer will skip already-indexed files.
-2. Clear and reindex: First use `clear_index(collection_name="{collection_name}", confirm=true)` to delete the collection, then start indexing again.
-
-Why this changed: To prevent accidental data loss, the indexer now requires explicit confirmation before deleting existing indexes."""
-
-    # Build command - using incremental indexer
-    indexer_dir = os.getenv('RAGMCP_INDEXER_DIR', '')
-    if indexer_dir:
-        indexer_script = Path(indexer_dir) / "incremental_indexer.py"
-        indexer_cwd = Path(indexer_dir).parent
-    else:
-        indexer_script = SCRIPT_DIR / "indexer" / "incremental_indexer.py"
-        indexer_cwd = SCRIPT_DIR
-    if not indexer_script.exists():
-        return f"Error: Indexer script not found at {indexer_script}"
-
-    cmd = [
-        "python3",
-        str(indexer_script),
-        workspace_root,
-        "--collection", collection_name
-    ]
-
-    # Add mode parameter if specified
-    if mode:
-        cmd.extend(["--mode", mode])
-
-    if force:
-        cmd.append("--force")
-
-    if directories:
-        cmd.extend(["--dirs"] + directories)
-    else:
-        auto_dirs = [d.name for d in Path(workspace_root).iterdir() if d.is_dir() and not d.name.startswith('.')]
-        if auto_dirs:
-            cmd.extend(["--dirs"] + auto_dirs)
-
-    # Create logs/ directory if it doesn't exist
-    logs_dir = SCRIPT_DIR / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create log file path in logs/ subfolder
-    log_file = logs_dir / f"indexing_{collection_name}.log"
-
-    # Prepare environment with embedding configuration
-    env = os.environ.copy()
-    # embedding_provider param was previously silently ignored - now properly passed
-    if embedding_provider:
-        env['EMBEDDING_PROVIDER'] = embedding_provider
-    if local_embedding_model:
-        env['LOCAL_EMBEDDING_MODEL'] = local_embedding_model
-        # If local_embedding_model is set but provider not specified, default to local
-        if not embedding_provider:
-            env['EMBEDDING_PROVIDER'] = 'local'
-
-    # Start process in background
-    logger.info(f"Starting indexing process: {' '.join(cmd)}")
-
-    with open(log_file, 'w') as log:
-        process = subprocess.Popen(
-            cmd,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            cwd=indexer_cwd,
-            env=env,
-            start_new_session=True
-        )
-
-    pid = process.pid
-
-    # Save PID to file in logs/ subfolder for later reference
-    pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
-    with open(pid_file, 'w') as f:
-        json.dump({
-            "pid": pid,
-            "workspace_root": workspace_root,
-            "collection_name": collection_name,
-            "log_file": str(log_file),
-            "started_at": time.time()
-        }, f)
-
-    result = f"""Indexing started successfully!
-
-Process Information:
-- PID: {pid}
-- Workspace: {workspace_root}
-- Collection: {collection_name}
-- Force reindex: {force}
-- Log file: {log_file}
-
-Next Steps:
-1. Monitor progress: Use check_indexing_progress tool
-2. View live logs: tail -f {log_file}
-3. Check collection: Query Qdrant at qdrant:6333
-
-The indexing process is running in the background. Use check_indexing_progress to monitor status.
-"""
-
-    logger.info(f"Indexing started with PID {pid}")
-    return result
-
 
 @with_metrics("check_indexing_progress")
 @mcp.tool()
-async def check_indexing_progress(pid: Optional[int] = None) -> str:
+async def check_indexing_progress(pid: int | None = None) -> str:
     """
     Check the progress of background indexing process.
     Returns status, files processed, chunks indexed, errors, and recent log entries.
@@ -1573,7 +1674,7 @@ async def check_indexing_progress(pid: Optional[int] = None) -> str:
         # Load PID info from file if not provided (in logs/ subfolder)
         pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
         if pid_file.exists():
-            with open(pid_file, 'r') as f:
+            with Path(pid_file).open('r') as f:
                 pid_info = json.load(f)
                 if not pid:
                     pid = pid_info.get("pid")
@@ -1600,7 +1701,7 @@ async def check_indexing_progress(pid: Optional[int] = None) -> str:
         if not log_file.exists():
             return "No indexing log found. Start indexing first with start_indexing tool."
 
-        with open(log_file, 'r') as f:
+        with Path(log_file).open('r') as f:
             log_lines = f.readlines()
 
         # Parse progress from logs
@@ -1627,7 +1728,21 @@ async def check_indexing_progress(pid: Optional[int] = None) -> str:
             try:
                 collection_info = qdrant_client.get_collection(collection_name)
                 points_count = collection_info.points_count
-                collection_stats = f"{points_count:,} chunks indexed"
+
+                # Get vector dimensions
+                vectors_config = collection_info.config.params.vectors
+                if isinstance(vectors_config, dict):
+                    vector_parts = []
+                    for name, params in vectors_config.items():
+                        if hasattr(params, 'size'):
+                            vector_parts.append(f"{name}={params.size}d ({params.distance})")
+                        else:
+                            vector_parts.append(f"{name}=sparse")
+                    vector_dims = ", ".join(vector_parts) if vector_parts else "unknown"
+                else:
+                    vector_dims = f"{vectors_config.size}d ({vectors_config.distance})" if vectors_config else "unknown"
+
+                collection_stats = f"{points_count:,} chunks indexed ({vector_dims})"
             except Exception as e:
                 collection_stats = f"Error: {str(e)}"
 
@@ -1955,6 +2070,44 @@ def setup_extensions(registry=None) -> None:
             },
             handler=reindex,
             metadata={"description": "Trigger reindexing of a collection", "category": "maintenance"}
+        ),
+        Extension(
+            name="list_collections",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {"type": "object"}
+            },
+            handler=list_collections_handler,
+            metadata={"description": "List all indexed collections with stats", "category": "collections"}
+        ),
+        Extension(
+            name="check_indexing_progress",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {"pid": {"type": "integer", "description": "Optional PID to check"}}},
+                "output": {"type": "object"}
+            },
+            handler=check_indexing_progress_handler,
+            metadata={"description": "Show current indexing progress with ETA", "category": "collections"}
+        ),
+        Extension(
+            name="start_indexing",
+            ext_type=ExtensionType.ACTION,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "workspace_root": {"type": "string", "description": "Path to workspace to index"},
+                        "collection_name": {"type": "string", "description": "Target collection name"},
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "balanced", "high-quality"], "description": "Embedding model preset"}
+                    },
+                    "required": ["workspace_root"]
+                },
+                "output": {"type": "object"}
+            },
+            handler=start_indexing_handler,
+            metadata={"description": "Start indexing a workspace into a collection", "category": "collections"}
         ),
     ]
 

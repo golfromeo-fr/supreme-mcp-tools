@@ -10,7 +10,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Generator, Optional
+from collections.abc import Generator
 
 # Context variable for trace ID across async boundaries
 _trace_id_var: ContextVar[str] = ContextVar("trace_id", default="-")
@@ -143,7 +143,7 @@ def log_timing(
 
 
 @contextmanager
-def trace_context(trace_id: Optional[str] = None) -> Generator[str, None, None]:
+def trace_context(trace_id: str | None = None) -> Generator[str, None, None]:
     """
     Context manager for setting a trace ID.
 

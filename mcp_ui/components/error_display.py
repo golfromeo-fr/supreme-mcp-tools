@@ -6,7 +6,7 @@ Provides error and success notification components.
 
 import json
 from pathlib import Path
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from nicegui import ui
 
@@ -24,7 +24,7 @@ def _load_ui_config() -> dict:
     for path in possible_paths:
         if path.exists():
             try:
-                with open(path) as f:
+                with Path(path).open() as f:
                     return json.load(f)
             except Exception:
                 pass
@@ -47,8 +47,8 @@ _NOTIFICATION_DURATIONS = _get_notification_durations()
 
 def show_error(
     message: str,
-    on_dismiss: Optional[Callable[[], None]] = None,
-    on_retry: Optional[Callable[[], None]] = None
+    on_dismiss: Callable[[], None] | None = None,
+    on_retry: Callable[[], None] | None = None
 ) -> ui.card:
     """
     Show error message with dismiss and optional retry button.

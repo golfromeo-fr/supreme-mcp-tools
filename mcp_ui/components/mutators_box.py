@@ -5,11 +5,12 @@ Provides schema-to-form generation for extension inputs.
 Used by ActionsBox for action parameter forms.
 """
 
-from typing import Any, Dict, Callable
+from typing import Any
+from collections.abc import Callable
 from nicegui import ui
 
 
-def _generate_form(schema: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
+def _generate_form(schema: dict[str, Any]) -> Callable[[], dict[str, Any]]:
     """
     Generate a form from a JSON schema and return a getter function.
 
@@ -22,7 +23,7 @@ def _generate_form(schema: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
     input_props = schema.get('input', {}).get('properties', {})
 
     # Track form field references
-    field_refs: Dict[str, Any] = {}
+    field_refs: dict[str, Any] = {}
 
     def _create_fields():
         for prop_name, prop_def in input_props.items():
@@ -79,7 +80,7 @@ def _generate_form(schema: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
         _create_fields()
 
     # Return getter function
-    def get_values() -> Dict[str, Any]:
+    def get_values() -> dict[str, Any]:
         values = {}
         for prop_name, field in field_refs.items():
             val = field.value

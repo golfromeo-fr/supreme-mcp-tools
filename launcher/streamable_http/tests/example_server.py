@@ -11,10 +11,10 @@ Usage:
 
 import asyncio
 import sys
-import os
+import pathlib
 
 # Add parent directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, (pathlib.Path(__file__).parent / ".." / "..").resolve())
 
 try:
     from fastapi import FastAPI, Request

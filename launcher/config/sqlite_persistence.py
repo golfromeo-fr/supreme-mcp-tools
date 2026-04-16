@@ -9,7 +9,7 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,9 @@ class SQLitePersistence:
         self,
         tool_name: str,
         extension_name: str,
-        params: Dict[str, Any],
-        user: Optional[str] = None,
-        reason: Optional[str] = None
+        params: dict[str, Any],
+        user: str | None = None,
+        reason: str | None = None
     ) -> int:
         """
         Save a configuration change.
@@ -121,7 +121,7 @@ class SQLitePersistence:
         tool_name: str,
         limit: int = 100,
         offset: int = 0
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get configuration change history for a tool.
         
@@ -157,7 +157,7 @@ class SQLitePersistence:
         self,
         limit: int = 100,
         offset: int = 0
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get configuration change history across all tools.
         
@@ -243,7 +243,7 @@ class SQLitePersistence:
                 return json.loads(row[0])
             return default
     
-    def get_all_state(self, tool_name: str) -> Dict[str, Any]:
+    def get_all_state(self, tool_name: str) -> dict[str, Any]:
         """
         Get all configuration state for a tool.
         
@@ -290,7 +290,7 @@ class SQLitePersistence:
             conn.commit()
             return cursor.rowcount > 0
     
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         """
         List all tools with configuration.
         
@@ -307,7 +307,7 @@ class SQLitePersistence:
             )
             return [row[0] for row in cursor.fetchall()]
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get persistence statistics.
         

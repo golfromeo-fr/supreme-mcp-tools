@@ -8,7 +8,8 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Tuple, Type
+from typing import Any
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class RetryConfig:
     max_delay: float = 60.0
     exponential_base: int = 2
     jitter: bool = True
-    retryable_exceptions: Tuple[Type[Exception], ...] = (Exception,)
+    retryable_exceptions: tuple[type[Exception], ...] = (Exception,)
     
     def calculate_delay(self, attempt: int) -> float:
         """
@@ -69,9 +70,9 @@ DEFAULT_CONFIG = RetryConfig()
 
 async def retry_with_backoff(
     func: Callable,
-    config: Optional[RetryConfig] = None,
-    on_retry: Optional[Callable[[int, Exception, float], None]] = None,
-    fallback: Optional[Callable] = None
+    config: RetryConfig | None = None,
+    on_retry: Callable[[int, Exception, float], None] | None = None,
+    fallback: Callable | None = None
 ) -> Any:
     """
     Execute function with exponential backoff retry.
@@ -128,9 +129,9 @@ async def retry_with_backoff(
 
 
 def retry(
-    config: Optional[RetryConfig] = None,
-    on_retry: Optional[Callable] = None,
-    fallback: Optional[Callable] = None
+    config: RetryConfig | None = None,
+    on_retry: Callable | None = None,
+    fallback: Callable | None = None
 ):
     """
     Decorator for retry with exponential backoff.
@@ -169,7 +170,7 @@ class RetryableHTTPClient:
     
     def __init__(
         self,
-        retry_config: Optional[RetryConfig] = None,
+        retry_config: RetryConfig | None = None,
         timeout: float = 30.0
     ):
         """
@@ -190,7 +191,7 @@ class RetryableHTTPClient:
             )
         )
         self.timeout = aiohttp.ClientTimeout(total=timeout)
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
     
     async def _get_session(self):
         """Get or create HTTP session."""
@@ -223,7 +224,7 @@ class RetryableHTTPClient:
         
         return await retry_with_backoff(do_get, config=self.retry_config)
     
-    async def post(self, url: str, data: Optional[dict] = None, **kwargs) -> Any:
+    async def post(self, url: str, data: dict | None = None, **kwargs) -> Any:
         """
         Execute POST request with retry.
         

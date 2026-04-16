@@ -14,13 +14,14 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
 # Global tracking of registry instances by tool name
 # This allows tools to find the launcher's registry when running under management
-_global_registries: Dict[str, "ExtensionRegistry"] = {}
+_global_registries: dict[str, "ExtensionRegistry"] = {}
 
 
 class ExtensionType(Enum):
@@ -46,11 +47,11 @@ class Extension:
     """
     name: str
     ext_type: ExtensionType
-    schema: Dict[str, Any]
+    schema: dict[str, Any]
     handler: Callable
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
+    def to_dict(self, include_data: bool = False) -> dict[str, Any]:
         """
         Convert extension to dictionary representation.
         
@@ -74,7 +75,7 @@ class Extension:
         
         return result
     
-    def get_data(self) -> Optional[Dict[str, Any]]:
+    def get_data(self) -> dict[str, Any] | None:
         """
         Get current data values for a data source extension.
         
@@ -99,7 +100,7 @@ class ExtensionRegistry:
     Each tool process has its own instance of this registry.
     """
     
-    def __init__(self, tool_name: Optional[str] = None):
+    def __init__(self, tool_name: str | None = None):
         """
         Initialize the extension registry.
         
@@ -107,9 +108,9 @@ class ExtensionRegistry:
             tool_name: Optional tool name to register this registry globally.
                       When set, tools can find this registry via _global_registries.
         """
-        self._extensions: Dict[str, Dict[str, Extension]] = {}
-        self._event_subscribers: Dict[str, List[Callable]] = {}
-        self._event_queues: Dict[str, List[asyncio.Queue]] = {}
+        self._extensions: dict[str, dict[str, Extension]] = {}
+        self._event_subscribers: dict[str, list[Callable]] = {}
+        self._event_queues: dict[str, list[asyncio.Queue]] = {}
         self._tool_name = tool_name
         
         # Register globally if tool_name is provided
@@ -179,7 +180,7 @@ class ExtensionRegistry:
                 return True
         return False
     
-    def get_extension(self, tool_name: str, extension_name: str) -> Optional[Extension]:
+    def get_extension(self, tool_name: str, extension_name: str) -> Extension | None:
         """
         Get an extension by name.
         
@@ -196,10 +197,10 @@ class ExtensionRegistry:
     
     def list_extensions(
         self,
-        tool_name: Optional[str] = None,
-        ext_type: Optional[ExtensionType] = None,
+        tool_name: str | None = None,
+        ext_type: ExtensionType | None = None,
         include_data: bool = True
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """
         List all extensions, optionally filtered by tool and type.
         
@@ -233,7 +234,7 @@ class ExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        params: Optional[Dict[str, Any]] = None
+        params: dict[str, Any] | None = None
     ) -> Any:
         """
         Query a data source extension.
@@ -271,7 +272,7 @@ class ExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        params: Dict[str, Any]
+        params: dict[str, Any]
     ) -> Any:
         """
         Execute a mutator extension.
@@ -320,7 +321,7 @@ class ExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        params: Optional[Dict[str, Any]] = None
+        params: dict[str, Any] | None = None
     ) -> Any:
         """
         Execute an action extension.
@@ -415,7 +416,7 @@ class ExtensionRegistry:
                 self._event_queues[key].remove(queue)
                 logger.debug(f"Queue unsubscribed from {key}")
     
-    def _emit_event(self, tool_name: str, event_type: str, data: Dict[str, Any]) -> None:
+    def _emit_event(self, tool_name: str, event_type: str, data: dict[str, Any]) -> None:
         """
         Emit an event to all subscribers.
         
@@ -452,7 +453,7 @@ class ExtensionRegistry:
         self,
         tool_name: str,
         extension_name: str,
-        event_data: Dict[str, Any]
+        event_data: dict[str, Any]
     ) -> None:
         """
         Emit an event from an event extension.
