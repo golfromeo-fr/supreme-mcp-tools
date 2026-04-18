@@ -608,7 +608,7 @@ async def main() -> int:
     args = parse_arguments()
     
     # Load configuration
-    config_path = args.config or str(Path(__file__).parent / "config.json")
+    config_path = args.config or str(Path(__file__).parent / "config" / "launcher_config.json")
     config = Config(config_path)
     
     # Override config with CLI arguments

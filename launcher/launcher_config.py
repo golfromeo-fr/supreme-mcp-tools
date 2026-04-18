@@ -74,7 +74,8 @@ class Config:
             "tools/oraclemcp",
             "tools/simplemcp",
             "tools/convertermcp",
-            "tools/ragmcp"
+            "tools/ragmcp",
+            "tools/memorymcp"
         ],
         "portAllocation": {
             "mode": "manual",
@@ -201,15 +202,17 @@ class Config:
             
             # Resolve relative paths in toolDirectories
             if "toolDirectories" in file_config:
-                config_dir = path.parent
+                # Resolve relative to project root (parent of config directory)
+                # config/launcher_config.json -> project root (where launchmcp.py lives)
+                project_root = path.parent.parent
                 resolved_dirs = []
                 for dir_path in file_config["toolDirectories"]:
                     p = Path(dir_path)
                     if p.is_absolute():
                         resolved_dirs.append(dir_path)
                     else:
-                        # Resolve relative to config file directory
-                        resolved = (config_dir / p).resolve()
+                        # Resolve relative to project root
+                        resolved = (project_root / p).resolve()
                         resolved_dirs.append(str(resolved))
                 file_config["toolDirectories"] = resolved_dirs
             

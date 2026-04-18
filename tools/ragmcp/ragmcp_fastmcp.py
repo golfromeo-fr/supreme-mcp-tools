@@ -484,6 +484,26 @@ async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
         new_pid = process.pid
 
         pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
+
+        # Ensure subprocess is reaped properly to prevent zombies
+        import threading
+        def _reap_on_exit(proc, pid_path):
+            """Background thread to reap subprocess when it exits."""
+            try:
+                proc.wait()
+            except Exception:
+                pass
+            try:
+                if pid_path.exists():
+                    with pid_path.open('r') as f:
+                        saved_pid = json.load(f).get('pid')
+                    if saved_pid == new_pid:
+                        pid_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        threading.Thread(target=_reap_on_exit, args=(process, pid_file), daemon=True).start()
+
         with Path(pid_file).open('w') as f:
             json.dump({
                 "pid": new_pid,
@@ -1580,6 +1600,29 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
         )
 
     pid = process.pid
+
+    # Ensure subprocess is reaped properly to prevent zombies
+    # Use a non-blocking approach - we just need to track the PID
+    # The actual wait happens when stop_indexing kills the process or it naturally exits
+    import threading
+    def _reap_on_exit(proc, pid_path):
+        """Background thread to reap subprocess when it exits."""
+        try:
+            proc.wait()
+        except Exception:
+            pass
+        # Clean up PID file when process exits normally
+        try:
+            if pid_path.exists():
+                with pid_path.open('r') as f:
+                    saved_pid = json.load(f).get('pid')
+                if saved_pid == pid:
+                    pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    pid_file = SCRIPT_DIR / "logs" / "indexing.pid"
+    threading.Thread(target=_reap_on_exit, args=(process, pid_file), daemon=True).start()
 
     # Save PID to file in logs/ subfolder for later reference
     pid_file = SCRIPT_DIR / "logs" / "indexing.pid"

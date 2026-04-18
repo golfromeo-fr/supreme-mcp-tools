@@ -4,7 +4,8 @@
     "tools/oraclemcp",
     "tools/simplemcp",
     "tools/convertermcp",
-    "tools/ragmcp"
+    "tools/ragmcp",
+    "tools/memorymcp"
   ],
   "fefV3": {
     "enabled": true,

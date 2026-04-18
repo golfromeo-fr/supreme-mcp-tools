@@ -77,6 +77,10 @@ def ToolCard(
         if tool.name == "ragmcp":
             _render_rag_collections_panel(tool.extensions)
 
+        # Show memorymcp-specific memory explorer panel
+        if tool.name == "memorymcp":
+            _render_memory_explorer_panel(tool.extensions)
+
         # Show extensions or placeholder message
         if not tool.extensions:
             with ui.card().classes("w-full mt-4 bg-gray-100 dark:bg-gray-800"):
@@ -171,6 +175,20 @@ def _render_rag_collections_panel(extensions: list[Extension]) -> None:
             collections_data=list_collections_data,
             indexing_progress=check_indexing_progress_data
         )
+
+
+def _render_memory_explorer_panel(extensions: list[Extension]) -> None:
+    """Render memorymcp-specific memory explorer panel at the top."""
+    from .memory_explorer_panel import MemoryExplorerPanel
+
+    # Find memory_stats data
+    memory_data = None
+
+    for ext in extensions:
+        if ext.name == "memory_stats" and ext.data:
+            memory_data = ext.data
+
+    MemoryExplorerPanel(memory_data=memory_data)
 
 
 def _render_extensions(

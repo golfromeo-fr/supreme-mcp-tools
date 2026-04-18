@@ -31,14 +31,16 @@
       "webmcp": 8001,
       "simplemcp": 8002,
       "convertermcp": 8003,
-      "ragmcp": 8004
+      "ragmcp": 8004,
+      "memorymcp": 8005
     },
     "mgmt": {
       "oraclemcp": 8100,
       "webmcp": 8101,
       "simplemcp": 8102,
       "convertermcp": 8103,
-      "ragmcp": 8104
+      "ragmcp": 8104,
+      "memorymcp": 8105
     }
   }
 }
