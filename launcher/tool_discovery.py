@@ -102,8 +102,9 @@ class ToolDiscovery:
             
             logger.info(f"Searching for MCP tools in: {search_path}")
 
-            # Find all Python files in the directory (including subdirectories)
-            for py_file in search_path.rglob("*.py"):
+            # Find Python files in the tool directory only (not subdirectories)
+            # Subdirectories contain support modules (indexer/, shared/, etc.)
+            for py_file in search_path.glob("*.py"):
                 # Skip __init__.py and test files
                 if py_file.name.startswith("_") or py_file.name.startswith("test_"):
                     continue

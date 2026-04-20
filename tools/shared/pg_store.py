@@ -57,14 +57,16 @@ def init_pg() -> bool:
         import psycopg
         from psycopg.rows import dict_row
 
-        _pool = psycopg_pool(dsn)
-        _pg_available = True
+        pool = psycopg_pool(dsn)
 
-        # Test connection and create schema
-        with _pool.connection() as conn:
+        # Test connection and create schema before marking available
+        with pool.connection() as conn:
             conn.execute("SELECT 1")
             _ensure_schema(conn)
-            logger.info("PostgreSQL store initialized")
+
+        _pool = pool
+        _pg_available = True
+        logger.info("PostgreSQL store initialized")
         return True
 
     except ImportError:
@@ -80,12 +82,8 @@ def init_pg() -> bool:
 class psycopg_pool:
     """Minimal connection pool (since psycopg_pool may not be installed)."""
 
-    def __init__(self, dsn: str, min_size: int = 1, max_size: int = 5):
+    def __init__(self, dsn: str):
         self._dsn = dsn
-        self._min_size = min_size
-        self._max_size = max_size
-        self._connections: list = []
-        self._created = 0
 
     def connection(self):
         import psycopg
@@ -166,7 +164,6 @@ def upsert_memory(
     if not _pg_available:
         return memory_id
 
-    import psycopg
     thash = text_hash(text)
     now = datetime.now(timezone.utc).isoformat()
     tags_json = json.dumps(tags)
@@ -200,8 +197,8 @@ def upsert_memory(
                 logger.info(f"PG: dedup update for memory {existing_id}")
                 return existing_id
             else:
-                # Insert new
-                conn.execute("""
+                # Insert new (ON CONFLICT handles race condition)
+                row = conn.execute("""
                     INSERT INTO memories (id, text, text_hash, memory_type, source, tags,
                         path, commit, agent_id, sensitivity, retention_policy, created_at, last_accessed)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -212,11 +209,8 @@ def upsert_memory(
                         last_accessed = EXCLUDED.last_accessed
                     RETURNING id
                 """, (memory_id, text, thash, memory_type, source, tags_json,
-                      path, commit, agent_id, sensitivity, retention_policy, now, now))
-                result = conn.execute(
-                    "SELECT id FROM memories WHERE id = %s", (memory_id,)
-                ).fetchone()
-                actual_id = str(result["id"]) if result else memory_id
+                      path, commit, agent_id, sensitivity, retention_policy, now, now)).fetchone()
+                actual_id = str(row["id"]) if row else memory_id
                 logger.info(f"PG: inserted memory {actual_id}")
                 return actual_id
 
@@ -271,8 +265,7 @@ def search_text(query: str, limit: int = 10, memory_type: str | None = None,
 
     try:
         with _pool.connection() as conn:
-            conditions = ["similarity(text, %s) > 0.1"]
-            params: list[Any] = [query]
+            params: list[Any] = []
 
             if memory_type:
                 conditions.append("memory_type = %s")
@@ -284,6 +277,10 @@ def search_text(query: str, limit: int = 10, memory_type: str | None = None,
                 for tag in tags:
                     conditions.append("tags @> %s::jsonb")
                     params.append(json.dumps([tag]))
+
+            # Add similarity condition with its own param
+            conditions.append("similarity(text, %s) > 0.1")
+            params.append(query)
 
             where = " AND ".join(conditions)
             params.append(limit)
@@ -344,7 +341,7 @@ def decay_memories(ttl_days: int, min_usage_count: int, retention_policy: str | 
             conditions = ["retention_policy != 'permanent'"]
             params: list[Any] = []
 
-            conditions.append("(last_accessed < NOW() - INTERVAL '%s days' OR created_at < NOW() - INTERVAL '%s days')" % (ttl_days, ttl_days))
+            conditions.append("(last_accessed < NOW() - INTERVAL '%d days' OR created_at < NOW() - INTERVAL '%d days')" % (int(ttl_days), int(ttl_days)))
             conditions.append("usage_count < %s")
             params.append(min_usage_count)
 
