@@ -30,10 +30,50 @@ class MCPClient:
     def __init__(self, url: str):
         self.url = url
         self._id = 0
+        self._session_id: str | None = None
 
     def _next_id(self) -> int:
         self._id += 1
         return self._id
+
+    @staticmethod
+    def _parse_sse_body(raw: bytes) -> dict:
+        """Parse SSE response body, extracting the first JSON message."""
+        text = raw.decode("utf-8", errors="replace")
+        for line in text.split("\n"):
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        return json.loads(text)
+
+    def _post(self, payload: dict) -> dict:
+        """Send a JSON-RPC request and return the parsed response."""
+        data = json.dumps(payload).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self._session_id:
+            headers["mcp-session-id"] = self._session_id
+        req = urllib.request.Request(
+            self.url,
+            data=data,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                sid = resp.headers.get("mcp-session-id")
+                if sid and not self._session_id:
+                    self._session_id = sid
+                raw = resp.read()
+                return self._parse_sse_body(raw)
+        except urllib.error.HTTPError as e:
+            try:
+                return self._parse_sse_body(e.read())
+            except Exception:
+                return {"error": {"message": f"HTTP {e.code}: {e.reason}"}}
+        except Exception as e:
+            return {"error": {"message": f"Connection failed: {e}"}}
 
     def call(self, tool_name: str, arguments: dict | None = None) -> dict:
         """Call an MCP tool and return the result."""
@@ -46,30 +86,15 @@ class MCPClient:
                 "arguments": arguments or {},
             },
         }
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            self.url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                body = json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            body = json.loads(e.read())
-        except Exception as e:
-            return {"error": f"Connection failed: {e}"}
+        body = self._post(payload)
 
         if "error" in body:
             return {"error": body["error"]}
 
         result = body.get("result", {})
-        # FastMCP returns content as list of text blocks
-        content = result.get("content", [])
-        if content and isinstance(content, list):
-            text = content[0].get("text", "")
-            # Try to parse as JSON, otherwise return raw text
+        content_list = result.get("content", [])
+        if content_list and isinstance(content_list, list):
+            text = content_list[0].get("text", "")
             try:
                 return {"result": json.loads(text)}
             except (json.JSONDecodeError, TypeError):
@@ -80,7 +105,10 @@ class MCPClient:
         """Call an MCP tool and return result as plain text."""
         res = self.call(tool_name, arguments)
         if "error" in res:
-            return f"ERROR: {res['error']}"
+            err = res["error"]
+            if isinstance(err, dict):
+                return f"ERROR: {err.get('message', err)}"
+            return f"ERROR: {err}"
         r = res["result"]
         return r if isinstance(r, str) else json.dumps(r, indent=2)
 
@@ -96,23 +124,8 @@ class MCPClient:
                 "clientInfo": {"name": "memorymcp-test", "version": "1.0"},
             },
         }
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            self.url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read())
-        except Exception as e:
-            return {"error": str(e)}
+        return self._post(payload)
 
-
-# ---------------------------------------------------------------------------
-# Test runner
-# ---------------------------------------------------------------------------
 
 class TestRunner:
     def __init__(self, client: MCPClient, keep: bool = False):
