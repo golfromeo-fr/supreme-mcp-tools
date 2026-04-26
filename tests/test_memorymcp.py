@@ -314,6 +314,154 @@ class TestRunner:
         self._report("Skipped (too heavy for integration test)", True)
         self.skipped += 1
 
+        # ── Graph Tools ──────────────────────────────────────────
+        print("\n─ Graph Tools ─")
+
+        # Step G1: createMemoryEdge — link mem1 -> mem2
+        print("\n  createMemoryEdge ─")
+        if mem1_id and mem2_id:
+            result = self.client.call_text("createMemoryEdge", {
+                "from_id": mem1_id,
+                "to_id": mem2_id,
+                "relation": "follows",
+                "label": "second builds on first",
+            })
+            ok = "Created edge" in result or "edge" in result.lower()
+            self._report("Create edge mem1->mem2", ok, result[:80])
+
+            # Create a third memory to build a richer graph
+            result3 = self.client.call_text("upsertMemory", {
+                "text": "Third memory: a concept about graph databases for knowledge management",
+                "memory_type": "concept",
+                "tags": ["test", "graph", "knowledge"],
+                "source": "test_script",
+            })
+            mem3_id = result3 if len(result3) >= 32 and "-" in result3 else None
+            self._report("Create mem3 for graph", mem3_id is not None, f"id={result3[:16]}..." if mem3_id else result3[:60])
+            if mem3_id:
+                self.created_ids.append(mem3_id)
+
+                # Link mem2 -> mem3
+                result = self.client.call_text("createMemoryEdge", {
+                    "from_id": mem2_id,
+                    "to_id": mem3_id,
+                    "relation": "related_to",
+                    "label": "connected concept",
+                })
+                self._report("Create edge mem2->mem3", "Created edge" in result or "edge" in result.lower(), result[:80])
+
+                # Link mem1 -> mem3 (cross-link)
+                result = self.client.call_text("createMemoryEdge", {
+                    "from_id": mem1_id,
+                    "to_id": mem3_id,
+                    "relation": "depends_on",
+                })
+                self._report("Create edge mem1->mem3 (cross-link)", "Created edge" in result or "edge" in result.lower(), result[:80])
+        else:
+            self._report("Create edges", False, "skipped — no memories")
+            self.skipped += 1
+
+        # Step G2: getMemoryGraph — traverse from mem1
+        print("\n  getMemoryGraph ─")
+        if mem1_id:
+            result = self.client.call_text("getMemoryGraph", {
+                "memory_id": mem1_id,
+                "depth": 2,
+                "format": "mermaid",
+            })
+            has_nodes = "graph TD" in result
+            has_edges = "-->" in result
+            self._report("Mermaid graph has nodes", has_nodes)
+            self._report("Mermaid graph has edges", has_edges)
+
+            # ASCII format
+            result_ascii = self.client.call_text("getMemoryGraph", {
+                "memory_id": mem1_id,
+                "depth": 2,
+                "format": "ascii",
+            })
+            self._report("ASCII graph returns text", len(result_ascii) > 20, result_ascii[:80])
+        else:
+            self._report("getMemoryGraph", False, "skipped")
+            self.skipped += 1
+
+        # Step G3: exportGraphAsMarkdown — full export
+        print("\n  exportGraphAsMarkdown ─")
+        result = self.client.call_text("exportGraphAsMarkdown", {
+            "tag": "test",
+        })
+        has_md = "# Memory Graph" in result
+        has_mermaid = "```mermaid" in result
+        has_memories = "## Memories" in result
+        self._report("Export has markdown header", has_md)
+        self._report("Export has mermaid diagram", has_mermaid)
+        self._report("Export has memories section", has_memories)
+
+        # Step G4: memoryTypeChart
+        print("\n  memoryTypeChart ─")
+        result = self.client.call_text("memoryTypeChart", {"format": "ascii"})
+        self._report("ASCII type chart", "lesson" in result or "concept" in result, result[:80])
+
+        result_mermaid = self.client.call_text("memoryTypeChart", {"format": "mermaid"})
+        self._report("Mermaid pie chart", "pie title" in result_mermaid, result_mermaid[:80])
+
+        # Step G5: textToGraph — convert a SKILL.md-like document
+        print("\n  textToGraph ─")
+        sample_skill = """# My Skill
+
+## About Skills
+Skills are modular folders that extend capabilities.
+
+### What Skills Provide
+- Specialized workflows for specific domains
+- Tool integrations for specific file formats
+- Domain expertise and company-specific knowledge
+
+## Core Principles
+
+### Concise is Key
+Context window is a public good.
+
+1. Challenge each piece of information
+2. Prefer examples over verbose explanations
+3. Keep instructions minimal
+
+### Set Freedom Levels
+Match specificity to task fragility.
+
+## References
+See [SKILL.md](skill-creator/SKILL.md) for full spec.
+"""
+
+        result_mermaid = self.client.call_text("textToGraph", {
+            "text": sample_skill,
+            "title": "Skill Creator",
+            "output": "mermaid",
+        })
+        self._report("Mermaid graph from text", "graph TD" in result_mermaid, result_mermaid[:100])
+        self._report("Has section nodes", "has_section" in result_mermaid)
+        self._report("Has step chaining", "has_step" in result_mermaid or "then" in result_mermaid)
+
+        result_json = self.client.call_text("textToGraph", {
+            "text": sample_skill,
+            "title": "Skill Creator",
+            "output": "json",
+        })
+        self._report("JSON output valid", '"nodes"' in result_json and '"edges"' in result_json)
+
+        result_both = self.client.call_text("textToGraph", {
+            "text": "# Simple\n\n- item one\n- item two\n\n1. first step\n2. second step",
+            "title": "Simple Test",
+            "output": "both",
+        })
+        self._report("Both output has mermaid+json", "graph TD" in result_both and '"nodes"' in result_both)
+
+        # Step G6: verify edges survive retrieval
+        print("\n  Edge integrity ─")
+        if mem1_id:
+            result = self.client.call_text("getMemory", {"memory_id": mem1_id})
+            self._report("Memory has edges field", "Links" in result or "edges" in result.lower() or "follows" in result or "depends_on" in result)
+
         # Step 17: deleteMemory (cleanup)
         print("\n─ deleteMemory (cleanup) ─")
         if not self.keep and self.created_ids:

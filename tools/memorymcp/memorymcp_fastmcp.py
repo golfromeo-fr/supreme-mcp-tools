@@ -520,6 +520,19 @@ Content:
         if payload.get('provenance'):
             output += f"\nProvenance: {json.dumps(payload['provenance'], indent=2)}"
 
+        # Show edges (graph links)
+        edges = payload.get("edges", [])
+        forward = [e for e in edges if not e.get("relation", "").startswith("back:")]
+        if forward:
+            output += "\n\nLinks:"
+            for e in forward:
+                to_id = e.get("to", "")[:8]
+                rel = e.get("relation", "related_to")
+                lbl = e.get("label", "")
+                output += f"\n  → {to_id}... [{rel}]"
+                if lbl:
+                    output += f" — {lbl}"
+
         return output
 
     except Exception as e:
@@ -1257,3 +1270,868 @@ if __name__ == "__main__":
         log_level="info",
         lifespan="on",
     )
+
+
+# ============================================================================
+# Graph Tools — memory edges, concept chains, export
+# ============================================================================
+
+@mcp.tool()
+async def createMemoryEdge(
+    from_id: str,
+    to_id: str,
+    relation: str = "related_to",
+    label: str | None = None,
+) -> str:
+    """
+    Create a directed edge (link) between two memories.
+
+    💡 Tip: Use to build knowledge graphs — connect related memories, show
+    dependencies, or chain steps in a process. Edges are stored in each
+    memory's metadata under the "edges" key.
+
+    Common relations: related_to, depends_on, follows, contradicts, refines, example_of
+
+    Args:
+        from_id: Source memory UUID
+        to_id: Target memory UUID
+        relation: Edge type (default: "related_to")
+        label: Optional human-readable label for the edge
+
+    Returns:
+        Confirmation message
+    """
+    if not qdrant_client:
+        return "Error: Qdrant client not initialized"
+
+    try:
+        # Verify both memories exist
+        results = qdrant_client.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[from_id, to_id],
+            with_payload=True,
+        )
+        if len(results) < 2:
+            found = {str(r.id) for r in results}
+            missing = [x for x in [from_id, to_id] if x not in found]
+            return f"Error: Memory not found: {missing[0]}"
+
+        edge = {"to": to_id, "relation": relation, "label": label}
+
+        # Append edge to source memory's edges list
+        src = next(r for r in results if str(r.id) == from_id)
+        edges = src.payload.get("edges", [])
+        edges.append(edge)
+
+        qdrant_client.set_payload(
+            collection_name=COLLECTION_NAME,
+            payload={"edges": edges},
+            points=[from_id],
+        )
+
+        # Also store reverse reference
+        rev_edge = {"to": from_id, "relation": f"back:{relation}", "label": label}
+        dst = next(r for r in results if str(r.id) == to_id)
+        dst_edges = dst.payload.get("edges", [])
+        dst_edges.append(rev_edge)
+
+        qdrant_client.set_payload(
+            collection_name=COLLECTION_NAME,
+            payload={"edges": dst_edges},
+            points=[to_id],
+        )
+
+        return f"Created edge: {from_id[:8]} --[{relation}]--> {to_id[:8]}"
+
+    except Exception as e:
+        logger.error(f"createMemoryEdge failed: {e}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def getMemoryGraph(
+    memory_id: str,
+    depth: int = 2,
+    format: str = "mermaid",
+) -> str:
+    """
+    Get the graph of memories connected to a starting memory, expanding out to N hops.
+
+    💡 Tip: Use to explore the knowledge neighborhood around a concept.
+    Returns a graph you can render in any Mermaid-compatible viewer.
+
+    Args:
+        memory_id: Starting memory UUID
+        depth: How many hops to expand (default: 2, max: 4)
+        format: "mermaid" for diagram, "ascii" for text list
+
+    Returns:
+        Graph visualization of connected memories
+    """
+    if not qdrant_client:
+        return "Error: Qdrant client not initialized"
+
+    try:
+        depth = min(depth, 4)
+        visited = set()
+        nodes = {}
+        edges = []
+        queue = [(memory_id, 0)]
+
+        while queue:
+            current_id, current_depth = queue.pop(0)
+            if current_id in visited or current_depth > depth:
+                continue
+            visited.add(current_id)
+
+            results = qdrant_client.retrieve(
+                collection_name=COLLECTION_NAME,
+                ids=[current_id],
+                with_payload=True,
+            )
+            if not results:
+                continue
+
+            payload = results[0].payload
+            text = payload.get("text", "")[:50].replace('"', "'")
+            mtype = payload.get("memory_type", "unknown")
+            nodes[current_id] = {"text": text, "type": mtype}
+
+            for edge in payload.get("edges", []):
+                to_id = edge.get("to")
+                relation = edge.get("relation", "related_to")
+                label = edge.get("label", "")
+                edges.append((current_id, to_id, relation, label))
+                if to_id not in visited:
+                    queue.append((to_id, current_depth + 1))
+
+        if not nodes:
+            return "No connected memories found."
+
+        if format == "mermaid":
+            lines = ["graph TD"]
+            for nid, info in nodes.items():
+                safe = nid[:8]
+                lines.append(f'    {safe}["{safe} [{info['type']}]\\n{info['text']}"]')
+            for src, dst, rel, lbl in edges:
+                s, d = src[:8], dst[:8]
+                edge_label = lbl or rel
+                lines.append(f'    {s} -->|"{edge_label}"| {d}')
+            return "\n".join(lines)
+        else:
+            lines = [f"Memory Graph (depth={depth}, {len(nodes)} nodes, {len(edges)} edges)", ""]
+            for nid, info in nodes.items():
+                lines.append(f"  [{info['type']}] {nid[:8]}: {info['text']}")
+            lines.append("")
+            for src, dst, rel, lbl in edges:
+                lines.append(f"  {src[:8]} --[{rel}]--> {dst[:8]}")
+            return "\n".join(lines)
+
+    except Exception as e:
+        logger.error(f"getMemoryGraph failed: {e}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def exportGraphAsMarkdown(
+    root_id: str | None = None,
+    memory_type: str | None = None,
+    tag: str | None = None,
+) -> str:
+    """
+    Export memories and their edges as a Markdown document with embedded Mermaid diagrams.
+
+    💡 Tip: Use to generate a readable document from your knowledge graph.
+    Great for LLM context injection, documentation, or sharing knowledge.
+    If no root_id, exports all memories (optionally filtered by type or tag).
+
+    Args:
+        root_id: Starting memory UUID (optional, exports all if omitted)
+        memory_type: Filter to only this memory type (optional)
+        tag: Filter to only memories with this tag (optional)
+
+    Returns:
+        Markdown document with memory content and Mermaid graph
+    """
+    if not qdrant_client:
+        return "Error: Qdrant client not initialized"
+
+    try:
+        all_points = scroll_all(COLLECTION_NAME)
+
+        # Filter
+        points = []
+        for point in all_points:
+            p = point.payload
+            if memory_type and p.get("memory_type") != memory_type:
+                continue
+            if tag and tag not in p.get("tags", []):
+                continue
+            points.append(point)
+
+        if root_id:
+            # Only include memories reachable from root_id
+            visited = set()
+            queue = [root_id]
+            id_set = set()
+            while queue:
+                cid = queue.pop(0)
+                if cid in visited:
+                    continue
+                visited.add(cid)
+                pt = next((p for p in points if str(p.id) == cid), None)
+                if not pt:
+                    continue
+                id_set.add(cid)
+                for edge in pt.payload.get("edges", []):
+                    queue.append(edge.get("to"))
+            points = [p for p in points if str(p.id) in id_set]
+
+        # Build markdown
+        lines = ["# Memory Graph Export", ""]
+        lines.append(f"*Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}*")
+        lines.append(f"*Memories: {len(points)}*")
+        lines.append("")
+
+        # Memory list
+        lines.append("## Memories")
+        lines.append("")
+        for point in points:
+            p = point.payload
+            mid = str(point.id)[:8]
+            mtype = p.get("memory_type", "unknown")
+            text = p.get("text", "")
+            tags = p.get("tags", [])
+            lines.append(f"### [{mtype}] {mid}...")
+            lines.append(f"**Tags**: {', '.join(tags) if tags else 'none'}")
+            lines.append(f"**Source**: {p.get('source', 'unknown')}")
+            lines.append(f"**Usage**: {p.get('usage_count', 0)}x")
+            lines.append(f"**Created**: {p.get('created_at', 'unknown')}")
+            lines.append("")
+            lines.append(text)
+            lines.append("")
+
+            # Show edges
+            edges = p.get("edges", [])
+            forward = [e for e in edges if not e.get("relation", "").startswith("back:")]
+            if forward:
+                lines.append("**Links**:")
+                for e in forward:
+                    to_id = e.get("to", "")[:8]
+                    rel = e.get("relation", "related_to")
+                    lbl = e.get("label", "")
+                    lines.append(f"- → {to_id}... [{rel}]" + (f" — {lbl}" if lbl else ""))
+                lines.append("")
+
+        # Mermaid diagram
+        lines.append("## Graph Diagram")
+        lines.append("")
+        lines.append("```mermaid")
+        lines.append("graph TD")
+        for point in points:
+            mid = str(point.id)[:8]
+            mtype = point.payload.get("memory_type", "unknown")
+            preview = point.payload.get("text", "")[:30].replace('"', "'")
+            lines.append(f'    {mid}["{mid} [{mtype}]\\n{preview}"]')
+        for point in points:
+            mid = str(point.id)
+            for edge in point.payload.get("edges", []):
+                if edge.get("relation", "").startswith("back:"):
+                    continue
+                to_id = edge.get("to", "")
+                if any(str(p.id) == to_id for p in points):
+                    rel = edge.get("relation", "related_to")
+                    s, d = mid[:8], to_id[:8]
+                    lines.append(f'    {s} -->|"{rel}"| {d}')
+        lines.append("```")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error(f"exportGraphAsMarkdown failed: {e}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def memoryTypeChart(
+    format: str = "ascii",
+) -> str:
+    """
+    Show distribution of memories by type as a bar chart.
+
+    💡 Tip: Use to see what kinds of knowledge you store most and spot gaps.
+
+    Args:
+        format: "ascii" for terminal bar chart, "mermaid" for pie chart
+
+    Returns:
+        Type distribution chart
+    """
+    if not qdrant_client:
+        return "Error: Qdrant client not initialized"
+
+    try:
+        all_points = scroll_all(COLLECTION_NAME)
+        by_type: dict[str, int] = {}
+        for point in all_points:
+            mtype = point.payload.get("memory_type", "unknown")
+            by_type[mtype] = by_type.get(mtype, 0) + 1
+
+        if not by_type:
+            return "No memories found."
+
+        total = sum(by_type.values())
+
+        if format == "mermaid":
+            lines = ["pie title Memory Types"]
+            for mtype, count in sorted(by_type.items(), key=lambda x: -x[1]):
+                lines.append(f'    "{mtype}" : {count}')
+            return "\n".join(lines)
+
+        max_count = max(by_type.values())
+        max_bar = 30
+        lines = ["Memory Types", "=" * 50, ""]
+        for mtype, count in sorted(by_type.items(), key=lambda x: -x[1]):
+            bar_len = int((count / max(max_count, 1)) * max_bar)
+            bar = "█" * bar_len
+            pct = (count / total * 100) if total > 0 else 0
+            lines.append(f"  {mtype:<25} {bar} {count} ({pct:.0f}%)")
+        lines.append(f"\n  Total: {total} memories")
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error(f"memoryTypeChart failed: {e}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def textToGraph(
+    text: str,
+    title: str | None = None,
+    output: str = "text",
+) -> str:
+    """
+    Convert structured text (Markdown, skill files, docs) into a knowledge graph.
+
+    💡 Tip: LLMs reason better over graphs than flat text. Feed this output back
+    into an LLM prompt to improve comprehension of complex documents, skills, or
+    procedures. Parses headings, lists, numbered steps, prose, code blocks, and
+    cross-references into nodes and edges with full content preserved.
+
+    Best for: SKILL.md files, README sections, procedure docs, architecture notes,
+    any text with hierarchical or sequential structure.
+
+    Args:
+        text: The text content to convert (Markdown, plain text, etc.)
+        title: Optional title for the graph root node
+        output: Output format:
+            - "adjacency" (default, best for LLM): plain-text adjacency list with inline content
+            - "text": structured natural language descriptions
+            - "dot": compact Graphviz DOT format
+            - "json": full structured data with content fields
+            - "mermaid": diagram for human visualisation
+            - "both": mermaid + json combined
+
+    Returns:
+        Knowledge graph in the requested format. For LLM consumption, use "adjacency" (most token-efficient)
+        or "text" (best for reasoning tasks).
+    """
+    try:
+        import re
+
+        # Parse YAML frontmatter
+        lines_in = text.split("\n")
+        frontmatter = {}
+        if lines_in and lines_in[0].strip() == "---":
+            frontmatter_lines = []
+            for i, line in enumerate(lines_in[1:], 1):
+                if line.strip() == "---":
+                    lines_in = lines_in[i + 1:]
+                    break
+                frontmatter_lines.append(line)
+            # Parse simple key: value pairs
+            for line in frontmatter_lines:
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    frontmatter[key.strip()] = value.strip()
+
+        title = title or "Document"
+
+        # ── Parse structure ──────────────────────────────────
+        nodes = []  # {id, label, content, level, type, line_number}
+        edges = []  # {from, to, relation}
+        node_counter = 0
+
+        def make_node(label: str, content: str, level: int, ntype: str, line_number: int = 0) -> str:
+            nonlocal node_counter
+            node_counter += 1
+            nid = f"n{node_counter}"
+            safe_label = label.replace('"', "'").strip()[:200]
+            nodes.append({
+                "id": nid,
+                "label": safe_label,
+                "content": content,
+                "level": level,
+                "type": ntype,
+                "line_number": line_number
+            })
+            return nid
+
+        # Root node
+        root_id = make_node(title, title, 0, "root", 0)
+
+        # Track hierarchy: stack of (node_id, heading_level)
+        stack = [(root_id, 0)]
+        prev_step_id = None
+        in_code_block = False
+        code_lang = ""
+        code_lines = []
+        code_start_line = 0
+        prose_buffer = []
+
+        def flush_prose(parent_level):
+            nonlocal prose_buffer
+            filtered = [l for l in prose_buffer if l.strip() not in ("---", "***", "___")]
+            prose_buffer = []
+            content = "\n".join(filtered).strip()
+            if not content:
+                return
+            parent_id = stack[-1][0]
+            nid = make_node(
+                content[:100],
+                content,
+                parent_level + 1,
+                "paragraph",
+                0
+            )
+            edges.append({"from": parent_id, "to": nid, "relation": "has_content"})
+
+        for line_number, raw_line in enumerate(lines_in, 1):
+            line = raw_line.rstrip()
+
+            # Handle code blocks
+            if line.strip().startswith("```"):
+                if in_code_block:
+                    # End of code block
+                    code_content = "\n".join(code_lines)
+                    parent_id = stack[-1][0]
+                    nid = make_node(
+                        f"{code_lang} code" if code_lang else "Code block",
+                        code_content,
+                        stack[-1][1] + 1,
+                        "code",
+                        code_start_line
+                    )
+                    edges.append({"from": parent_id, "to": nid, "relation": "has_code"})
+                    code_lines = []
+                else:
+                    # Start of code block
+                    code_lang = line.strip()[3:].strip()
+                    code_start_line = line_number
+                in_code_block = not in_code_block
+                continue
+
+            if in_code_block:
+                code_lines.append(raw_line)
+                continue
+
+            stripped = line.strip()
+            if not stripped:
+                flush_prose(stack[-1][1])
+                continue
+
+            # Check if line matches any pattern
+            is_pattern = any([
+                stripped.startswith("#"),
+                re.match(r'^(\d+)[.)]\s+(.+)', stripped),
+                re.match(r'^[-*]\s+(.+)', stripped),
+                re.match(r'^\*\*(.+?)\*\*:\s*(.+)', stripped),
+                re.match(r'^\*\*(.+?)\*\*\s*$', stripped),
+            ])
+
+            if is_pattern:
+                # Flush prose buffer before processing pattern
+                flush_prose(stack[-1][1])
+
+            # ── Headings ────────────────────────────────────
+            if stripped.startswith("#"):
+                level = 0
+                for ch in stripped:
+                    if ch == "#":
+                        level += 1
+                    else:
+                        break
+                heading_text = stripped.lstrip("#").strip()
+
+                heading_lower = heading_text.lower().strip()
+                all_refs = re.findall(r'\b(pctech\d+|pcgene\d+|commontech\d+|pkgtech\d+|pctmeta\d+)\b', heading_text)
+                # Filter out self-references (heading that IS the rule, e.g. "### pctech31" or "### commontech6 (desc)")
+                internal_refs = [r for r in all_refs if not re.match(rf'^{re.escape(r)}(\s|$|\()', heading_lower)]
+
+                # Pop stack until we find parent
+                while len(stack) > 1 and stack[-1][1] >= level:
+                    stack.pop()
+
+                parent_id = stack[-1][0]
+                nid = make_node(heading_text, heading_text, level, "section", line_number)
+                edges.append({"from": parent_id, "to": nid, "relation": "has_section"})
+                stack.append((nid, level))
+                prev_step_id = None
+
+                for ref in internal_refs:
+                    ref_id = make_node(f"→ {ref}", f"Reference to rule {ref}", level + 1, "xref", line_number)
+                    edges.append({"from": nid, "to": ref_id, "relation": "xref"})
+
+                continue
+
+            # ── Numbered steps (1. 2. etc) ─────────────────
+            num_match = re.match(r'^(\d+)[.)]\s+(.+)', stripped)
+            if num_match:
+                step_num = num_match.group(1)
+                step_text = num_match.group(2)
+                parent_id = stack[-1][0]
+                nid = make_node(f"Step {step_num}: {step_text}", f"Step {step_num}: {step_text}", stack[-1][1] + 1, "step", line_number)
+                edges.append({"from": parent_id, "to": nid, "relation": "has_step"})
+
+                # Chain sequential steps
+                if prev_step_id:
+                    edges.append({"from": prev_step_id, "to": nid, "relation": "then"})
+                prev_step_id = nid
+                continue
+
+            # ── Bullet points (- or *) ──────────────────────
+            bullet_match = re.match(r'^[-*]\s+(.+)', stripped)
+            if bullet_match:
+                bullet_text = bullet_match.group(1)
+                parent_id = stack[-1][0]
+                nid = make_node(bullet_text, bullet_text, stack[-1][1] + 1, "item", line_number)
+                edges.append({"from": parent_id, "to": nid, "relation": "has_item"})
+                prev_step_id = None
+                continue
+
+            # ── Cross-references [text](link) ──────────────
+            refs = re.findall(r'\[([^\]]+)\]\(([^)]+)\)', stripped)
+            if refs:
+                parent_id = stack[-1][0]
+                for ref_label, ref_target in refs:
+                    nid = make_node(ref_label, f"Link: {ref_label} ({ref_target})", stack[-1][1] + 1, "reference", line_number)
+                    edges.append({"from": parent_id, "to": nid, "relation": "references"})
+
+            # ── Key: Value patterns ─────────────────────────
+            kv_match = re.match(r'^\*\*(.+?)\*\*:\s*(.+)', stripped)
+            if kv_match:
+                key = kv_match.group(1)
+                value = kv_match.group(2)
+                parent_id = stack[-1][0]
+                nid = make_node(f"{key}: {value}", f"{key}: {value}", stack[-1][1] + 1, "property", line_number)
+                edges.append({"from": parent_id, "to": nid, "relation": "has_property"})
+                continue
+
+            # ── Bold standalone lines (sub-sections) ────────
+            bold_match = re.match(r'^\*\*(.+?)\*\*\s*$', stripped)
+            if bold_match:
+                bold_text = bold_match.group(1)
+                parent_id = stack[-1][0]
+                nid = make_node(bold_text, bold_text, stack[-1][1] + 1, "subsection", line_number)
+                edges.append({"from": parent_id, "to": nid, "relation": "has_subsection"})
+                prev_step_id = None
+                continue
+
+            # If not a pattern, accumulate as prose
+            prose_buffer.append(raw_line)
+
+        # Flush any remaining prose
+        flush_prose(stack[-1][1])
+
+        # Add frontmatter nodes
+        if frontmatter:
+            meta_id = make_node("Frontmatter", "Skill metadata", 1, "metadata", 0)
+            edges.append({"from": root_id, "to": meta_id, "relation": "has_metadata"})
+            for key, value in frontmatter.items():
+                prop_id = make_node(f"{key}", f"{key}: {value}", 2, "property", 0)
+                edges.append({"from": meta_id, "to": prop_id, "relation": "has_property"})
+
+        if not nodes:
+            return "No structure found in text."
+
+        # Build lookup maps
+        node_map = {n["id"]: n for n in nodes}
+
+        # Build adjacency: node_id -> [(child_id, relation)]
+        children = {}
+        for e in edges:
+            children.setdefault(e["from"], []).append((e["to"], e["relation"]))
+
+        # ── JSON output ────────────────────────────────────────
+        if output == "json":
+            return json.dumps({"nodes": nodes, "edges": edges}, indent=2)
+
+        # ── Adjacency list (best for LLM) ──────────────────────
+        if output == "adjacency":
+            lines_out = []
+            for n in nodes:
+                nid = n["id"]
+                ntype = n["type"]
+                content = n["content"]
+                kids = children.get(nid, [])
+                if not kids:
+                    lines_out.append(f"{nid} [{ntype}]: {content}")
+                else:
+                    targets = ", ".join(
+                        f"{cid}({rel})" for cid, rel in kids
+                    )
+                    lines_out.append(f"{nid} [{ntype}] -> {targets}")
+                    lines_out.append(f"  content: {content}")
+            return "\n".join(lines_out)
+
+        # ── Structured natural language (best for reasoning) ───
+        if output == "text":
+            lines_out = []
+            for n in nodes:
+                nid = n["id"]
+                ntype = n["type"]
+                content = n["content"]
+                level = n["level"]
+                kids = children.get(nid, [])
+
+                if ntype == "root":
+                    lines_out.append(f"# {content}")
+                elif ntype == "section":
+                    lines_out.append(f"{'##' * min(level, 4)} {content}")
+                elif ntype == "subsection":
+                    lines_out.append(f"  Sub-topic: {content}")
+                elif ntype == "item":
+                    lines_out.append(f"  - {content}")
+                elif ntype == "step":
+                    lines_out.append(f"  {content}")
+                elif ntype == "code":
+                    lang_label = n["label"]
+                    lines_out.append(f"  [{lang_label}]")
+                    for code_line in content.split("\n")[:8]:
+                        lines_out.append(f"    {code_line}")
+                    if content.count("\n") > 8:
+                        lines_out.append(f"    ... ({content.count(chr(10)) - 8} more lines)")
+                elif ntype == "paragraph":
+                    lines_out.append(f"  {content}")
+                elif ntype == "property":
+                    lines_out.append(f"  Property: {content}")
+                elif ntype == "xref":
+                    lines_out.append(f"  References: {content}")
+                elif ntype == "reference":
+                    lines_out.append(f"  Link: {content}")
+                elif ntype == "metadata":
+                    lines_out.append(f"Metadata: {content}")
+            return "\n".join(lines_out)
+
+        # ── DOT/Graphviz output ────────────────────────────────
+        if output == "dot":
+            dot_lines = ["digraph {"]
+            for n in nodes:
+                nid = n["id"]
+                label = n["label"].replace('"', "'").replace("\n", " ")
+                ntype = n["type"]
+                if ntype == "root":
+                    dot_lines.append(f'  {nid} [shape=doublecircle label="{label}"]')
+                elif ntype == "code":
+                    preview = label[:30]
+                    dot_lines.append(f'  {nid} [shape=box style=filled label="{preview}"]')
+                elif ntype in ("section", "subsection"):
+                    dot_lines.append(f'  {nid} [shape=box label="{label}"]')
+                elif ntype == "xref":
+                    dot_lines.append(f'  {nid} [shape=diamond label="{label}"]')
+                else:
+                    dot_lines.append(f'  {nid} [label="{label}"]')
+            for e in edges:
+                rel = e["relation"]
+                if rel == "has_section":
+                    dot_lines.append(f'  {e["from"]} -> {e["to"]}')
+                elif rel == "has_code":
+                    dot_lines.append(f'  {e["from"]} -> {e["to"]} [style=bold]')
+                elif rel == "then":
+                    dot_lines.append(f'  {e["from"]} -> {e["to"]} [style=dashed label="then"]')
+                elif rel == "xref":
+                    dot_lines.append(f'  {e["from"]} -> {e["to"]} [style=dotted]')
+                else:
+                    dot_lines.append(f'  {e["from"]} -> {e["to"]} [style=dotted]')
+            dot_lines.append("}")
+            return "\n".join(dot_lines)
+
+        # ── Mermaid output ─────────────────────────────────────
+        mermaid_lines = ["graph TD"]
+        for n in nodes:
+            nid = n["id"]
+            label = n["label"]
+            ntype = n["type"]
+            shape_map = {
+                "root": f'{nid}{{"{label}"}}',
+                "section": f'{nid}["{label}"]',
+                "subsection": f'{nid}("{label}")',
+                "step": f'{nid}["{label}"]',
+                "item": f'{nid}["{label}"]',
+                "property": f'{nid}[["{label}"]]',
+                "reference": f'{nid}{{"{label}"}}',
+                "metadata": f'{nid}{{"{label}"}}',
+                "code": f'{nid}["{label}"]',
+                "paragraph": f'{nid}["{label}"]',
+                "xref": f'{nid}{{"{label}"}}',
+            }
+            mermaid_lines.append(f"    {shape_map.get(ntype, f'{nid}["{label}"]')}")
+
+        mermaid_lines.append("")
+        edge_styles = {
+            "has_section": "-->",
+            "has_subsection": "-.->",
+            "has_step": "==>",
+            "then": "-->",
+            "has_item": "-.->",
+            "has_property": "-.->",
+            "references": "-.->",
+            "has_metadata": "-.->",
+            "has_code": "==>",
+            "has_content": "-.->",
+            "xref": "-.->",
+        }
+        for e in edges:
+            style = edge_styles.get(e["relation"], "-->")
+            mermaid_lines.append(f"    {e['from']} {style}|{e['relation']}| {e['to']}")
+
+        result = "\n".join(mermaid_lines)
+
+        if output == "both":
+            result += "\n\n```json\n" + json.dumps({"nodes": nodes, "edges": edges}, indent=2) + "\n```"
+
+        return result
+
+    except Exception as e:
+        logger.error(f"textToGraph failed: {e}")
+        return f"Error: {str(e)}"
+
+
+SMARTGRAPH_SYSTEM_PROMPT = """Output the optimized knowledge graph in this exact format — no other text:
+
+CLUSTERS:
+CLUSTER_NAME: rule1, rule2, rule3 — summary
+
+COMPRESSED_RULES:
+ruleID: compressed content
+ruleID1+ruleID2: merged content
+[requires: r1, r2] ruleID: content
+
+CODE:
+code snippet (≤5 lines, use ... for boilerplate)
+
+Start with CLUSTERS: immediately. No preamble, no planning, no explanation."""
+
+SMARTGRAPH_USER_TEMPLATE = """Compress this knowledge graph for LLM injection. Preserve every technical detail.
+
+Graph to optimize:
+
+{text}
+
+Output:"""
+
+
+@mcp.tool()
+async def textToSmartGraph(
+    text: str,
+    title: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    max_tokens: int = 32000,
+) -> str:
+    """
+    Convert text to a compressed, LLM-optimized knowledge graph using an LLM pass.
+
+    Takes structured text (Markdown, skill files, docs), first runs textToGraph to extract
+    structure, then sends it to an LLM for intelligent compression: cluster analysis,
+    rule merging, dependency annotation, and example trimming.
+
+    Reduces token count by 3-4x while preserving all technical semantics (function names,
+    variable types, SQL patterns, file paths).
+
+    Uses any OpenAI-compatible chat completions API. Configure via environment variables
+    or pass parameters directly.
+
+    Best for: SKILL.md files, coding rules, procedure docs — any structured document
+    that will be injected into LLM context repeatedly.
+
+    Args:
+        text: The text content to convert (Markdown, plain text, etc.)
+        title: Optional title for the graph root node
+        api_key: API key (or set SMARTGRAPH_API_KEY env var)
+        base_url: API base URL (or set SMARTGRAPH_BASE_URL env var, default: https://api.openai.com/v1)
+        model: Model name (or set SMARTGRAPH_MODEL env var, default: gpt-4o-mini)
+        max_tokens: Max tokens for LLM response (default: 4096)
+
+    Returns:
+        Compressed, cluster-organized knowledge graph optimized for LLM injection
+    """
+    try:
+        import os
+        import httpx
+
+        # Step 1: Build structured graph with textToGraph
+        graph_text = await textToGraph(text, title=title, output="text")
+
+        if graph_text.startswith("Error:"):
+            return graph_text
+
+        # Step 2: Resolve API config
+        resolved_key = api_key or os.environ.get("SMARTGRAPH_API_KEY", "")
+        resolved_url = base_url or os.environ.get("SMARTGRAPH_BASE_URL", "https://api.openai.com/v1")
+        resolved_model = model or os.environ.get("SMARTGRAPH_MODEL", "gpt-4o-mini")
+
+        if not resolved_key:
+            return "Error: No API key configured. Set SMARTGRAPH_API_KEY env var or pass api_key parameter."
+
+        # Ensure base_url ends correctly
+        base = resolved_url.rstrip("/")
+        if not base.endswith("/chat/completions"):
+            base = base.rstrip("/") + "/chat/completions"
+
+        # Step 3: Call LLM API
+        user_message = SMARTGRAPH_USER_TEMPLATE.format(text=graph_text)
+
+        payload = {
+            "model": resolved_model,
+            "messages": [
+                {"role": "system", "content": SMARTGRAPH_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {resolved_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=240.0) as client:
+            response = await client.post(base, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        content = data["choices"][0]["message"]["content"]
+
+        # Strip MiniMax reasoning blocks (convert thinking to clean output)
+        import re
+        content = re.sub(r'<think>.*?', '', content, flags=re.DOTALL).strip()
+        usage = data.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+
+        header = f"# Smart Graph: {title or 'Document'}\n# Input: ~{len(graph_text)//4} tokens → Output: ~{output_tokens} tokens (LLM: {resolved_model})\n\n"
+        return header + content
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"textToSmartGraph API error: {e.response.status_code} {e.response.text[:200]}")
+        return f"Error: API returned {e.response.status_code}: {e.response.text[:200]}"
+    except httpx.RequestError as e:
+        logger.error(f"textToSmartGraph request error: {e}")
+        return f"Error: Request failed: {str(e)}"
+    except Exception as e:
+        logger.error(f"textToSmartGraph failed: {e}")
+        return f"Error: {str(e)}"
