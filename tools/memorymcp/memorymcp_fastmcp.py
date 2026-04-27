@@ -16,6 +16,7 @@ about the codebase, use upsertMemory to remember it. Future-you will thank you!
 
 import sys
 import os
+import re
 import logging
 import uuid
 import json
@@ -1638,7 +1639,6 @@ async def textToGraph(
         or "text" (best for reasoning tasks).
     """
     try:
-        import re
 
         # Parse YAML frontmatter
         lines_in = text.split("\n")
@@ -2008,28 +2008,194 @@ async def textToGraph(
         return f"Error: {str(e)}"
 
 
-SMARTGRAPH_SYSTEM_PROMPT = """Output the optimized knowledge graph in this exact format — no other text:
+_CONTENT_MARKERS = [
+    r'^CLUSTERS\s*:',
+    r'^COMPRESSED_RULES\s*:',
+    r'^CODE\s*:',
+    r'^#{2,}\s',
+    r'^\*\*[^*]',
+]
+
+_PREAMBLE_PHRASES = [
+    'i need to', 'let me', "i'll", 'i will', 'the user wants',
+    'i want to', 'my approach', 'first, i', 'next, i', 'then i',
+    'now i can', 'i can compress', 'here is how', 'to do this',
+    'the goal', 'i should',
+]
+
+
+def strip_llm_artifacts(text: str) -> str:
+    if not text or not text.strip():
+        return text
+    text = re.sub(r'<\?[\s\S]*?\?>', '', text)
+    text = re.sub(r'<think[^>]*>[\s\S]*?</think\s*>', '', text)
+    text = re.sub(r'<think[^>]*>[\s\S]*?</think\b', '', text)
+    text = re.sub(r'<\?[\s\S]*$', '', text)
+    text = re.sub(r'<think[^>]*>[\s\S]*$', '', text)
+    text = re.sub(r'<think\b[\s\S]*$', '', text)
+    text = text.strip()
+    if not text:
+        return text
+    lines = text.split('\n')
+    marker_positions = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for pattern in _CONTENT_MARKERS:
+            if re.match(pattern, stripped, re.IGNORECASE):
+                marker_positions.append(i)
+                break
+    if not marker_positions:
+        return text
+    for pos in marker_positions:
+        next_line = ''
+        for j in range(pos + 1, min(pos + 5, len(lines))):
+            if lines[j].strip():
+                next_line = lines[j].strip()
+                break
+        if not next_line:
+            continue
+        next_lower = next_line.lower()
+        has_preamble = any(phrase in next_lower for phrase in _PREAMBLE_PHRASES)
+        marker_word = lines[pos].strip().rstrip(':').strip().upper()
+        if marker_word == 'CLUSTERS' and re.match(r'^\d+[\.\)]\s', next_line):
+            continue
+        if not has_preamble:
+            if pos > 0:
+                return '\n'.join(lines[pos:]).strip()
+            return text
+    last = marker_positions[-1]
+    if last > 0:
+        return '\n'.join(lines[last:]).strip()
+    return text
+
+
+SMARTGRAPH_SYSTEM_PROMPT = """You are compressing a technical skill/rules document for LLM context injection.
+
+COMPRESSION STRATEGY:
+- Compress ONLY explanatory prose, descriptions, and narrative text
+- Treat as SACRED (never paraphrase, always verbatim): function names, macro names, constant names, parameter signatures, type constraints, negative constraints ("NEVER", "do NOT"), step sequencing, code examples
+- Information gaps cause hallucination — the consumer LLM fills missing specifics with plausible guesses
+- Your job is to eliminate prose WITHOUT creating gaps the consumer cannot safely fill
+
+OUTPUT FORMAT — follow exactly, no other text:
+
+VERBATIM_INDEX:
+(Extract ALL technical identifiers from the source. List each one individually — never use wildcards like "VC_* macros" or "fc_* functions". Group by type.)
+  macros: exact_name1, exact_name2, exact_name3
+  functions: exact_name1, exact_name2
+  constants: EXACT_CONST1, EXACT_CONST2
+  types: exact_type1, exact_type2
+  negative_constraints: "NEVER do X", "do NOT use Y"
 
 CLUSTERS:
-CLUSTER_NAME: rule1, rule2, rule3 — summary
+CLUSTER_NAME: rule1, rule2, rule3 — one-line summary
 
 COMPRESSED_RULES:
-ruleID: compressed content
+(Compress prose explanations aggressively. Preserve ALL technical content verbatim — identifiers, parameter names, type constraints, negative rules, step order. If the source says "use tabs", write "use tabs" not "indent properly".)
+ruleID: compressed-but-technically-exact content
 ruleID1+ruleID2: merged content
 [requires: r1, r2] ruleID: content
 
 CODE:
-code snippet (≤5 lines, use ... for boilerplate)
+(Preserve representative code patterns. Use ... only for boilerplate that isn't rule-specific.)
+code snippet
 
-Start with CLUSTERS: immediately. No preamble, no planning, no explanation."""
+Start with VERBATIM_INDEX: immediately. No preamble, no planning, no explanation."""
 
-SMARTGRAPH_USER_TEMPLATE = """Compress this knowledge graph for LLM injection. Preserve every technical detail.
+SMARTGRAPH_USER_TEMPLATE = """Compress this knowledge graph for LLM injection.
 
-Graph to optimize:
+CRITICAL RULES:
+1. Every function name, macro name, constant, parameter, and type from the source MUST appear in VERBATIM_INDEX
+2. Negative constraints ("NEVER", "do NOT", "No X") MUST appear verbatim in both VERBATIM_INDEX.negative_constraints AND the relevant COMPRESSED_RULES entry
+3. Step sequencing and ordering MUST be preserved exactly
+4. Compress ONLY the prose explanations — never compress technical content
+
+Graph to compress:
 
 {text}
 
 Output:"""
+
+_IDENTIFIER_RE = re.compile(
+    r'\b([A-Z][A-Z0-9_]{2,})\b'
+    r'|\b([a-z][a-z0-9_]*_[a-z0-9_]+)\s*\('
+    r'|\b([A-Z][A-Za-z0-9_]*_[A-Za-z0-9_]+)\s*\('
+)
+_NOISE_NAMES = frozenset({
+    'NULL', 'EXEC', 'SQL', 'BEGIN', 'END', 'DECLARE', 'SECTION', 'INTO',
+    'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'SELECT', 'INSERT', 'UPDATE',
+    'DELETE', 'CREATE', 'ALTER', 'DROP', 'TABLE', 'INDEX', 'VIEW', 'SET',
+    'VALUES', 'INT', 'LONG', 'SHORT', 'CHAR', 'VOID', 'RETURN', 'IF',
+    'ELSE', 'FOR', 'WHILE', 'DO', 'SWITCH', 'CASE', 'BREAK', 'CONTINUE',
+    'DEFAULT', 'STRUCT', 'TYPEDEF', 'DEFINE', 'INCLUDE', 'PRINTF', 'SPRINTF',
+    'MALLOC', 'FREE', 'SIZEOF', 'ATOL', 'ATOI', 'STRLEN', 'STRCPY', 'STRCAT',
+    'MEMSET', 'MEMCPY', 'STDIN', 'STDOUT', 'STDERR', 'EOF', 'EXIT',
+    'TRUE', 'FALSE', 'VARCHAR', 'STRING',
+})
+
+
+def _extract_verified_names(text: str, max_names: int = 80) -> str:
+    """Extract exact identifiers and negative constraints from source text as a verbatim anchor."""
+    import collections
+    names = collections.Counter()
+    for match in _IDENTIFIER_RE.finditer(text):
+        name = match.group(0)
+        if '(' in name:
+            name = name.split('(')[0]
+        name = name.strip('_')
+        if len(name) < 3 or name.upper() in _NOISE_NAMES or name in _NOISE_NAMES:
+            continue
+        if name.isdigit():
+            continue
+        names[name] += 1
+
+    grouped = collections.defaultdict(list)
+    for name, count in names.most_common(max_names):
+        if name.startswith('fc_'):
+            grouped['functions'].append(name)
+        elif name.startswith('VC_') or name.startswith('STR_'):
+            grouped['macros'].append(name)
+        elif name.isupper() and '_' in name:
+            grouped['constants'].append(name)
+        elif name.isupper():
+            grouped['constants'].append(name)
+        elif '_' in name and name[0].isupper():
+            grouped['types_structs'].append(name)
+        else:
+            grouped['functions'].append(name)
+
+    negative_constraints = []
+    for m in re.finditer(
+        r'(?:NEVER|do\s+NOT|Do\s+not|never|Avoid)\s+([^\n.]{8,80})',
+        text, re.IGNORECASE
+    ):
+        constraint = m.group(0).strip()
+        if constraint and constraint not in negative_constraints:
+            negative_constraints.append(constraint)
+    for m in re.finditer(
+        r'(?<!#\s)(?:No\s+(?:SQL\s+)?\w+[^\n]{8,80})',
+        text, re.IGNORECASE
+    ):
+        constraint = m.group(0).strip()
+        if re.match(r'^No\s+(?:use|JOIN|data)', constraint, re.IGNORECASE):
+            if constraint and constraint not in negative_constraints:
+                negative_constraints.append(constraint)
+
+    if not grouped and not negative_constraints:
+        return ""
+
+    lines = ["LOSSLESS_INDEX (verified from source — overrides all other sections):"]
+    for category in ['macros', 'functions', 'constants', 'types_structs']:
+        items = grouped.get(category, [])
+        if items:
+            lines.append(f"  {category}: {', '.join(items)}")
+    if negative_constraints:
+        lines.append(f"  negative_constraints:")
+        for nc in negative_constraints[:15]:
+            lines.append(f"    - \"{nc}\"")
+    return '\n'.join(lines)
 
 
 @mcp.tool()
@@ -2116,9 +2282,12 @@ async def textToSmartGraph(
 
         content = data["choices"][0]["message"]["content"]
 
-        # Strip MiniMax reasoning blocks (convert thinking to clean output)
-        import re
-        content = re.sub(r'<think>.*?', '', content, flags=re.DOTALL).strip()
+        content = strip_llm_artifacts(content)
+
+        verified = _extract_verified_names(text)
+        if verified:
+            content = verified + "\n\n" + content
+
         usage = data.get("usage", {})
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
