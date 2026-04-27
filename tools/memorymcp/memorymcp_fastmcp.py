@@ -2076,6 +2076,7 @@ SMARTGRAPH_SYSTEM_PROMPT = """You are compressing a technical skill/rules docume
 COMPRESSION STRATEGY:
 - Compress ONLY explanatory prose, descriptions, and narrative text
 - Treat as SACRED (never paraphrase, always verbatim): function names, macro names, constant names, parameter signatures, type constraints, negative constraints ("NEVER", "do NOT"), step sequencing, code examples
+- ALSO SACRED: string literals used as enum values, dict keys/values, or default parameter values (e.g. "auto-delete", "code_pattern", "file_open") — treat exactly like function names, NEVER paraphrase or normalize them (not "auto_delete" or "code-pattern")
 - Information gaps cause hallucination — the consumer LLM fills missing specifics with plausible guesses
 - Your job is to eliminate prose WITHOUT creating gaps the consumer cannot safely fill
 
@@ -2108,9 +2109,10 @@ SMARTGRAPH_USER_TEMPLATE = """Compress this knowledge graph for LLM injection.
 
 CRITICAL RULES:
 1. Every function name, macro name, constant, parameter, and type from the source MUST appear in VERBATIM_INDEX
-2. Negative constraints ("NEVER", "do NOT", "No X") MUST appear verbatim in both VERBATIM_INDEX.negative_constraints AND the relevant COMPRESSED_RULES entry
-3. Step sequencing and ordering MUST be preserved exactly
-4. Compress ONLY the prose explanations — never compress technical content
+2. Every string literal used as an enum value, dict key/value, or default parameter MUST appear in VERBATIM_INDEX — preserve exact spelling, hyphens, underscores (e.g. "auto-delete" not "auto_delete")
+3. Negative constraints ("NEVER", "do NOT", "No X") MUST appear verbatim in both VERBATIM_INDEX.negative_constraints AND the relevant COMPRESSED_RULES entry
+4. Step sequencing and ordering MUST be preserved exactly
+5. Compress ONLY the prose explanations — never compress technical content
 
 Graph to compress:
 
@@ -2118,10 +2120,18 @@ Graph to compress:
 
 Output:"""
 
-_IDENTIFIER_RE = re.compile(
+_UNIVERSAL_ID_RE = re.compile(
     r'\b([A-Z][A-Z0-9_]{2,})\b'
     r'|\b([a-z][a-z0-9_]*_[a-z0-9_]+)\s*\('
-    r'|\b([A-Z][A-Za-z0-9_]*_[A-Za-z0-9_]+)\s*\('
+    r'|\b([A-Z][A-Za-z0-9]+[a-z][a-z0-9]*)\s*\('
+)
+_QUOTED_STRING_RE = re.compile(
+    r'["\']([a-zA-Z][a-zA-Z0-9_-]{2,})["\']'
+)
+_QUOTED_MAPPING_RE = re.compile(
+    r'["\']([a-zA-Z][a-zA-Z0-9_-]{2,})["\']'
+    r'\s*[=:]\s*'
+    r'["\']([a-zA-Z][a-zA-Z0-9_-]{2,})["\']'
 )
 _NOISE_NAMES = frozenset({
     'NULL', 'EXEC', 'SQL', 'BEGIN', 'END', 'DECLARE', 'SECTION', 'INTO',
@@ -2133,14 +2143,49 @@ _NOISE_NAMES = frozenset({
     'MALLOC', 'FREE', 'SIZEOF', 'ATOL', 'ATOI', 'STRLEN', 'STRCPY', 'STRCAT',
     'MEMSET', 'MEMCPY', 'STDIN', 'STDOUT', 'STDERR', 'EOF', 'EXIT',
     'TRUE', 'FALSE', 'VARCHAR', 'STRING',
+    'CONCEPT', 'LESSON', 'TRICK', 'PATTERN', 'IDEA', 'PLAN',
+    'PUBLIC', 'STATIC', 'FINAL', 'ABSTRACT', 'PRIVATE', 'PROTECTED',
+    'CLASS', 'INTERFACE', 'EXTENDS', 'IMPLEMENTS', 'PACKAGE', 'IMPORT',
+    'FUNCTION', 'VAR', 'LET', 'CONST', 'TYPE', 'ASYNC', 'AWAIT',
+    'MODULE', 'EXPORT', 'REQUIRE',
+    'THE', 'THIS', 'THAT', 'WITH', 'USING', 'ARE', 'HAS', 'HAVE',
+    'WAS', 'WERE', 'BEEN', 'BEING', 'WILL', 'WOULD', 'SHOULD', 'COULD',
+    'MUST', 'SHALL', 'MAY', 'CAN', 'NEED', 'ALSO', 'BUT', 'HOWEVER',
+    'NOTE', 'NOTES', 'SEE', 'USE', 'USED', 'WHEN', 'THEN', 'THAN',
+    'SUCH', 'EACH', 'EVERY', 'ALL', 'ANY', 'SOME', 'MORE', 'MOST',
+    'OTHER', 'ONLY', 'JUST', 'ALWAYS', 'NEVER', 'STILL', 'ALREADY',
+    'BEFORE', 'AFTER', 'FIRST', 'LAST', 'NEXT',
+})
+_NOISE_STRINGS = frozenset({
+    'the', 'and', 'for', 'not', 'yes', 'all', 'any', 'use', 'get', 'set',
+    'add', 'new', 'old', 'put', 'key', 'val', 'one', 'two', 'out', 'off',
+    'run', 'end', 'log', 'err', 'ok', 'true', 'false', 'null', 'none',
+    'self', 'this', 'that', 'with', 'from', 'into', 'over', 'under',
+    'items', 'data', 'text', 'name', 'type', 'list', 'dict', 'file',
+    'args', 'kwargs', 'params', 'config', 'result', 'value', 'output',
+    'input', 'index', 'count', 'size', 'length', 'width', 'height',
 })
 
 
+def _classify_name(name: str) -> str:
+    if name.isupper() and '_' in name:
+        return 'upper_case'
+    if name.isupper():
+        return 'upper_case'
+    if '_' in name and name[0].islower():
+        return 'lower_case'
+    if name[0].isupper() and any(c.islower() for c in name):
+        return 'mixed_case'
+    if name.islower():
+        return 'lower_case'
+    return 'mixed_case'
+
+
 def _extract_verified_names(text: str, max_names: int = 80) -> str:
-    """Extract exact identifiers and negative constraints from source text as a verbatim anchor."""
+    """Extract identifiers, quoted strings, and negative constraints — language-agnostic."""
     import collections
     names = collections.Counter()
-    for match in _IDENTIFIER_RE.finditer(text):
+    for match in _UNIVERSAL_ID_RE.finditer(text):
         name = match.group(0)
         if '(' in name:
             name = name.split('(')[0]
@@ -2151,20 +2196,32 @@ def _extract_verified_names(text: str, max_names: int = 80) -> str:
             continue
         names[name] += 1
 
+    mappings = collections.OrderedDict()
+    for m in _QUOTED_MAPPING_RE.finditer(text):
+        key, val = m.group(1), m.group(2)
+        if key not in _NOISE_STRINGS and val not in _NOISE_STRINGS:
+            if key not in mappings:
+                mappings[key] = []
+            if val not in mappings[key]:
+                mappings[key].append(val)
+
+    all_quoted = collections.Counter()
+    for m in _QUOTED_STRING_RE.finditer(text):
+        val = m.group(1)
+        if len(val) >= 3 and val not in _NOISE_STRINGS and val.upper() not in _NOISE_NAMES:
+            all_quoted[val] += 1
+    standalone_strings = []
+    seen = set()
+    for val, _ in all_quoted.most_common(30):
+        if val not in mappings and val not in seen:
+            standalone_strings.append(val)
+            seen.add(val)
+
     grouped = collections.defaultdict(list)
     for name, count in names.most_common(max_names):
-        if name.startswith('fc_'):
-            grouped['functions'].append(name)
-        elif name.startswith('VC_') or name.startswith('STR_'):
-            grouped['macros'].append(name)
-        elif name.isupper() and '_' in name:
-            grouped['constants'].append(name)
-        elif name.isupper():
-            grouped['constants'].append(name)
-        elif '_' in name and name[0].isupper():
-            grouped['types_structs'].append(name)
-        else:
-            grouped['functions'].append(name)
+        cat = _classify_name(name)
+        if name not in grouped.get(cat, []):
+            grouped[cat].append(name)
 
     negative_constraints = []
     for m in re.finditer(
@@ -2183,19 +2240,117 @@ def _extract_verified_names(text: str, max_names: int = 80) -> str:
             if constraint and constraint not in negative_constraints:
                 negative_constraints.append(constraint)
 
-    if not grouped and not negative_constraints:
+    has_content = (
+        any(grouped.values())
+        or mappings
+        or standalone_strings
+        or negative_constraints
+    )
+    if not has_content:
         return ""
 
     lines = ["LOSSLESS_INDEX (verified from source — overrides all other sections):"]
-    for category in ['macros', 'functions', 'constants', 'types_structs']:
+    for category in ['upper_case', 'mixed_case', 'lower_case']:
         items = grouped.get(category, [])
         if items:
             lines.append(f"  {category}: {', '.join(items)}")
+    if mappings:
+        lines.append("  mappings:")
+        for key, vals in list(mappings.items())[:25]:
+            lines.append(f'    "{key}" → {", ".join(repr(v) for v in vals)}')
+    if standalone_strings:
+        lines.append(f"  quoted_values: {', '.join(repr(v) for v in standalone_strings[:25])}")
     if negative_constraints:
-        lines.append(f"  negative_constraints:")
+        lines.append("  negative_constraints:")
         for nc in negative_constraints[:15]:
-            lines.append(f"    - \"{nc}\"")
+            lines.append(f'    - "{nc}"')
     return '\n'.join(lines)
+
+
+_SYMBOL_CHARS = set('{}[]=;:-><')
+_CONFIG_LINE_RE = re.compile(
+    r'^[a-zA-Z_][\w.-]*\s*[=:]\s*\S'
+)
+_CODE_SYMBOL_THRESHOLD = 3
+_CONFIG_BLOCK_MIN_LINES = 2
+
+
+def _line_symbol_count(line: str) -> int:
+    return sum(1 for c in line if c in _SYMBOL_CHARS)
+
+
+def _fence_inline_code(text: str) -> str:
+    """Pre-process text to fence code-like and config-like blocks as code blocks.
+
+    Language-agnostic. Detects:
+    1. Brace-delimited blocks (dicts, structs, objects) via { } matching
+    2. Config blocks (YAML, TOML, properties) via consecutive key: value / key = value lines
+    3. High symbol-density lines (code that isn't already fenced)
+    """
+    lines = text.split('\n')
+    result = []
+    i = 0
+    in_fenced = False
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith('```'):
+            in_fenced = not stripped == '```' and not in_fenced
+            if stripped == '```':
+                in_fenced = False
+            result.append(line)
+            i += 1
+            continue
+
+        if in_fenced:
+            result.append(line)
+            i += 1
+            continue
+
+        if '{' in line:
+            brace_depth = line.count('{') - line.count('}')
+            block = [line]
+            j = i + 1
+            while j < len(lines) and brace_depth > 0:
+                brace_depth += lines[j].count('{') - lines[j].count('}')
+                block.append(lines[j])
+                j += 1
+            result.append('```')
+            result.extend(block)
+            result.append('```')
+            i = j
+            continue
+
+        if _CONFIG_LINE_RE.match(stripped) and not stripped.startswith('#'):
+            config_block = [line]
+            j = i + 1
+            while j < len(lines):
+                s = lines[j].strip()
+                if not s or s.startswith('#') or s.startswith('```'):
+                    break
+                if _CONFIG_LINE_RE.match(s):
+                    config_block.append(lines[j])
+                    j += 1
+                elif _line_symbol_count(s) >= _CODE_SYMBOL_THRESHOLD:
+                    config_block.append(lines[j])
+                    j += 1
+                else:
+                    break
+            if len(config_block) >= _CONFIG_BLOCK_MIN_LINES:
+                result.append('```')
+                result.extend(config_block)
+                result.append('```')
+            else:
+                result.extend(config_block)
+            i = j
+            continue
+
+        result.append(line)
+        i += 1
+
+    return '\n'.join(result)
 
 
 @mcp.tool()
@@ -2238,8 +2393,9 @@ async def textToSmartGraph(
         import os
         import httpx
 
-        # Step 1: Build structured graph with textToGraph
-        graph_text = await textToGraph(text, title=title, output="text")
+        # Step 1: Pre-fence inline Python dicts/signatures, then build graph
+        fenced_text = _fence_inline_code(text)
+        graph_text = await textToGraph(fenced_text, title=title, output="text")
 
         if graph_text.startswith("Error:"):
             return graph_text
