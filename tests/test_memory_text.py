@@ -1,260 +1,396 @@
 #!/usr/bin/env python3
 """
-Unit tests for memory_text module - textToGraph regex parsing.
+Unit tests for memorymcp text utilities and textToGraph integration.
 
-These tests verify that the text parsing and regex patterns work correctly
-without requiring the full MCP server to be running.
+These tests verify that the text parsing, regex patterns, and graph generation
+work correctly without requiring Qdrant or the full MCP server.
 """
 
+import sys
+import json
+import asyncio
 import unittest
 import re
+from pathlib import Path
+
+_this_dir = str(Path(__file__).resolve().parent.parent / "tools" / "memorymcp")
+if _this_dir not in sys.path:
+    sys.path.insert(0, _this_dir)
+
+from text_utils import strip_llm_artifacts, extract_verified_names
 
 
-class TestTextPatterns(unittest.TestCase):
-    """Test regex patterns used in textToGraph parsing."""
+def _run_async(coro):
+    return asyncio.get_event_loop().run_until_complete(coro)
 
-    def test_heading_pattern(self):
-        """Test heading level detection."""
-        headings = [
-            ("# Title", 1),
-            ("## Section", 2),
-            ("### Subsection", 3),
-            ("#### Deep", 4),
-        ]
-        for heading, expected_level in headings:
-            level = 0
-            for ch in heading:
-                if ch == "#":
-                    level += 1
-                else:
-                    break
-            self.assertEqual(level, expected_level)
 
-    def test_numbered_step_pattern(self):
-        """Test numbered step regex matching."""
-        pattern = re.compile(r'^(\d+)[.)]\s+(.+)')
-        
-        test_cases = [
-            ("1. First step", ("1", "First step")),
-            ("2) Second step", ("2", "Second step")),
-            ("10. Step ten here", ("10", "Step ten here")),
-        ]
-        
-        for text, expected in test_cases:
-            match = pattern.match(text)
-            self.assertIsNotNone(match)
-            self.assertEqual(match.groups(), expected)
+def _text_to_graph(**kwargs):
+    from memory_text import textToGraph
+    return _run_async(textToGraph(**kwargs))
 
-    def test_bullet_pattern(self):
-        """Test bullet point regex matching."""
-        pattern = re.compile(r'^[-*]\s+(.+)')
-        
-        test_cases = [
-            ("- bullet item", "bullet item"),
-            ("* asterisk item", "asterisk item"),
-        ]
-        
-        for text, expected in test_cases:
-            match = pattern.match(text)
-            self.assertIsNotNone(match)
-            self.assertEqual(match.group(1), expected)
 
-    def test_key_value_pattern(self):
-        """Test **key**: value pattern matching."""
-        pattern = re.compile(r'^\*\*(.+?)\*\*:\s*(.+)')
-        
-        test_cases = [
-            ("**key**: value", ("key", "value")),
-            ("**Status**: Active", ("Status", "Active")),
-        ]
-        
-        for text, expected in test_cases:
-            match = pattern.match(text)
-            self.assertIsNotNone(match)
-            self.assertEqual(match.groups(), expected)
-
-    def test_bold_standalone_pattern(self):
-        """Test **bold text** standalone pattern."""
-        pattern = re.compile(r'^\*\*(.+?)\*\*\s*$')
-        
-        test_cases = [
-            ("**bold text**", "bold text"),
-            ("**Important**", "Important"),
-        ]
-        
-        for text, expected in test_cases:
-            match = pattern.match(text)
-            self.assertIsNotNone(match)
-            self.assertEqual(match.group(1), expected)
-
-    def test_cross_reference_pattern(self):
-        """Test [text](link) pattern matching."""
-        pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
-        
-        matches = pattern.findall("Check [this link](https://example.com) and [that](other.html)")
-        self.assertEqual(len(matches), 2)
-        self.assertEqual(matches[0], ("this link", "https://example.com"))
-        self.assertEqual(matches[1], ("that", "other.html"))
-
-    def test_code_block_detection(self):
-        """Test code block start/end detection."""
-        lines = [
-            ("```python", True),   # start - after processing, in_code = True
-            ("code here", True),   # inside - in_code stays True
-            ("```", False),        # end - after processing, in_code = False
-        ]
-        
-        in_code = False
-        for line, expect_in_code_after in lines:
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                if in_code:
-                    in_code = False  # end
-                else:
-                    in_code = True   # start
-            self.assertEqual(in_code, expect_in_code_after)
-
+# ============================================================================
+# text_utils: strip_llm_artifacts
+# ============================================================================
 
 class TestStripLLMArtifacts(unittest.TestCase):
-    """Test the strip_llm_artifacts function."""
-
-    # Import the function from memory_text module
-    def setUp(self):
-        # We can't import memory_text directly due to FastMCP dependencies,
-        # so we copy the function here for testing
-        self.strip_llm_artifacts = strip_llm_artifacts
 
     def test_removes_think_tags(self):
-        """Test removal of <think> tags."""
-        text = "Here's some text<think>inner thought</think>more text"
-        result = self.strip_llm_artifacts(text)
-        self.assertNotIn("<think>", result)
-        self.assertNotIn("</think>", result)
+        text = "Here's some text<think inner thought</think more text"
+        result = strip_llm_artifacts(text)
+        self.assertNotIn("<think", result)
+        self.assertNotIn("</think", result)
 
     def test_removes_xml_tags(self):
-        """Test removal of XML processing instructions."""
         text = "<?xml version='1.0'?><content>Some text</content>"
-        result = self.strip_llm_artifacts(text)
+        result = strip_llm_artifacts(text)
         self.assertNotIn("<?", result)
         self.assertNotIn("?>", result)
 
-    def test_preserves_content_after_markers(self):
-        """Test that content after CLUSTERS/COMPRESSED_RULES markers is preserved."""
+    def test_preserves_content_after_clusters_marker(self):
         text = "Some intro\nCLUSTERS:\n1. cluster content"
-        result = self.strip_llm_artifacts(text)
+        result = strip_llm_artifacts(text)
+        self.assertTrue(result.startswith("CLUSTERS:"))
+        self.assertIn("cluster content", result)
+
+    def test_preserves_content_after_compressed_rules_marker(self):
+        text = "Preamble here\nCOMPRESSED_RULES:\nrule1: do stuff"
+        result = strip_llm_artifacts(text)
+        self.assertTrue(result.startswith("COMPRESSED_RULES:"))
+
+    def test_preserves_content_after_code_marker(self):
+        text = "Some intro\nCODE:\nprint('hello')"
+        result = strip_llm_artifacts(text)
+        self.assertTrue(result.startswith("CODE:"))
+
+    def test_strips_llm_preamble_before_marker(self):
+        text = "Let me compress this for you.\nI will now proceed.\nCLUSTERS:\n1. cluster A\n2. cluster B"
+        result = strip_llm_artifacts(text)
+        self.assertTrue(result.startswith("CLUSTERS:"))
+        self.assertNotIn("Let me", result)
+        self.assertNotIn("I will", result)
+
+    def test_keeps_clusters_when_followed_by_numbered_list(self):
+        text = "CLUSTERS:\n1. first cluster\n2. second cluster"
+        result = strip_llm_artifacts(text)
+        self.assertTrue(result.startswith("CLUSTERS:"))
+        self.assertIn("first cluster", result)
+
+    def test_empty_input(self):
+        self.assertEqual(strip_llm_artifacts(""), "")
+        self.assertEqual(strip_llm_artifacts("   "), "   ")
+
+    def test_no_artifacts(self):
+        text = "Clean text with no artifacts at all"
+        result = strip_llm_artifacts(text)
+        self.assertEqual(result, text)
+
+    def test_unclosed_think_tag(self):
+        text = "Some text <think this is unclosed"
+        result = strip_llm_artifacts(text)
+        self.assertNotIn("<think", result)
+
+    def test_multiple_think_tags(self):
+        text = "<think first</think middle <think second</think end"
+        result = strip_llm_artifacts(text)
+        self.assertNotIn("<think", result)
+
+    def test_marker_at_line_zero_returns_full_text(self):
+        text = "CLUSTERS:\n1. stuff"
+        result = strip_llm_artifacts(text)
         self.assertTrue(result.startswith("CLUSTERS:"))
 
+    def test_only_whitespace_after_marker(self):
+        text = "Some preamble\nCLUSTERS:\n\n\n"
+        result = strip_llm_artifacts(text)
+        self.assertIn("CLUSTERS:", result)
 
-# Copy of strip_llm_artifacts for testing (duplicated from memory_text.py)
-_CONTENT_MARKERS = [
-    r'^CLUSTERS\s*:',
-    r'^COMPRESSED_RULES\s*:',
-    r'^CODE\s*:',
-    r'^#{2,}\s',
-    r'^\*\*[^*]',
-]
 
-_PREAMBLE_PHRASES = [
-    'i need to', 'let me', "i'll", 'i will', 'the user wants',
-    'i want to', 'my approach', 'first, i', 'next, i', 'then i',
-    'now i can', 'i can compress', 'here is how', 'to do this',
-    'the goal', 'i should',
-]
-
-def strip_llm_artifacts(text: str) -> str:
-    """Strip LLM artifacts like <think> blocks and XML tags from text."""
-    if not text or not text.strip():
-        return text
-    text = re.sub(r'<\?[\s\S]*?\?>', '', text)
-    text = re.sub(r'<think[^>]*>[\s\S]*?</think\s*>', '', text)
-    text = re.sub(r'<think[^>]*>[\s\S]*?</think\b', '', text)
-    text = re.sub(r'<\?[\s\S]*$', '', text)
-    text = re.sub(r'<think[^>]*>[\s\S]*$', '', text)
-    text = re.sub(r'<think\b[\s\S]*$', '', text)
-    text = text.strip()
-    if not text:
-        return text
-    lines = text.split('\n')
-    marker_positions = []
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        for pattern in _CONTENT_MARKERS:
-            if re.match(pattern, stripped, re.IGNORECASE):
-                marker_positions.append(i)
-                break
-    if not marker_positions:
-        return text
-    for pos in marker_positions:
-        next_line = ''
-        for j in range(pos + 1, min(pos + 5, len(lines))):
-            if lines[j].strip():
-                next_line = lines[j].strip()
-                break
-        if not next_line:
-            continue
-        next_lower = next_line.lower()
-        has_preamble = any(phrase in next_lower for phrase in _PREAMBLE_PHRASES)
-        marker_word = lines[pos].strip().rstrip(':').strip().upper()
-        if marker_word == 'CLUSTERS' and re.match(r'^\d+[\.\)]\s', next_line):
-            continue
-        if not has_preamble:
-            if pos > 0:
-                return '\n'.join(lines[pos:]).strip()
-            return text
-    last = marker_positions[-1]
-    if last > 0:
-        return '\n'.join(lines[last:]).strip()
-    return text
-
+# ============================================================================
+# text_utils: extract_verified_names
+# ============================================================================
 
 class TestExtractVerifiedNames(unittest.TestCase):
-    """Test the _extract_verified_names function."""
 
     def test_finds_uppercase_identifiers(self):
-        """Test that uppercase identifiers are found."""
-        from memory_text import _extract_verified_names
-        # Can't test directly - module has FastMCP dependencies
-        # But we can test the regex patterns
-        pass
+        text = "Use MAX_RETRIES and DEFAULT_TIMEOUT constants"
+        result = extract_verified_names(text)
+        self.assertIn("MAX_RETRIES", result)
+        self.assertIn("DEFAULT_TIMEOUT", result)
+
+    def test_finds_snake_case_functions(self):
+        text = "Call get_memory() and upsert_memory() functions"
+        result = extract_verified_names(text)
+        self.assertIn("get_memory", result)
+        self.assertIn("upsert_memory", result)
+
+    def test_finds_camel_case_functions(self):
+        text = "Use XMLHttpRequest() and JSONObject()"
+        result = extract_verified_names(text)
+        self.assertIn("HttpRequest", result)
+
+    def test_finds_quoted_strings(self):
+        text = 'Set type to "auto-delete" and mode to "code_pattern"'
+        result = extract_verified_names(text)
+        self.assertIn("auto-delete", result)
+        self.assertIn("code_pattern", result)
+
+    def test_finds_quoted_mappings(self):
+        text = '"memory_type" : "concept" and "retention" = "auto-delete"'
+        result = extract_verified_names(text)
+        self.assertIn("memory_type", result)
+        self.assertIn("concept", result)
+        self.assertIn("retention", result)
+        self.assertIn("auto-delete", result)
+
+    def test_excludes_noise_names(self):
+        text = "SELECT FROM WHERE AND OR NOT NULL"
+        result = extract_verified_names(text)
+        self.assertNotIn("SELECT", result)
+        self.assertNotIn("NULL", result)
+
+    def test_excludes_short_identifiers(self):
+        text = "Use AB and cd() identifiers"
+        result = extract_verified_names(text)
+        self.assertNotIn("AB", result)
+
+    def test_empty_input(self):
+        result = extract_verified_names("")
+        self.assertEqual(result, "")
+
+    def test_no_identifiers(self):
+        result = extract_verified_names("just plain text nothing special")
+        self.assertEqual(result, "")
+
+    def test_output_starts_with_header(self):
+        result = extract_verified_names("MAX_RETRIES value")
+        self.assertTrue(result.startswith("VERIFIED_NAMES:"))
+
+    def test_sorted_output(self):
+        result = extract_verified_names("ZEBRA_CONST and ALPHA_CONST")
+        lines = result.strip().split("\n")
+        names = [l.strip() for l in lines[1:]]
+        self.assertEqual(names, sorted(names))
 
 
-class TestGraphNodeCreation(unittest.TestCase):
-    """Test graph node and edge creation logic."""
+# ============================================================================
+# textToGraph integration tests — output='text' (default)
+# ============================================================================
 
-    def test_make_node_tracking(self):
-        """Test that node counter increments correctly."""
-        nodes = []
-        node_counter = 0
-        
-        def make_node(label, content, level, ntype):
-            nonlocal node_counter
-            node_counter += 1
-            nid = f"n{node_counter}"
-            nodes.append({
-                "id": nid,
-                "label": label,
-                "content": content,
-                "level": level,
-                "type": ntype,
-            })
-            return nid
-        
-        id1 = make_node("Root", "Root content", 0, "root")
-        id2 = make_node("Section 1", "Section content", 1, "section")
-        id3 = make_node("Section 2", "More content", 1, "section")
-        
-        self.assertEqual(id1, "n1")
-        self.assertEqual(id2, "n2")
-        self.assertEqual(id3, "n3")
-        self.assertEqual(len(nodes), 3)
+class TestTextToGraphText(unittest.TestCase):
 
-    def test_safe_label_quoting(self):
-        """Test that double quotes are replaced with single quotes."""
-        label = 'Test "quoted" label'
-        safe = label.replace('"', "'")
-        self.assertEqual(safe, "Test 'quoted' label")
+    def test_empty_input(self):
+        result = _text_to_graph(text="")
+        self.assertIn("Document", result)
+
+    def test_single_heading(self):
+        result = _text_to_graph(text="## Introduction\nSome content here")
+        self.assertIn("Introduction", result)
+
+    def test_multiple_headings(self):
+        md = "# Title\n## Section A\nContent A\n## Section B\nContent B"
+        result = _text_to_graph(text=md)
+        self.assertIn("Title", result)
+        self.assertIn("Section A", result)
+        self.assertIn("Section B", result)
+
+    def test_numbered_steps(self):
+        md = "## Steps\n1. First thing\n2. Second thing\n3. Third thing"
+        result = _text_to_graph(text=md)
+        self.assertIn("Step 1", result)
+        self.assertIn("Step 2", result)
+        self.assertIn("Step 3", result)
+
+    def test_bullet_points(self):
+        md = "## Items\n- item one\n- item two\n- item three"
+        result = _text_to_graph(text=md)
+        self.assertIn("item one", result)
+        self.assertIn("item two", result)
+
+    def test_code_block(self):
+        md = "## Example\n```python\nprint('hello')\n```"
+        result = _text_to_graph(text=md)
+        self.assertIn("python code", result)
+        self.assertIn("print", result)
+
+    def test_bold_key_value(self):
+        md = "## Config\n**Name**: Value\n**Type**: String"
+        result = _text_to_graph(text=md)
+        self.assertIn("Name: Value", result)
+        self.assertIn("Type: String", result)
+
+    def test_bold_standalone_subsection(self):
+        md = "## Section\n**Important Note**\nDetails follow"
+        result = _text_to_graph(text=md)
+        self.assertIn("Important Note", result)
+
+    def test_frontmatter(self):
+        md = "---\nname: test\nversion: 1.0\n---\n## Content\nHello"
+        result = _text_to_graph(text=md)
+        self.assertIn("Metadata", result)
+        self.assertIn("name", result)
+        self.assertIn("version", result)
+
+    def test_cross_references(self):
+        md = "## Section\nCheck [docs](https://example.com) for info"
+        result = _text_to_graph(text=md)
+        self.assertIn("docs", result)
+
+    def test_custom_title(self):
+        result = _text_to_graph(text="## Hello", title="MyDoc")
+        self.assertIn("MyDoc", result)
+
+    def test_default_title(self):
+        result = _text_to_graph(text="## Hello")
+        self.assertIn("Document", result)
+
+    def test_prose_paragraphs(self):
+        md = "## Section\n\nFirst paragraph here.\n\nSecond paragraph here.\n"
+        result = _text_to_graph(text=md)
+        self.assertIn("First paragraph", result)
+        self.assertIn("Second paragraph", result)
+
+    def test_heading_hierarchy(self):
+        md = "# Root\n## A\n### A1\n### A2\n## B\n### B1"
+        result = _text_to_graph(text=md)
+        self.assertIn("Root", result)
+        self.assertIn("A1", result)
+        self.assertIn("B1", result)
+
+    def test_xref_detection(self):
+        md = "## See pctech31 and commontech5\nContent"
+        result = _text_to_graph(text=md)
+        self.assertIn("pctech31", result)
+        self.assertIn("commontech5", result)
+
+
+# ============================================================================
+# textToGraph — output='json'
+# ============================================================================
+
+class TestTextToGraphJSON(unittest.TestCase):
+
+    def test_json_valid(self):
+        result = _text_to_graph(text="## Section\nContent", output="json")
+        data = json.loads(result)
+        self.assertIn("nodes", data)
+        self.assertIn("edges", data)
+
+    def test_json_root_node(self):
+        result = _text_to_graph(text="## Hello", title="TestDoc", output="json")
+        data = json.loads(result)
+        root = next(n for n in data["nodes"] if n["type"] == "root")
+        self.assertEqual(root["label"], "TestDoc")
+
+    def test_json_heading_node(self):
+        result = _text_to_graph(text="## My Section", output="json")
+        data = json.loads(result)
+        section = next(n for n in data["nodes"] if n["type"] == "section")
+        self.assertEqual(section["label"], "My Section")
+
+    def test_json_code_node(self):
+        md = "```python\nx = 1\n```"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        code = next(n for n in data["nodes"] if n["type"] == "code")
+        self.assertIn("x = 1", code["content"])
+
+    def test_json_step_chaining(self):
+        md = "1. Step A\n2. Step B\n3. Step C"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        then_edges = [e for e in data["edges"] if e["relation"] == "then"]
+        self.assertEqual(len(then_edges), 2)
+
+    def test_json_frontmatter_nodes(self):
+        md = "---\nfoo: bar\n---\n## Content"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        meta = next(n for n in data["nodes"] if n["type"] == "metadata")
+        self.assertEqual(meta["label"], "Frontmatter")
+
+    def test_json_xref_edges(self):
+        md = "## See also pctech42\nContent"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        xrefs = [e for e in data["edges"] if e["relation"] == "xref"]
+        self.assertGreater(len(xrefs), 0)
+
+    def test_json_bullet_items(self):
+        md = "- alpha\n- beta\n- gamma"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        items = [n for n in data["nodes"] if n["type"] == "item"]
+        self.assertEqual(len(items), 3)
+
+    def test_json_key_value_properties(self):
+        md = "**key1**: val1\n**key2**: val2"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        props = [n for n in data["nodes"] if n["type"] == "property"]
+        self.assertEqual(len(props), 2)
+
+    def test_json_edges_have_valid_ids(self):
+        md = "# Title\n## A\n- item1\n- item2"
+        result = _text_to_graph(text=md, output="json")
+        data = json.loads(result)
+        node_ids = {n["id"] for n in data["nodes"]}
+        for edge in data["edges"]:
+            self.assertIn(edge["from"], node_ids)
+            self.assertIn(edge["to"], node_ids)
+
+
+# ============================================================================
+# textToGraph — output='adjacency'
+# ============================================================================
+
+class TestTextToGraphAdjacency(unittest.TestCase):
+
+    def test_adjacency_format(self):
+        result = _text_to_graph(text="## Section\n- item", output="adjacency")
+        self.assertIn("n1 [root]", result)
+        self.assertIn("->", result)
+
+    def test_adjacency_leaf_nodes(self):
+        result = _text_to_graph(text="## Section\n- item", output="adjacency")
+        self.assertIn("content:", result)
+
+
+# ============================================================================
+# textToGraph — output='dot'
+# ============================================================================
+
+class TestTextToGraphDot(unittest.TestCase):
+
+    def test_dot_format(self):
+        result = _text_to_graph(text="## Section", output="dot")
+        self.assertTrue(result.startswith("digraph {"))
+        self.assertIn("}", result)
+
+    def test_dot_root_shape(self):
+        result = _text_to_graph(text="## Hello", title="Root", output="dot")
+        self.assertIn("doublecircle", result)
+
+
+# ============================================================================
+# textToGraph — output='mermaid' and 'both'
+# ============================================================================
+
+class TestTextToGraphMermaid(unittest.TestCase):
+
+    def test_mermaid_format(self):
+        result = _text_to_graph(text="## Section", output="mermaid")
+        self.assertTrue(result.startswith("graph TD"))
+
+    def test_both_format(self):
+        result = _text_to_graph(text="## Section", output="both")
+        self.assertIn("graph TD", result)
+        self.assertIn("```json", result)
+
+    def test_mermaid_edge_styles(self):
+        md = "## A\n### B\n- item"
+        result = _text_to_graph(text=md, output="mermaid")
+        self.assertIn("has_section", result)
 
 
 if __name__ == "__main__":

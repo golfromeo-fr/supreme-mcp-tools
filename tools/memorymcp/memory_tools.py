@@ -21,6 +21,7 @@ This module contains the main MCP tools for:
 All tools use the FastMCP instance and utilities from memory_core.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from memory_core import (
     memory_item_to_payload, payload_to_memory_hit,
     MemoryItem, RetentionPolicy, ScoringWeights, score_relevance,
     redact_sensitive_text, check_sensitivity,
+    Filter, FieldCondition, MatchValue,
 )
 
 # For FEF V3 extensions
@@ -220,30 +222,30 @@ async def queryMemory(
 
         hits = []
         weights = ScoringWeights()
-        # Override alpha/beta based on recency_weight
         weights.alpha = 1.0 - recency_weight
         weights.beta = recency_weight
+
+        now_iso = get_now_iso()
+        usage_updates: dict[int, list[str]] = {}
 
         for result in results.points:
             payload = result.payload
             payload["id"] = str(result.id)
 
-            # Compute combined relevance score (pass Qdrant similarity as semantic_score)
             relevance = score_relevance(payload, query_embedding, weights, semantic_score=result.score)
 
             hit = payload_to_memory_hit(payload, result.score)
-            hit.score = relevance  # Override with combined score
+            hit.score = relevance
             hits.append(hit)
 
-            # Update last_accessed and usage_count
-            current_usage = payload.get("usage_count", 0)
+            new_usage = payload.get("usage_count", 0) + 1
+            usage_updates.setdefault(new_usage, []).append(str(result.id))
+
+        for new_usage, point_ids in usage_updates.items():
             qdrant_client.set_payload(
                 collection_name=COLLECTION_NAME,
-                payload={
-                    "last_accessed": get_now_iso(),
-                    "usage_count": current_usage + 1,
-                },
-                points=[str(result.id)],
+                payload={"last_accessed": now_iso, "usage_count": new_usage},
+                points=point_ids,
             )
 
         # Format output
@@ -298,18 +300,18 @@ async def getMemory(memory_id: str) -> str:
 
         # Update usage
         new_usage = (payload.get("usage_count", 0)) + 1
+        now_iso = get_now_iso()
         qdrant_client.set_payload(
             collection_name=COLLECTION_NAME,
             payload={
-                "last_accessed": get_now_iso(),
+                "last_accessed": now_iso,
                 "usage_count": new_usage,
             },
             points=[memory_id],
         )
 
-        # Update payload with incremented values so display is accurate
         payload["usage_count"] = new_usage
-        payload["last_accessed"] = get_now_iso()
+        payload["last_accessed"] = now_iso
         hit = payload_to_memory_hit(payload, 1.0)
         output = f"""Memory Details:
 ID: {hit.id}

@@ -25,11 +25,10 @@ class ScoringWeights:
         # Usage boost weight (default 0.2)
         self.gamma = gamma if gamma is not None else float(os.getenv("MEMORY_GAMMA", "0.2"))
         # Recency half-life in days (default 14)
-        self.recency_half_life_days = recency_half_life_days or float(
+        self.recency_half_life_days = recency_half_life_days if recency_half_life_days is not None else float(
             os.getenv("MEMORY_RECENCY_HALF_LIFE_DAYS", "14")
         )
-        # Max usage for normalization (default 100)
-        self.max_usage = max_usage or int(os.getenv("MEMORY_MAX_USAGE", "100"))
+        self.max_usage = max_usage if max_usage is not None else int(os.getenv("MEMORY_MAX_USAGE", "100"))
 
     def __repr__(self) -> str:
         return (
@@ -85,6 +84,8 @@ def compute_usage_boost(usage_count: int, max_usage: int = 100) -> float:
     """
     if usage_count <= 0:
         return 0.0
+    if max_usage <= 0:
+        return 1.0
     return min(usage_count / max_usage, 1.0)
 
 
@@ -181,6 +182,17 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     if len(a) != len(b):
         return 0.0
+
+    try:
+        import numpy as np
+        a_arr = np.asarray(a)
+        b_arr = np.asarray(b)
+        denom = np.linalg.norm(a_arr) * np.linalg.norm(b_arr)
+        if denom == 0:
+            return 0.0
+        return float(np.dot(a_arr, b_arr) / denom)
+    except ImportError:
+        pass
 
     dot_product = sum(x * y for x, y in zip(a, b))
     magnitude_a = math.sqrt(sum(x * x for x in a))

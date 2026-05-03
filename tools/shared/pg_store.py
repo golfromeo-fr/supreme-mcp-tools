@@ -265,6 +265,7 @@ def search_text(query: str, limit: int = 10, memory_type: str | None = None,
 
     try:
         with _pool.connection() as conn:
+            conditions = []
             params: list[Any] = []
 
             if memory_type:
@@ -278,11 +279,13 @@ def search_text(query: str, limit: int = 10, memory_type: str | None = None,
                     conditions.append("tags @> %s::jsonb")
                     params.append(json.dumps([tag]))
 
-            # Add similarity condition with its own param
             conditions.append("similarity(text, %s) > 0.1")
             params.append(query)
 
             where = " AND ".join(conditions)
+
+            # query appears twice: once for WHERE similarity(), once for SELECT similarity()
+            params.append(query)
             params.append(limit)
 
             rows = conn.execute(f"""
@@ -341,7 +344,10 @@ def decay_memories(ttl_days: int, min_usage_count: int, retention_policy: str | 
             conditions = ["retention_policy != 'permanent'"]
             params: list[Any] = []
 
-            conditions.append("(last_accessed < NOW() - INTERVAL '%d days' OR created_at < NOW() - INTERVAL '%d days')" % (int(ttl_days), int(ttl_days)))
+            interval_str = f"{int(ttl_days)} days"
+            conditions.append("(last_accessed < NOW() - INTERVAL %s OR created_at < NOW() - INTERVAL %s)")
+            params.append(interval_str)
+            params.append(interval_str)
             conditions.append("usage_count < %s")
             params.append(min_usage_count)
 

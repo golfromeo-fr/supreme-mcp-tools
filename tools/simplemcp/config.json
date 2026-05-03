@@ -119,23 +119,6 @@
     }
   },
   "auth": {
-  "api_key": "simplemcp-test-key-5678"
-},
-  "server_info": {
-    "name": "simplemcp",
-    "version": "1.0.0",
-    "protocol_version": "2024-11-05"
-  },
-  "capabilities": {
-    "tools": true,
-    "resources": false,
-    "prompts": false
-  },
-  "settings": {
-    "log_level": "info",
-    "request_timeout": 30.0,
-    "connection_timeout": 10.0,
-    "session_timeout": 300.0,
-    "enable_session_management": true
+    "api_key": "simplemcp-test-key-5678"
   }
 }

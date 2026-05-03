@@ -107,6 +107,6 @@
     }
   },
   "auth": {
-  "api_key": "webmcp-test-key-1234"
-}
+    "api_key": "webmcp-test-key-1234"
+  }
 }
