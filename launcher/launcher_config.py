@@ -3,6 +3,12 @@ Configuration handling for the MCP launcher system.
 
 This module provides functionality to load, validate, and manage
 configuration from JSON files and environment variables.
+
+ARCHITECTURAL NOTE:
+    Config now delegates to focused dataclasses (LoggingConfig, ServerConfig,
+    ErrorHandlingConfig, PortConfig, ToolDirectoryConfig) while maintaining
+    full backward compatibility via get_* methods.
+    Call sites can use the new typed configs directly when isolation is needed.
 """
 
 import json
@@ -12,6 +18,13 @@ from typing import Any
 import logging
 
 from .errors import ConfigError
+from .config_types import (
+    LoggingConfig,
+    ServerConfig,
+    ErrorHandlingConfig,
+    PortConfig,
+    ToolDirectoryConfig,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -141,13 +154,67 @@ class Config:
     def __init__(self, config_path: str | None = None):
         """
         Initialize the configuration manager.
-        
+
         Args:
             config_path: Path to configuration file (optional)
         """
         self.config: dict[str, Any] = {}
         self.config_path = config_path
+
+        # Focused typed configs (lazy-initialized on first access)
+        self._logging_config: LoggingConfig | None = None
+        self._server_config: ServerConfig | None = None
+        self._error_handling_config: ErrorHandlingConfig | None = None
+        self._port_config: PortConfig | None = None
+        self._tool_directory_config: ToolDirectoryConfig | None = None
+
         self._load_config()
+
+    def _init_focused_configs(self) -> None:
+        """Initialize frozen focused configs from loaded dict config."""
+        if self._logging_config is None:
+            self._logging_config = LoggingConfig.from_dict(self.config.get("logging", {}))
+        if self._server_config is None:
+            self._server_config = ServerConfig.from_dict(self.config.get("server", {}))
+        if self._error_handling_config is None:
+            self._error_handling_config = ErrorHandlingConfig.from_dict(self.config.get("errorHandling", {}))
+        if self._port_config is None:
+            port_data = self.config.get("portAllocation", {})
+            self._port_config = PortConfig.from_dict(port_data)
+        if self._tool_directory_config is None:
+            self._tool_directory_config = ToolDirectoryConfig.from_list(
+                self.config.get("toolDirectories", [])
+            )
+
+    @property
+    def logging_config(self) -> LoggingConfig:
+        """Get typed logging configuration."""
+        self._init_focused_configs()
+        return self._logging_config
+
+    @property
+    def server_config(self) -> ServerConfig:
+        """Get typed server configuration."""
+        self._init_focused_configs()
+        return self._server_config
+
+    @property
+    def error_handling_config(self) -> ErrorHandlingConfig:
+        """Get typed error handling configuration."""
+        self._init_focused_configs()
+        return self._error_handling_config
+
+    @property
+    def port_config(self) -> PortConfig:
+        """Get typed port configuration."""
+        self._init_focused_configs()
+        return self._port_config
+
+    @property
+    def tool_directory_config(self) -> ToolDirectoryConfig:
+        """Get typed tool directory configuration."""
+        self._init_focused_configs()
+        return self._tool_directory_config
     
     def _load_config(self) -> None:
         """Load configuration from file and environment variables."""
