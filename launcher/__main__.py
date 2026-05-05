@@ -162,17 +162,17 @@ class Launcher:
         self.service_registry = ServiceRegistry()
         
         # Build ports_config from self.config (following the pattern in launchmcp.py)
-        port_alloc = self.config.config.get("portAllocation", {})
+        port_config = self.config.port_config
         ports_config = {
-            "ranges": port_alloc.get("ranges", {}),
-            "reserved": port_alloc.get("reservedPorts", {}),
-            "assignments": port_alloc.get("manualPorts", {})
+            "ranges": port_config.ranges,
+            "reserved": port_config.reserved_ports,
+            "assignments": port_config.manual_ports
         }
-        
+
         self.port_manager = PortManager(
             ports_config=ports_config,
-            mode=self.config.get_port_mode(),
-            base_port=self.config.get_base_port(),
+            mode=port_config.mode,
+            base_port=port_config.base_port,
         )
         self.server_manager = ServerManager(
             host=args.host,
@@ -205,7 +205,7 @@ class Launcher:
             mgmt_port = self.args.management_port
             if mgmt_port is None:
                 try:
-                    mgmt_port = self.config.get_reserved_ports().get("central_management")
+                    mgmt_port = self.config.port_config.reserved_ports.get("central_management")
                     if mgmt_port is None:
                         raise ValueError("central_management port not found in ports.json")
                 except Exception as e:

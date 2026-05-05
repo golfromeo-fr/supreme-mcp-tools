@@ -74,9 +74,9 @@ def setup_logging(config: Config, verbose: bool = False) -> None:
         config: Configuration object
         verbose: Whether to enable verbose logging
     """
-    log_level = logging.DEBUG if verbose else getattr(logging, config.get_log_level().upper(), logging.INFO)
-    log_format = config.get_log_format()
-    log_file = config.get_log_file()
+    log_level = logging.DEBUG if verbose else getattr(logging, config.logging_config.level.upper(), logging.INFO)
+    log_format = config.logging_config.format
+    log_file = config.logging_config.file
     
     # Check if JSON logging is enabled
     use_json = log_format.lower() == "json"
@@ -265,7 +265,7 @@ async def start_servers(
             allocated_tools.append(tool.name)
         except PortConflictError as e:
             logging.error(f"Port allocation failed for {tool.name}: {e}")
-            if config.get_continue_on_error():
+            if config.error_handling_config.continue_on_error:
                 continue
             else:
                 raise
@@ -644,7 +644,7 @@ async def main() -> int:
         logging.warning(f"Monitoring initialization failed: {e}")
     
     # Get all configured tool directories
-    all_tool_dirs = config.get_tool_directories()
+    all_tool_dirs = config.tool_directory_config.directories
     
     # If specific tools are requested, only search their directories
     # Otherwise, search all configured directories
@@ -694,18 +694,16 @@ async def main() -> int:
         return 0
     
     # Initialize port manager with typed port ranges from config
-    # config.config["portAllocation"] was populated from ports.json by _ensure_port_defaults()
-    # Transform to ports_config format that PortManager expects
-    port_alloc = config.config.get("portAllocation", {})
+    port_config = config.port_config
     ports_config = {
-        "ranges": port_alloc.get("ranges", {}),
-        "reserved": port_alloc.get("reservedPorts", {}),
-        "assignments": port_alloc.get("manualPorts", {})
+        "ranges": port_config.ranges,
+        "reserved": port_config.reserved_ports,
+        "assignments": port_config.manual_ports
     }
     port_manager = PortManager(
         ports_config=ports_config,
-        mode=config.get_port_mode(),
-        base_port=config.get_base_port(),
+        mode=port_config.mode,
+        base_port=port_config.base_port,
     )
     
     # Create service registry if management is enabled (default)
@@ -718,10 +716,10 @@ async def main() -> int:
     
     # Initialize server manager
     server_manager = ServerManager(
-        host=config.get_server_host(),
-        log_level=config.get_server_log_level(),
+        host=config.server_config.host,
+        log_level=config.server_config.log_level,
         service_registry=service_registry,
-        enable_management=bool(service_registry)  # Enable management if we have a registry
+        enable_management=bool(service_registry)
     )
     
     # Set up signal handlers for graceful shutdown
@@ -755,7 +753,7 @@ async def main() -> int:
                 # Check if server actually started
                 status = server_manager.get_server_status(tool.name)
                 if status == "running":
-                    print(f"  {tool.name}: http://{config.get_server_host()}:{port}")
+                    print(f"  {tool.name}: http://{config.server_config.host}:{port}")
                 else:
                     print(f"  {tool.name}: FAILED (status: {status})")
         print("=" * 60)
@@ -805,7 +803,7 @@ async def main() -> int:
             # Get port from CLI override or config (ports.json)
             mgmt_port = args.management_port
             if mgmt_port is None:
-                mgmt_port = config.get_reserved_ports().get("central_management")
+                mgmt_port = config.port_config.reserved_ports.get("central_management")
             if mgmt_port is None:
                 logging.error(
                     "Management port not configured. Set --management-port or "
