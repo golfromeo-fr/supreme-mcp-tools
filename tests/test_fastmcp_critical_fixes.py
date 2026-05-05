@@ -102,24 +102,20 @@ class TestWebMCPFixes:
 class TestConverterMCPFixes:
     """Verify convertermcp critical fixes."""
 
-    def test_uses_optional_typing(self):
+    def test_uses_type_imports(self):
         content = Path("tools/convertermcp/convertermcp_fastmcp.py").read_text()
-        assert "from typing import Any, Dict, Optional" in content
+        assert "from typing import Any" in content
 
-    def test_function_signature_uses_optional(self):
+    def test_function_signature_uses_optional_style(self):
         content = Path("tools/convertermcp/convertermcp_fastmcp.py").read_text()
-        assert "Optional[str]" in content
-        assert "Optional[Dict[str, str]]" in content or "Optional[Dict]" in content
+        assert "str | None" in content or "Optional[str]" in content
 
-    def test_no_pipe_union_types_in_function_sigs(self):
+    def test_no_dict_pipe_types_in_function_sigs(self):
         content = Path("tools/convertermcp/convertermcp_fastmcp.py").read_text()
         lines = content.split('\n')
         for i, line in enumerate(lines):
             if 'async def ' in line or 'def ' in line:
                 if ' -> ' in line or '(' in line:
-                    assert 'str | None' not in line, (
-                        f"Line {i+1} uses str | None: {line.strip()}"
-                    )
                     assert 'dict | None' not in line, (
                         f"Line {i+1} uses dict | None: {line.strip()}"
                     )

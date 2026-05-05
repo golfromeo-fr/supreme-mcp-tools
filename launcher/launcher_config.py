@@ -63,7 +63,21 @@ def load_ports_config(config_dir: Path | None = None) -> dict[str, Any]:
 
 
 class Config:
-    """Configuration manager for the MCP launcher."""
+    """
+    Configuration manager for the MCP launcher.
+
+    ARCHITECTURAL DEBT: This class is a god object with 37+ edges and ~32 getter methods.
+    It knows about tool directories, port allocation, server settings, logging, and error handling.
+    Subsystems that only need logging config must import the entire Config to get it.
+
+    Recommended refactor (when ready for a dedicated sprint):
+    1. Create focused config dataclasses: LoggingConfig, PortConfig, ServerConfig, ErrorHandlingConfig
+    2. Keep Config as a thin facade that delegates to the focused configs
+    3. Update call sites one subsystem at a time
+    4. Eventually Config becomes a simple aggregator with no get_* methods of its own
+
+    This is NOT a bug - Config works correctly. It's a maintainability concern for future growth.
+    """
     
     # Default configuration values
     # Use dynamic path resolution to avoid hardcoded absolute paths

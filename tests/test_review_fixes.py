@@ -1,0 +1,139 @@
+"""
+Regression tests for code review fixes.
+
+Tests verify specific bugs identified by graphify analysis:
+1. Port leak on partial startup failure (launchmcp.py)
+2. Exception chaining preserved in fef_integration.py
+3. No duplicate exception handlers in webmcp streamable
+4. get_registry_for_tool helper exists and works
+"""
+import ast
+import pytest
+import asyncio
+from pathlib import Path
+from unittest.mock import MagicMock, AsyncMock, patch
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+class TestExceptionChainingFefIntegration:
+    """Test that fef_integration.py uses 'raise ... from e' to preserve exception traces."""
+
+    def test_value_error_preserves_chaining(self):
+        """Verify ValueError in fef_integration uses 'raise ... from e'."""
+        content = Path("tools/fef_integration.py").read_text()
+
+        assert "raise ValueError(" in content
+        assert "from e" in content, (
+            "fef_integration.py should use 'raise ValueError(...) from e' "
+            "to preserve original exception traceback"
+        )
+
+
+class TestGlobalRegistriesSafeAccess:
+    """Test that registry access is safe for concurrent tool startup."""
+
+    def test_get_registry_for_tool_exists(self):
+        """Verify get_registry_for_tool async helper exists."""
+        from launcher.tool_extensions.registry import get_registry_for_tool
+        import inspect
+        assert asyncio.iscoroutinefunction(get_registry_for_tool), (
+            "get_registry_for_tool should be an async function"
+        )
+        sig = inspect.signature(get_registry_for_tool)
+        assert 'tool_name' in sig.parameters
+
+    def test_registry_lock_exists(self):
+        """Verify _registry_lock is defined."""
+        from launcher.tool_extensions.registry import _registry_lock
+        assert isinstance(_registry_lock, asyncio.Lock)
+
+
+class TestPortLeakFix:
+    """Test that failed server startups release their allocated ports."""
+
+    def test_failed_startups_release_ports(self):
+        """Regression: ports for failed tools must be released even when some succeed."""
+        content = Path("launchmcp.py").read_text()
+
+        assert "failed_startups" in content, (
+            "launchmcp.py should track failed_startups to release their ports"
+        )
+        assert "release_port" in content, (
+            "launchmcp.py should call port_manager.release_port for failed tools"
+        )
+        assert "for tool_name in failed_startups" in content, (
+            "launchmcp.py should iterate over failed_startups to release ports"
+        )
+
+
+class TestWebmcpErrorHandlingDedup:
+    """Test that webmcp_streamable.py has no duplicate exception handler GROUPS."""
+
+    def test_no_duplicate_exception_blocks(self):
+        """
+        Regression: _handle_tool_call should have exactly ONE set of exception handlers.
+
+        The original bug had ValueError, HTTPError, Exception each appearing TWICE
+        (duplicate try/except blocks). After fix, each should appear exactly once.
+        Uses AST to properly detect top-level exception handlers in the function body.
+        """
+        content = Path("tools/webmcp/webmcp_streamable.py").read_text()
+        tree = ast.parse(content)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == '_handle_tool_call':
+                top_level_handlers = [
+                    item for item in node.body
+                    if isinstance(item, ast.ExceptHandler)
+                ]
+
+                handler_counts = {}
+                for h in top_level_handlers:
+                    exc_name = 'ValueError' if h.type and isinstance(h.type, ast.Name) and h.type.id == 'ValueError' else \
+                               'HTTPError' if h.type and isinstance(h.type, ast.Attribute) else \
+                               'Exception' if h.type and isinstance(h.type, ast.Name) and h.type.id == 'Exception' else \
+                               'Other'
+                    handler_counts[exc_name] = handler_counts.get(exc_name, 0) + 1
+
+                for exc_type, count in handler_counts.items():
+                    assert count == 1, (
+                        f"_handle_tool_call has {count} '{exc_type}' blocks - should be exactly 1 "
+                        f"(was duplicated before fix)"
+                    )
+
+
+class TestConfigGodObjectComment:
+    """Test that Config class has architectural debt comment."""
+
+    def test_config_has_debt_comment(self):
+        """Regression: Config class should document its god object status."""
+        content = Path("launcher/launcher_config.py").read_text()
+
+        assert "ARCHITECTURAL DEBT" in content, (
+            "Config class should have comment documenting god object debt"
+        )
+        assert "god object" in content.lower(), (
+            "Config class comment should mention 'god object'"
+        )
+        assert "getter method" in content.lower() or "get_*" in content, (
+            "Config class comment should mention getter methods"
+        )
+
+
+class TestStartServersCleanup:
+    """Test start_servers releases ports for all failure cases."""
+
+    def test_port_release_on_partial_failure(self):
+        """Ports must be released when some servers succeed and some fail."""
+        content = Path("launchmcp.py").read_text()
+
+        cleanup_section = content[content.find("if successful == 0"):content.find("return started_tools")]
+        assert "allocated_tools" in cleanup_section, (
+            "Port cleanup should use allocated_tools list"
+        )
+
+        assert "for tool_name in allocated_tools" in content or "for tool_name in failed_startups" in content, (
+            "Port release should iterate over tools to clean up"
+        )

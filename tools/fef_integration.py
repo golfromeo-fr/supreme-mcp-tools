@@ -336,17 +336,12 @@ def setup_tool_extensions(
     http_server = None
     
     if mgmt_port is not None:
-        # Try to get the existing registry from the launcher's server
-        # The launcher sets MCP_MGMT_PORT and creates a server before starting the tool
-        # We need to access that registry directly (same process)
         from launcher.tool_extensions.registry import _global_registries
-        
-        # Look for an existing registry for this tool
-        if tool_name in _global_registries:
-            registry = _global_registries[tool_name]
+
+        registry = _global_registries.get(tool_name)
+        if registry is not None:
             logger.info(f"[{tool_name}] Using existing registry from launcher")
         else:
-            # Create a new registry and server (standalone mode)
             registry = ExtensionRegistry()
             http_server = ExtensionHTTPServer(
                 tool_name=tool_name,
@@ -370,7 +365,7 @@ def setup_tool_extensions(
             raise ValueError(
                 f"Could not determine management port for {tool_name}: {e}. "
                 "Please configure ports.json with the tool's management port."
-            )
+            ) from e
         http_server = ExtensionHTTPServer(
             tool_name=tool_name,
             registry=registry,

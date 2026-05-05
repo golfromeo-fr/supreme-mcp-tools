@@ -318,6 +318,7 @@ async def start_servers(
     successful = 0
     failed_tools = []
     started_tools = []  # Track successfully started tools
+    failed_startups = []  # Track tools that failed to start so we can release their ports
     # Get tools that have allocated ports for accurate reporting
     tools_with_ports = [tool for tool in tools if tool.name in ports]
     for i, result in enumerate(results):
@@ -326,17 +327,19 @@ async def start_servers(
         if isinstance(result, Exception):
             logging.error(f"Server startup error for {tool_name}: {result}")
             failed_tools.append(tool_name)
+            failed_startups.append(tool_name)
         elif result is not None:
             successful += 1
             if tool:
                 started_tools.append(tool)
         else:
             failed_tools.append(tool_name)
-    
+            failed_startups.append(tool_name)
+
     logging.info(f"Successfully started {successful}/{len(tools)} servers")
-    
+
     if successful == 0:
-        # Cleanup allocated ports on complete failure
+        # Cleanup all allocated ports on complete failure
         for tool_name in allocated_tools:
             try:
                 port_manager.release_port(tool_name)
@@ -344,7 +347,16 @@ async def start_servers(
             except Exception as e:
                 logging.warning(f"Failed to release port for {tool_name}: {e}")
         raise LauncherError("No servers started successfully")
-    
+
+    # Release ports for tools that failed to start (even if some succeeded)
+    if failed_startups:
+        for tool_name in failed_startups:
+            try:
+                port_manager.release_port(tool_name)
+                logging.debug(f"Released port for failed tool {tool_name}")
+            except Exception as e:
+                logging.warning(f"Failed to release port for {tool_name}: {e}")
+
     return started_tools
 
 

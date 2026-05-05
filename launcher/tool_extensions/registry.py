@@ -22,6 +22,24 @@ logger = logging.getLogger(__name__)
 # Global tracking of registry instances by tool name
 # This allows tools to find the launcher's registry when running under management
 _global_registries: dict[str, "ExtensionRegistry"] = {}
+_registry_lock = asyncio.Lock()
+
+
+async def get_registry_for_tool(tool_name: str) -> "ExtensionRegistry | None":
+    """
+    Get the registry for a tool with proper synchronization.
+
+    This avoids race conditions when multiple tools start concurrently
+    and try to access _global_registries before it's populated.
+
+    Args:
+        tool_name: Name of the tool
+
+    Returns:
+        ExtensionRegistry if found, None otherwise
+    """
+    async with _registry_lock:
+        return _global_registries.get(tool_name)
 
 
 class ExtensionType(Enum):

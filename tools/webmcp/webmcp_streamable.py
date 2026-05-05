@@ -750,54 +750,6 @@ class WebMCPStreamableHttp(StreamableHttpTransportBase):
                 }
             }
 
-        except ValueError as e:
-            logger.error(f"Value error in tool call '{tool_name}': {e}")
-            if is_search:
-                webmcp_metrics["search_errors"] += 1
-            elif is_fetch:
-                webmcp_metrics["fetch_errors"] += 1
-            yield {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32602,
-                    "message": "Invalid params",
-                    "data": str(e)
-                }
-            }
-
-        except httpx.HTTPError as e:
-            logger.error(f"HTTP error in tool call '{tool_name}': {e}")
-            if is_search:
-                webmcp_metrics["search_errors"] += 1
-            elif is_fetch:
-                webmcp_metrics["fetch_errors"] += 1
-            yield {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32603,
-                    "message": "HTTP error",
-                    "data": str(e)
-                }
-            }
-
-        except Exception as e:
-            logger.error(f"Error in tool call '{tool_name}': {e}")
-            if is_search:
-                webmcp_metrics["search_errors"] += 1
-            elif is_fetch:
-                webmcp_metrics["fetch_errors"] += 1
-            yield {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32603,
-                    "message": "Internal error",
-                    "data": str(e)
-                }
-            }
-    
     # ========================================================================
     # Tool Handlers
     # ========================================================================
