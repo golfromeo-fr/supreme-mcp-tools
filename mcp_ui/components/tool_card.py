@@ -8,6 +8,7 @@ from nicegui import ui
 from typing import Any
 from collections.abc import Callable
 
+from .constants import STATUS_COLORS
 from ..models import ToolDetail, ToolStatus, Extension, ExtensionType, EnvVariable
 from ..logging_config import get_logger
 from .data_sources_box import DataSourcesBox
@@ -15,17 +16,6 @@ from .actions_box import ActionsBox
 from .env_var_editor import EnvVarEditor
 
 logger = get_logger(__name__)
-
-# Status color mapping
-_STATUS_COLORS: dict[ToolStatus, str] = {
-    ToolStatus.RUNNING: "green",
-    ToolStatus.HEALTHY: "green",
-    ToolStatus.STOPPED: "grey",
-    ToolStatus.ERROR: "red",
-    ToolStatus.UNHEALTHY: "red",
-    ToolStatus.DEGRADED: "yellow",
-    ToolStatus.UNKNOWN: "orange",
-}
 
 
 def ToolCard(
@@ -118,7 +108,7 @@ def _render_loading_state() -> None:
 
 def _status_badge(status: ToolStatus) -> None:
     """Render status badge with color coding."""
-    color = _STATUS_COLORS.get(status, "grey")
+    color = STATUS_COLORS.get(status, "grey")
     ui.badge(status.value.upper(), color=color)
 
 

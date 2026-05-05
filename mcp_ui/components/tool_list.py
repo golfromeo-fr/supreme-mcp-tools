@@ -7,26 +7,16 @@ Renders the sidebar tool list with status indicators and icons.
 from nicegui import ui
 from collections.abc import Callable
 
+from .constants import STATUS_COLORS
 from ..models import ToolInfo, ToolStatus
 from ..logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Status color mapping
-_STATUS_COLORS: dict[ToolStatus, str] = {
-    ToolStatus.RUNNING: "green",
-    ToolStatus.HEALTHY: "green",
-    ToolStatus.STOPPED: "grey",
-    ToolStatus.ERROR: "red",
-    ToolStatus.UNHEALTHY: "red",
-    ToolStatus.DEGRADED: "yellow",
-    ToolStatus.UNKNOWN: "orange",
-}
-
 
 def _status_badge(status: ToolStatus) -> None:
     """Render status badge with color coding."""
-    color = _STATUS_COLORS.get(status, "grey")
+    color = STATUS_COLORS.get(status, "grey")
     ui.badge(status.value, color=color)
 
 
