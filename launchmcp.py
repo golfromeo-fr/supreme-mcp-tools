@@ -202,6 +202,14 @@ Examples:
         help="Disable automatic tools config sync after server startup"
     )
 
+    parser.add_argument(
+        "--transport",
+        type=str,
+        choices=["streamable-http", "sse"],
+        default=None,
+        help="Transport protocol for all tools (default: streamable-http)"
+    )
+
     return parser.parse_args()
 
 
@@ -631,6 +639,11 @@ async def main() -> int:
     
     # Set up logging
     setup_logging(config, args.verbose)
+    
+    # Set transport protocol for all tools (must be set before tool modules are imported)
+    transport = args.transport or config.config.get("transport", "streamable-http")
+    os.environ["MCP_TRANSPORT"] = transport
+    logging.info(f"Transport protocol: {transport}")
     
     logging.info("=" * 60)
     logging.info("MCP Launcher Starting")

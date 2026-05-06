@@ -148,7 +148,8 @@ class Config:
         "errorHandling": {
             "continueOnError": True,
             "failFast": False
-        }
+        },
+        "transport": "streamable-http"
     }
     
     def __init__(self, config_path: str | None = None):

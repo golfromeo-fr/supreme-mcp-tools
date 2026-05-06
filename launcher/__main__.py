@@ -23,7 +23,9 @@ Examples:
 
 import argparse
 import asyncio
+import argparse
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -135,6 +137,14 @@ Examples:
         type=str,
         help="API key for management server authentication"
     )
+
+    parser.add_argument(
+        "--transport",
+        type=str,
+        choices=["streamable-http", "sse"],
+        default=None,
+        help="Transport protocol for all tools (default: streamable-http)"
+    )
     
     return parser.parse_args(args)
 
@@ -151,6 +161,11 @@ class Launcher:
         """
         self.args = args
         self.running = False
+        
+        # Set transport protocol before tool modules are imported
+        transport = args.transport or os.environ.get("MCP_TRANSPORT", "streamable-http")
+        os.environ["MCP_TRANSPORT"] = transport
+        logger.info(f"Transport protocol: {transport}")
         
         # Load configuration
         if args.config:

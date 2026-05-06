@@ -8,6 +8,7 @@ pip install -r requirements.txt          # install dependencies
 python -m launcher --list-tools          # show discovered tools
 python -m launcher --tools webmcp,simplemcp   # start specific tools
 python -m launcher --management-port 8200     # start with mgmt API
+python -m launcher --transport sse            # use SSE transport for all tools
 python -m launcher --dry-run webmcp     # preview without starting
 
 python -m pytest                         # run all tests
@@ -51,6 +52,19 @@ tests/             # pytest suite
 - Filename `<name>_fastmcp.py` is canonical; `_fastmcp` suffix is stripped to derive tool name
 - Auto-excluded: `*_sse.py`, `*_streamable.py`, `test_*`, `__init__.py`, `migrate_*`
 - When both `_fastmcp.py` and bare `.py` exist, `_fastmcp` wins
+
+### Transport switching
+
+All tools support both SSE and streamable-http via FastMCP. Controlled centrally by the launcher:
+
+| Method | Priority | Example |
+|--------|----------|---------|
+| `--transport` CLI flag | Highest | `python -m launcher --transport sse` |
+| `MCP_TRANSPORT` env var | Medium | `MCP_TRANSPORT=sse python -m launcher` |
+| `launcher_config.json` `"transport"` | Lowest | `{"transport": "sse"}` |
+| Default | — | `streamable-http` |
+
+The launcher sets `MCP_TRANSPORT` env var before importing tool modules. Each `_fastmcp.py` reads it at import time to select `mcp.sse_app()` or `mcp.streamable_http_app()`. Per-tool override is possible by setting `MCP_TRANSPORT` in the tool's `.env` — this takes precedence over the launcher's setting since the tool reads the env var directly.
 
 ### config.json auth structure
 
