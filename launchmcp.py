@@ -8,6 +8,7 @@ Launch multiple MCP tools in a single Python process.
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
