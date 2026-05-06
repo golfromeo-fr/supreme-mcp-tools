@@ -79,6 +79,58 @@ class TestWebmcpTransportSwitching:
         assert "MCP_TRANSPORT" in content
 
 
+class TestTransportSwitchingAllTools:
+    """Non-regression: every _fastmcp.py must support transport switching."""
+
+    TOOLS = ["simplemcp", "webmcp", "oraclemcp", "convertermcp", "ragmcp", "memorymcp"]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_fastmcp_has_transport_switching(self, tool):
+        """Each _fastmcp.py must read MCP_TRANSPORT and support both app types."""
+        fpath = Path(f"tools/{tool}/{tool}_fastmcp.py")
+        if not fpath.exists():
+            pytest.skip(f"{tool} has no _fastmcp.py")
+        content = fpath.read_text()
+        assert "MCP_TRANSPORT" in content, f"{tool} must read MCP_TRANSPORT env var"
+        assert "mcp.sse_app()" in content, f"{tool} must support SSE via mcp.sse_app()"
+        assert "mcp.streamable_http_app()" in content, f"{tool} must support streamable-http"
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_streamable_http_default(self, tool):
+        """Default transport must be streamable-http when MCP_TRANSPORT is unset."""
+        fpath = Path(f"tools/{tool}/{tool}_fastmcp.py")
+        if not fpath.exists():
+            pytest.skip(f"{tool} has no _fastmcp.py")
+        content = fpath.read_text()
+        assert "streamable-http" in content, f"{tool} must default to streamable-http"
+
+    def test_legacy_files_removed(self):
+        """No _sse.py or _streamable.py files should exist for tools with _fastmcp.py."""
+        for tool in self.TOOLS:
+            sse = Path(f"tools/{tool}/{tool}_sse.py")
+            streamable = Path(f"tools/{tool}/{tool}_streamable.py")
+            assert not sse.exists(), f"Legacy {sse} should be deleted (replaced by _fastmcp.py)"
+            assert not streamable.exists(), f"Legacy {streamable} should be deleted (replaced by _fastmcp.py)"
+
+    def test_launcher_has_transport_flag(self):
+        """Launcher must accept --transport CLI flag."""
+        content = Path("launchmcp.py").read_text()
+        assert "--transport" in content
+        assert "streamable-http" in content
+        assert "sse" in content
+
+    def test_launcher_sets_env_var(self):
+        """Launcher must set MCP_TRANSPORT env var before importing tools."""
+        content = Path("launchmcp.py").read_text()
+        assert 'os.environ["MCP_TRANSPORT"]' in content
+
+    def test_main_has_transport_flag(self):
+        """launcher/__main__.py must accept --transport CLI flag."""
+        content = Path("launcher/__main__.py").read_text()
+        assert "--transport" in content
+        assert "MCP_TRANSPORT" in content
+
+
 class TestConfigGodObjectComment:
     """Test that Config class has architectural debt comment."""
 
