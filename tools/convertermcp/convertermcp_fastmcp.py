@@ -405,13 +405,17 @@ async def lifespan(app):
 
 # ============================================================================
 # App Export
-# FastMCP's streamable_http_app handles SSE at /sse and HTTP at /mcp
-# internally via its own routing. We export it directly without wrapping in
-# Starlette Mount, which would cause 307 redirects (Mount requires trailing
-# slash in path patterns, breaking FastMCP's routes at /mcp).
+# Transport is selectable via MCP_TRANSPORT env var:
+#   - "streamable-http" (default) → /mcp endpoint
+#   - "sse"                    → /sse + /messages endpoints
 # ============================================================================
 
-app = mcp.streamable_http_app()
+MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "streamable-http").lower()
+
+if MCP_TRANSPORT == "sse":
+    app = mcp.sse_app()
+else:
+    app = mcp.streamable_http_app()
 
 __all__ = ["app", "setup_extensions", "mcp"]
 
@@ -423,10 +427,14 @@ __all__ = ["app", "setup_extensions", "mcp"]
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info(f"Starting {TOOL_NAME} FastMCP server")
+    transport = os.environ.get("MCP_TRANSPORT", "streamable-http").lower()
+    logger.info(f"Starting {TOOL_NAME} FastMCP server (transport: {transport})")
     logger.info(f"  MCP port: {MCP_PORT}")
-    logger.info(f"  SSE endpoint: http://0.0.0.0:{MCP_PORT}/sse")
-    logger.info(f"  Streamable HTTP: http://0.0.0.0:{MCP_PORT}/mcp")
+    if transport == "sse":
+        logger.info(f"  SSE endpoint: http://0.0.0.0:{MCP_PORT}/sse")
+        logger.info(f"  Messages: http://0.0.0.0:{MCP_PORT}/messages")
+    else:
+        logger.info(f"  Streamable HTTP: http://0.0.0.0:{MCP_PORT}/mcp")
     if FEF_V3_AVAILABLE:
         logger.info(f"  FEF V3 mgmt: http://0.0.0.0:{MGMT_PORT}")
 

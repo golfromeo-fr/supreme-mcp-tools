@@ -68,40 +68,15 @@ class TestPortLeakFix:
         )
 
 
-class TestWebmcpErrorHandlingDedup:
-    """Test that webmcp_streamable.py has no duplicate exception handler GROUPS."""
+class TestWebmcpTransportSwitching:
+    """Test that _fastmcp.py supports SSE transport switching via MCP_TRANSPORT env var."""
 
-    def test_no_duplicate_exception_blocks(self):
-        """
-        Regression: _handle_tool_call should have exactly ONE set of exception handlers.
-
-        The original bug had ValueError, HTTPError, Exception each appearing TWICE
-        (duplicate try/except blocks). After fix, each should appear exactly once.
-        Uses AST to properly detect top-level exception handlers in the function body.
-        """
-        content = Path("tools/webmcp/webmcp_streamable.py").read_text()
-        tree = ast.parse(content)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == '_handle_tool_call':
-                top_level_handlers = [
-                    item for item in node.body
-                    if isinstance(item, ast.ExceptHandler)
-                ]
-
-                handler_counts = {}
-                for h in top_level_handlers:
-                    exc_name = 'ValueError' if h.type and isinstance(h.type, ast.Name) and h.type.id == 'ValueError' else \
-                               'HTTPError' if h.type and isinstance(h.type, ast.Attribute) else \
-                               'Exception' if h.type and isinstance(h.type, ast.Name) and h.type.id == 'Exception' else \
-                               'Other'
-                    handler_counts[exc_name] = handler_counts.get(exc_name, 0) + 1
-
-                for exc_type, count in handler_counts.items():
-                    assert count == 1, (
-                        f"_handle_tool_call has {count} '{exc_type}' blocks - should be exactly 1 "
-                        f"(was duplicated before fix)"
-                    )
+    def test_fastmcp_app_export_exists(self):
+        """webmcp_fastmcp.py must export app with transport switching."""
+        content = Path("tools/webmcp/webmcp_fastmcp.py").read_text()
+        assert "mcp.streamable_http_app()" in content
+        assert "mcp.sse_app()" in content
+        assert "MCP_TRANSPORT" in content
 
 
 class TestConfigGodObjectComment:
