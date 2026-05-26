@@ -18,6 +18,7 @@ from typing import Any
 import logging
 
 from .errors import ConfigError
+from .config_types import DEFAULT_HOST
 from .config_types import (
     LoggingConfig,
     ServerConfig,
@@ -137,7 +138,7 @@ class Config:
             }
         },
         "server": {
-            "host": "0.0.0.0",
+            "host": DEFAULT_HOST,
             "logLevel": "info"
         },
         "logging": {
@@ -671,7 +672,7 @@ class Config:
     
     def get_server_host(self) -> str:
         """Get server host address."""
-        return self.config.get("server", {}).get("host", "0.0.0.0")
+        return self.config.get("server", {}).get("host", DEFAULT_HOST)
     
     def get_server_log_level(self) -> str:
         """Get server log level."""

@@ -38,6 +38,7 @@ if _root_env.exists():
     load_dotenv(_root_env)
 
 from .launcher_config import Config
+from .config_types import DEFAULT_HOST
 from .server_manager import ServerManager
 from .service_registry import ServiceRegistry
 from .management_server import ManagementServer
@@ -82,8 +83,8 @@ Examples:
     parser.add_argument(
         "--management-host",
         type=str,
-        default="0.0.0.0",
-        help="Host for the management server (default: 0.0.0.0)"
+        default=DEFAULT_HOST,
+        help=f"Host for the management server (default: {DEFAULT_HOST})"
     )
     
     parser.add_argument(
@@ -108,8 +109,8 @@ Examples:
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
-        help="Host for tool servers (default: 0.0.0.0)"
+        default=DEFAULT_HOST,
+        help=f"Host for tool servers (default: {DEFAULT_HOST})"
     )
     
     parser.add_argument(

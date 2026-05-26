@@ -7,6 +7,7 @@ This server acts as the central hub for the Flexible Extensibility Framework V3.
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
@@ -17,6 +18,7 @@ import uvicorn
 
 from .service_registry import ServiceRegistry
 from .distributed_registry import DistributedExtensionRegistry
+from .config_types import DEFAULT_HOST
 from .tools_config import (
     get_all_disabled_tools,
     get_disabled_tools,
@@ -94,7 +96,7 @@ class ManagementServer:
         self,
         service_registry: ServiceRegistry,
         port: int = None,
-        host: str = "0.0.0.0",
+        host: str = DEFAULT_HOST,
         api_key: str | None = None,
         port_manager: Any | None = None
     ):
@@ -551,7 +553,7 @@ class ManagementServer:
             host=self.host,
             port=self.port,
             log_level="info",
-            access_log=True
+            access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable"
         )
         self._server = uvicorn.Server(config)
         

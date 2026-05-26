@@ -27,6 +27,7 @@ from launcher import (
 )
 from launcher.management_server import ManagementServer
 from launcher.service_registry import ServiceRegistry
+from launcher.config_types import DEFAULT_HOST
 
 # Import monitoring modules
 from monitoring.config import load_monitoring_config, MonitoringConfig
@@ -209,6 +210,21 @@ Examples:
         choices=["streamable-http", "sse"],
         default=None,
         help="Transport protocol for all tools (default: streamable-http)"
+    )
+
+    parser.add_argument(
+        "--health-check-logs",
+        type=str,
+        choices=["enable", "disable", "errors-only"],
+        default="enable",
+        help="Health check logging mode (default: enable)"
+    )
+
+    parser.add_argument(
+        "--health-check-interval",
+        type=int,
+        default=None,
+        help="Health check interval in seconds (default: 30)"
     )
 
     return parser.parse_args()
@@ -518,7 +534,7 @@ async def start_metrics_server(shutdown_event: asyncio.Event) -> None:
         # Configure uvicorn
         config = uvicorn.Config(
             app,
-            host="0.0.0.0",
+            host=DEFAULT_HOST,
             port=port,
             log_level="info",
             access_log=False
@@ -582,7 +598,7 @@ async def start_management_api_server(
         management_server = ManagementServer(
             service_registry=service_registry,
             port=port,
-            host="0.0.0.0"
+            host=DEFAULT_HOST
         )
         
         logging.info(f"Starting management API server on port {port}")
@@ -590,10 +606,10 @@ async def start_management_api_server(
         # Start management server
         config = uvicorn.Config(
             management_server.app,
-            host="0.0.0.0",
+            host=DEFAULT_HOST,
             port=port,
             log_level="info",
-            access_log=True
+            access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable"
         )
         
         server = uvicorn.Server(config)
@@ -645,6 +661,14 @@ async def main() -> int:
     transport = args.transport or config.config.get("transport", "streamable-http")
     os.environ["MCP_TRANSPORT"] = transport
     logging.info(f"Transport protocol: {transport}")
+
+    # Health check settings
+    if args.health_check_logs:
+        os.environ["MCP_HEALTH_CHECK_LOGS"] = args.health_check_logs
+        logging.info(f"Health check logging: {args.health_check_logs}")
+    if args.health_check_interval:
+        os.environ["MCP_HEALTH_CHECK_INTERVAL"] = str(args.health_check_interval)
+        logging.info(f"Health check interval: {args.health_check_interval}s")
     
     logging.info("=" * 60)
     logging.info("MCP Launcher Starting")
@@ -784,8 +808,22 @@ async def main() -> int:
                     module = discovery.loaded_modules.get(tool.name)
                     if module and hasattr(module, "mcp"):
                         try:
-                            tool_list = module.mcp._tool_manager.list_tools()
-                            discovered[tool.name] = [t.name for t in tool_list]
+                            # FastMCP 3.x: await mcp.list_tools()
+                            # FastMCP 2.x: mcp._tool_manager.list_tools()
+                            mcp_instance = module.mcp
+                            if hasattr(mcp_instance, 'list_tools'):
+                                try:
+                                    tool_list = await mcp_instance.list_tools()
+                                    discovered[tool.name] = [t.name for t in tool_list]
+                                except TypeError:
+                                    # list_tools might not be a coroutine (2.x)
+                                    tool_list = mcp_instance.list_tools()
+                                    discovered[tool.name] = [t.name for t in tool_list]
+                            elif hasattr(mcp_instance, '_tool_manager'):
+                                tool_list = mcp_instance._tool_manager.list_tools()
+                                discovered[tool.name] = [t.name for t in tool_list]
+                            else:
+                                discovered[tool.name] = []
                         except Exception:
                             discovered[tool.name] = []
                     else:

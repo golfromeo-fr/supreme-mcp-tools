@@ -10,6 +10,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
+from ..config_types import DEFAULT_HOST
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +74,7 @@ def _default_management_server_config() -> "ManagementServerConfig":
 @dataclass
 class ManagementServerConfig:
     """Configuration for the management server."""
-    host: str = "0.0.0.0"
+    host: str = DEFAULT_HOST
     port: int = field(default_factory=_get_central_management_port)
     advertised_url: str | None = None
     api_key: str | None = None

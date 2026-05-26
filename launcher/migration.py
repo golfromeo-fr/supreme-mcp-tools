@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .config_types import DEFAULT_HOST
+
 logger = logging.getLogger(__name__)
 
 
@@ -294,7 +296,7 @@ from launcher.config.manager import ConfigManager
             config = {
                 "version": "v3",
                 "management_server": {
-                    "host": "0.0.0.0",
+                    "host": DEFAULT_HOST,
                     "port": 9091
                 },
                 "security": {

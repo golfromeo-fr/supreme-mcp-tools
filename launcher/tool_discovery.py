@@ -100,49 +100,65 @@ class ToolDiscovery:
                 logger.warning(f"Search path does not exist: {search_path}")
                 continue
             
-            logger.info(f"Searching for MCP tools in: {search_path}")
+            # Determine whether to search this directory directly or expand into subdirectories.
+            # A "container" directory (like tools/) has subdirectories but no *_fastmcp.py files.
+            # A "tool" directory (like tools/ragmcp/) contains its own *_fastmcp.py entry point.
+            has_fastmcp = any(search_path.glob("*_fastmcp.py"))
+            subdirs = [d for d in search_path.iterdir() if d.is_dir() and not d.name.startswith(("_", "."))]
+            
+            if has_fastmcp:
+                # Tool directory — search its .py files directly, don't descend into subdirs
+                expanded = [search_path]
+            elif subdirs:
+                # Container directory — expand into subdirectories
+                expanded = subdirs
+            else:
+                expanded = [search_path]
+            
+            for tool_dir in expanded:
+                logger.info(f"Searching for MCP tools in: {tool_dir}")
 
-            # Find Python files in the tool directory only (not subdirectories)
-            # Subdirectories contain support modules (indexer/, shared/, etc.)
-            for py_file in search_path.glob("*.py"):
-                # Skip __init__.py and test files
-                if py_file.name.startswith("_") or py_file.name.startswith("test_"):
-                    continue
+                # Find Python files in the tool directory only (not subdirectories)
+                # Subdirectories contain support modules (indexer/, shared/, etc.)
+                for py_file in tool_dir.glob("*.py"):
+                    # Skip __init__.py and test files
+                    if py_file.name.startswith("_") or py_file.name.startswith("test_"):
+                        continue
 
-                # Skip excluded patterns
-                if any(pattern in py_file.name for pattern in exclude_set):
-                    logger.debug(f"Skipping excluded file: {py_file}")
-                    continue
+                    # Skip excluded patterns
+                    if any(pattern in py_file.name for pattern in exclude_set):
+                        logger.debug(f"Skipping excluded file: {py_file}")
+                        continue
 
-                try:
-                    metadata = self._discover_tool(py_file)
+                    try:
+                        metadata = self._discover_tool(py_file)
 
-                    # Filter by tool names if specified
-                    if tool_names is None or metadata.name in tool_names:
-                        # When duplicate names exist, prefer fastmcp > non-suffixed > streamable
-                        existing = self.discovered_tools.get(metadata.name)
-                        if existing:
-                            existing_is_fastmcp = existing.file_path.endswith("_fastmcp.py")
-                            new_is_fastmcp = str(py_file).endswith("_fastmcp.py")
-                            if new_is_fastmcp and not existing_is_fastmcp:
-                                # Replace non-fastmcp with fastmcp version
-                                self.discovered_tools[metadata.name] = metadata
-                                logger.info(f"Discovered tool: {metadata.name} from {py_file} (fastmcp variant)")
-                            elif not new_is_fastmcp and existing_is_fastmcp:
-                                # Skip non-fastmcp when fastmcp already exists
-                                logger.debug(f"Skipping {py_file} - fastmcp variant already discovered")
+                        # Filter by tool names if specified
+                        if tool_names is None or metadata.name in tool_names:
+                            # When duplicate names exist, prefer fastmcp > non-suffixed > streamable
+                            existing = self.discovered_tools.get(metadata.name)
+                            if existing:
+                                existing_is_fastmcp = existing.file_path.endswith("_fastmcp.py")
+                                new_is_fastmcp = str(py_file).endswith("_fastmcp.py")
+                                if new_is_fastmcp and not existing_is_fastmcp:
+                                    # Replace non-fastmcp with fastmcp version
+                                    self.discovered_tools[metadata.name] = metadata
+                                    logger.info(f"Discovered tool: {metadata.name} from {py_file} (fastmcp variant)")
+                                elif not new_is_fastmcp and existing_is_fastmcp:
+                                    # Skip non-fastmcp when fastmcp already exists
+                                    logger.debug(f"Skipping {py_file} - fastmcp variant already discovered")
+                                else:
+                                    logger.debug(f"Skipping duplicate tool: {metadata.name} from {py_file}")
                             else:
-                                logger.debug(f"Skipping duplicate tool: {metadata.name} from {py_file}")
+                                self.discovered_tools[metadata.name] = metadata
+                                logger.info(f"Discovered tool: {metadata.name} from {py_file}")
                         else:
-                            self.discovered_tools[metadata.name] = metadata
-                            logger.info(f"Discovered tool: {metadata.name} from {py_file}")
-                    else:
-                        logger.debug(f"Skipping tool not in list: {metadata.name}")
+                            logger.debug(f"Skipping tool not in list: {metadata.name}")
 
-                except ValidationError as e:
-                    logger.warning(f"Tool validation failed for {py_file}: {e}")
-                except Exception as e:
-                    logger.error(f"Failed to discover tool from {py_file}: {e}")
+                    except ValidationError as e:
+                        logger.warning(f"Tool validation failed for {py_file}: {e}")
+                    except Exception as e:
+                        logger.error(f"Failed to discover tool from {py_file}: {e}")
         
         # Check if requested tools were found
         if tool_names:

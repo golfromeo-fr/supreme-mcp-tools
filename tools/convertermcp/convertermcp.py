@@ -38,6 +38,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("convertermcp")
 
+from tools.shared.server_factory import DEFAULT_HOST
+
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -510,22 +512,22 @@ if __name__ == "__main__":
     async def start_with_fef():
         """Start MCP server with FEF V3 management server."""
         if fef_http_server:
-            logger.info("Starting FEF V3 management server on http://0.0.0.0:9003")
+            logger.info(f"Starting FEF V3 management server on http://{DEFAULT_HOST}:9003")
             await fef_http_server.start()
         
-        config = uvicorn.Config(app, host="0.0.0.0", port=8003)
+        config = uvicorn.Config(app, host=DEFAULT_HOST, port=8003)
         server_instance = uvicorn.Server(config)
         await server_instance.serve()
     
-    logger.info("Starting Converter MCP Server on http://0.0.0.0:8003")
+    logger.info(f"Starting Converter MCP Server on http://{DEFAULT_HOST}:8003")
     if FEF_V3_AVAILABLE:
-        logger.info("FEF V3 management server on http://0.0.0.0:9003")
+        logger.info(f"FEF V3 management server on http://{DEFAULT_HOST}:9003")
     
     try:
         if FEF_V3_AVAILABLE:
             asyncio.run(start_with_fef())
         else:
-            uvicorn.run(app, host="0.0.0.0", port=8003)
+            uvicorn.run(app, host=DEFAULT_HOST, port=8003)
     except KeyboardInterrupt:
         logger.info("Server shutting down gracefully...")
         if fef_http_server:

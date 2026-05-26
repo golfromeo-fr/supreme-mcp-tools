@@ -14,6 +14,13 @@ from .errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
+# ── Single source of truth for launcher bind host ─────────────────────────
+# Must match tools/shared/server_factory.DEFAULT_HOST.
+# On Debian/Linux, "::" binds IPv6-only despite bindv6only=0, breaking IPv4
+# clients (VS Code Copilot). Use "0.0.0.0" which accepts both 127.0.0.1 and
+# localhost (::1 → kernel maps to IPv4).
+DEFAULT_HOST = "0.0.0.0"
+
 
 @dataclass(frozen=True)
 class LoggingConfig:
@@ -60,7 +67,7 @@ class ServerConfig:
 
     Immutable - modify by creating a new instance.
     """
-    host: str = "0.0.0.0"
+    host: str = DEFAULT_HOST
     log_level: str = "info"
 
     VALID_LEVELS = ("debug", "info", "warning", "error", "critical")
@@ -74,7 +81,7 @@ class ServerConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ServerConfig":
         return cls(
-            host=data.get("host", "0.0.0.0"),
+            host=data.get("host", DEFAULT_HOST),
             log_level=data.get("logLevel", "info"),
         )
 

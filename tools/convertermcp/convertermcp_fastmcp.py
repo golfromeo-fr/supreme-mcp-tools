@@ -175,16 +175,12 @@ def extract_docx_text(docx_path: Path) -> str:
 
 
 # ============================================================================
-# FastMCP Instance
+# FastMCP Instance (via shared factory — DualHeaderVerifier auth)
 # ============================================================================
 
-from mcp.server.fastmcp import FastMCP
+from tools.shared.server_factory import create_fastmcp_server, DEFAULT_HOST
 
-mcp = FastMCP(
-    TOOL_NAME,
-    sse_path="/sse",
-    streamable_http_path="/mcp",
-)
+mcp = create_fastmcp_server(TOOL_NAME)
 
 
 @mcp.tool()
@@ -410,12 +406,9 @@ async def lifespan(app):
 #   - "sse"                    → /sse + /messages endpoints
 # ============================================================================
 
-MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "streamable-http").lower()
+from tools.shared.server_factory import get_transport_app
 
-if MCP_TRANSPORT == "sse":
-    app = mcp.sse_app()
-else:
-    app = mcp.streamable_http_app()
+app = get_transport_app(mcp)
 
 __all__ = ["app", "setup_extensions", "mcp"]
 
@@ -431,11 +424,11 @@ if __name__ == "__main__":
     logger.info(f"Starting {TOOL_NAME} FastMCP server (transport: {transport})")
     logger.info(f"  MCP port: {MCP_PORT}")
     if transport == "sse":
-        logger.info(f"  SSE endpoint: http://0.0.0.0:{MCP_PORT}/sse")
-        logger.info(f"  Messages: http://0.0.0.0:{MCP_PORT}/messages")
+        logger.info(f"  SSE endpoint: http://localhost:{MCP_PORT}/sse")
+        logger.info(f"  Messages: http://localhost:{MCP_PORT}/messages")
     else:
-        logger.info(f"  Streamable HTTP: http://0.0.0.0:{MCP_PORT}/mcp")
+        logger.info(f"  Streamable HTTP: http://localhost:{MCP_PORT}/mcp")
     if FEF_V3_AVAILABLE:
-        logger.info(f"  FEF V3 mgmt: http://0.0.0.0:{MGMT_PORT}")
+        logger.info(f"  FEF V3 mgmt: http://localhost:{MGMT_PORT}")
 
-    uvicorn.run(app, host="0.0.0.0", port=MCP_PORT, log_level="info", lifespan="on")
+    uvicorn.run(app, host=DEFAULT_HOST, port=MCP_PORT, log_level="info", lifespan="on")

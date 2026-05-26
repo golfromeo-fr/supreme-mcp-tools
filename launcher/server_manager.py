@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from .errors import ServerStartupError, ServerRuntimeError
 from .tool_discovery import ToolMetadata
+from .config_types import DEFAULT_HOST
 from .service_registry import ServiceRegistry
 from .tool_extensions import ExtensionRegistry, ExtensionHTTPServer
 from .env_manager import load_auth_config
@@ -47,10 +48,11 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
         "/.well-known/openid-configuration",
     })
 
-    def __init__(self, app, api_key: str, server_url: str = None):
+    def __init__(self, app, api_key: str, server_url: str = None, tool_name: str = "unknown"):
         super().__init__(app)
         self.api_key = api_key
         self.server_url = server_url  # e.g. "http://127.0.0.1:8002"
+        self.tool_name = tool_name
 
         # In-memory stores for OAuth flow (per-tool, per-server process)
         self._pending_codes: dict[str, tuple[str, str]] = {}  # code -> (client_id, redirect_uri)
@@ -59,7 +61,9 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # --- OAuth Authorization Server Metadata ---
+        # --- OAuth endpoints suppressed by oauth_fix — FastMCP now returns 404.
+        # The handlers below are now dead code but kept for backwards compatibility
+        # with clients that bypass FastMCP's routing (e.g. direct uvicorn access).
         if path in self._OAUTH_METADATA_PATHS:
             return self._handle_oauth_metadata(request)
 
@@ -97,25 +101,27 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
             # Accept X-API-Key header
             if provided_key:
                 if provided_key != self.api_key:
-                    logger.warning(f"[AUTH] MCP request rejected: invalid API key (got={provided_key[:8]}...)")
+                    logger.warning(f"[{self.tool_name}] AUTH rejected: invalid API key (got={provided_key[:8]}...)")
                     return self._jsonrpc_auth_error("Invalid X-API-Key header")
-                logger.info("[AUTH] MCP request authenticated via X-API-Key")
+                logger.info(f"[{self.tool_name}] AUTH ok via X-API-Key")
                 return await call_next(request)
 
             # Accept Bearer token (from OAuth flow)
             if bearer.lower().startswith("bearer "):
                 token = bearer[7:]
                 if token == self.api_key:
-                    logger.info("[AUTH] MCP request authenticated via Bearer token")
+                    logger.info(f"[{self.tool_name}] AUTH ok via Bearer token")
                     return await call_next(request)
-                logger.warning("[AUTH] MCP request rejected: invalid Bearer token")
+                logger.warning(f"[{self.tool_name}] AUTH rejected: invalid Bearer token")
                 return self._jsonrpc_auth_error("Invalid Bearer token")
 
-            # No auth provided → return 401 with WWW-Authenticate to trigger OAuth
-            logger.warning("[AUTH] MCP request rejected: no auth header provided")
+            # No auth provided → return 401 without WWW-Authenticate header.
+            # The WWW-Authenticate header triggers VS Code Copilot's OAuth flow,
+            # which then fails because /.well-known/* now returns 404 (oauth_fix).
+            # Stripping this header lets Copilot fall back to the configured header.
+            logger.warning(f"[{self.tool_name}] AUTH rejected: no auth header provided")
             return JSONResponse(
                 status_code=401,
-                headers={"WWW-Authenticate": f'Bearer resource_metadata="{self.server_url}/.well-known/oauth-protected-resource"'},
                 content={
                     "jsonrpc": "2.0",
                     "id": None,
@@ -233,10 +239,9 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
         })
 
     def _jsonrpc_auth_error(self, message: str) -> JSONResponse:
-        """Return a JSON-RPC auth error with HTTP 401 to trigger OAuth."""
+        """Return a JSON-RPC auth error with HTTP 401 (no WWW-Authenticate)."""
         return JSONResponse(
             status_code=401,
-            headers={"WWW-Authenticate": f'Bearer resource_metadata="{self.server_url}/.well-known/oauth-protected-resource"'},
             content={
                 "jsonrpc": "2.0",
                 "id": None,
@@ -274,7 +279,7 @@ class ServerManager:
     
     def __init__(
         self,
-        host: str = "0.0.0.0",
+        host: str = DEFAULT_HOST,
         log_level: str = "info",
         service_registry: ServiceRegistry | None = None,
         enable_management: bool = True
@@ -330,7 +335,7 @@ class ServerManager:
             # Add MCP auth middleware if API key is configured
             if api_key:
                 server_url = f"http://127.0.0.1:{port}"
-                app.add_middleware(MCPApiKeyMiddleware, api_key=api_key, server_url=server_url)
+                app.add_middleware(MCPApiKeyMiddleware, api_key=api_key, server_url=server_url, tool_name=tool_name)
                 logger.info(f"MCP endpoint auth enabled for {tool_name}")
 
             # Create Uvicorn config
@@ -339,7 +344,7 @@ class ServerManager:
                 host=self.host,
                 port=port,
                 log_level=self.log_level,
-                access_log=True
+                access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable"
             )
 
             # Create Uvicorn server
@@ -402,7 +407,7 @@ class ServerManager:
                 
                 # Register with service registry
                 # NOTE: Use "localhost" for the URL even though server binds to self.host (0.0.0.0)
-                # Clients cannot connect to 0.0.0.0 - they need localhost or 127.0.0.1
+                # Clients cannot connect to :: - they need localhost or 127.0.0.1
                 if self.service_registry:
                     await self.service_registry.register(
                         name=tool_name,
@@ -681,7 +686,7 @@ class ServerManager:
 async def run_servers_concurrently(
     tools_metadata: list[ToolMetadata],
     ports: dict[str, int],
-    host: str = "0.0.0.0",
+    host: str = DEFAULT_HOST,
     log_level: str = "info"
 ) -> dict[str, ServerInstance]:
     """

@@ -17,6 +17,7 @@ import socket
 from typing import Any
 
 from .errors import PortConflictError
+from .config_types import DEFAULT_HOST
 
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,7 @@ class PortManager:
         # Check if port is actually available on the system
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("0.0.0.0", port))
+                s.bind((DEFAULT_HOST, port))
                 return True
         except OSError:
             return False

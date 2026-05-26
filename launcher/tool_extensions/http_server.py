@@ -16,6 +16,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from .registry import ExtensionRegistry
+from ..config_types import DEFAULT_HOST
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class ExtensionHTTPServer:
         registry: ExtensionRegistry,
         config_manager: Any | None = None,
         port: int | None = None,
-        host: str = "0.0.0.0",
+        host: str = DEFAULT_HOST,
         api_key: str | None = None
     ):
         """
@@ -146,6 +147,9 @@ class ExtensionHTTPServer:
     def _register_routes(self) -> None:
         """Register all API routes."""
         
+        import os
+        self._health_check_logs = os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable")
+        
         @self.app.get("/health")
         async def health_check():
             """Health check endpoint - optimized for fast response."""
@@ -153,14 +157,22 @@ class ExtensionHTTPServer:
             start = time.time()
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning(f"[HEALTH_CHECK] Received health check request at {start}")
+            
+            # Only log if enabled
+            should_log = self._health_check_logs != "disable"
+            log_errors_only = self._health_check_logs == "errors-only"
+            
+            if should_log and not log_errors_only:
+                logger.warning(f"[HEALTH_CHECK] Received health check request at {start}")
             try:
                 # Use include_data=False to avoid calling slow data source handlers
                 extensions_count = sum(
                     len(exts) for exts in self.registry.list_extensions(self.tool_name, include_data=False).values()
                 )
                 elapsed = time.time() - start
-                logger.warning(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
+                # Only log completion if not disabled and not errors-only mode
+                if should_log and not log_errors_only:
+                    logger.warning(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
                 return {
                     "status": "healthy",
                     "tool": self.tool_name,
@@ -294,7 +306,7 @@ class ExtensionHTTPServer:
             host=self.host,
             port=self.port,
             log_level="info",
-            access_log=True
+            access_log=self._health_check_logs != "disable"
         )
         self._server = uvicorn.Server(config)
         

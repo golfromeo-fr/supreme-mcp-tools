@@ -7,6 +7,7 @@ Provides automatic tool registration and health checks.
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,24 +49,41 @@ class ServiceRegistry:
     
     def __init__(
         self,
-        health_check_interval: float = 30.0,
+        health_check_interval: float = None,
         health_check_timeout: float = 10.0
     ):
         """
         Initialize the service registry.
         
         Args:
-            health_check_interval: Interval between health checks in seconds
+            health_check_interval: Interval between health checks in seconds (default: from env or 30)
             health_check_timeout: Timeout for health check requests
         """
+        # Read from env vars if not provided
+        if health_check_interval is None:
+            interval_env = os.environ.get("MCP_HEALTH_CHECK_INTERVAL")
+            health_check_interval = float(interval_env) if interval_env else 30.0
+        
+        health_check_logs = os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable")
+        
         self.health_check_interval = health_check_interval
         self.health_check_timeout = health_check_timeout
+        self._health_check_logs = health_check_logs
         
         self._services: dict[str, ServiceInfo] = {}
         self._lock = asyncio.Lock()
         self._health_check_task: asyncio.Task | None = None
         self._running = False
         self._session: aiohttp.ClientSession | None = None
+    
+    def _should_log_health(self, level: str = "info") -> bool:
+        """Check if health check logging is enabled for a given level."""
+        mode = self._health_check_logs
+        if mode == "disable":
+            return False
+        if mode == "errors-only":
+            return level in ("error", "warning")
+        return True
     
     async def start(self) -> None:
         """Start the health check background task."""

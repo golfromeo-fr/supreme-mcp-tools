@@ -30,7 +30,6 @@ from datetime import datetime, timedelta, timezone
 
 try:
     import anyio
-    from mcp.server.fastmcp import FastMCP
 except ImportError as e:
     print(f"ERROR: Missing required dependency: {e}", file=sys.stderr)
     sys.exit(1)
@@ -179,14 +178,13 @@ except Exception as e:
     MGMT_PORT = int(os.environ.get("MCP_MGMT_PORT", "8105"))
 
 # ============================================================================
-# FastMCP Instance
+# FastMCP Instance (via shared factory — DualHeaderVerifier auth)
 # ============================================================================
 
-mcp = FastMCP(
-    TOOL_NAME,
-    sse_path="/sse",
-    streamable_http_path="/mcp",
-)
+from tools.shared.server_factory import create_fastmcp_server
+
+mcp = create_fastmcp_server(TOOL_NAME)
+
 
 # ============================================================================
 # Core Utility Functions

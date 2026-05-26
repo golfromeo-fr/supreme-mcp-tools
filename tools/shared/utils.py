@@ -7,7 +7,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+
+from tools.shared.server_factory import DEFAULT_HOST
 
 try:
     from launcher.launcher_config import load_ports_config
@@ -74,8 +76,6 @@ class FastMCPBase:
             
         self.mcp_instance = FastMCP(
             self.tool_name,
-            sse_path="/sse",
-            streamable_http_path="/mcp",
         )
         return self.mcp_instance
     
@@ -148,7 +148,7 @@ class FastMCPBase:
         """Get the FastMCP app for deployment."""
         if not self.mcp_instance:
             self.create_mcp_instance()
-        return self.mcp_instance.streamable_http_app()
+        return self.mcp_instance.http_app()
     
     def run(self):
         """Run the server."""
@@ -159,14 +159,14 @@ class FastMCPBase:
         
         self.logger.info(f"Starting {self.tool_name} FastMCP server")
         self.logger.info(f"  MCP port: {self.mcp_port}")
-        self.logger.info(f"  SSE endpoint: http://0.0.0.0:{self.mcp_port}/sse")
-        self.logger.info(f"  Streamable HTTP: http://0.0.0.0:{self.mcp_port}/mcp")
+        self.logger.info(f"  SSE endpoint: http://{DEFAULT_HOST}:{self.mcp_port}/sse")
+        self.logger.info(f"  Streamable HTTP: http://{DEFAULT_HOST}:{self.mcp_port}/mcp")
         if FEF_V3_AVAILABLE:
-            self.logger.info(f"  FEF V3 mgmt: http://0.0.0.0:{self.mgmt_port}")
+            self.logger.info(f"  FEF V3 mgmt: http://{DEFAULT_HOST}:{self.mgmt_port}")
         
         uvicorn.run(
             self.get_app(),
-            host="0.0.0.0",
+            host=DEFAULT_HOST,
             port=self.mcp_port,
             log_level="info",
             lifespan="on",
