@@ -238,6 +238,15 @@ async def convert_docx_to_text(source: str, output_path: str | None = None, head
                 f.write(text)
             docx_size = docx_path.stat().st_size if docx_path.exists() else 0
             txt_size = out_path.stat().st_size
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            metrics["total_conversions"] += 1
+            metrics["total_conversion_time_ms"] += elapsed_ms
+            metrics["bytes_processed"] += docx_size
+            if fef_manager is not None:
+                fef_manager.metrics.record_request(
+                    endpoint="tools/call", tool_name="convert_docx_to_text",
+                    success=True, duration_ms=elapsed_ms
+                )
             msg = f"Success: {docx_size:,} bytes DOCX converted to {txt_size:,} bytes TXT at {out_path}"
             logger.info(msg)
             success = True

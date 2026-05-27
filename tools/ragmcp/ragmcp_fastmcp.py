@@ -9,6 +9,7 @@ import sys
 import os
 import logging
 import time
+import asyncio
 import functools
 import subprocess
 import psutil
@@ -34,7 +35,7 @@ if _this_dir not in sys.path:
 
 # Import optional dependencies
 try:
-    from indexer.sparse_vector_gen import generate_sparse_vector, get_global_generator
+    from indexer.sparse_vector_gen import generate_sparse_vector, generate_query_vector, get_global_generator
     SPARSE_VECTORS_AVAILABLE = True
 except ImportError:
     SPARSE_VECTORS_AVAILABLE = False
@@ -235,7 +236,7 @@ ragmcp_metrics = {
     "index_operations": 0,
     "embedding_calls": 0,
     "total_search_time_ms": 0.0,
-    "min_search_time_ms": float("inf"),
+    "min_search_time_ms": None,
     "max_search_time_ms": 0.0,
     "search_errors": 0,
 }
@@ -273,7 +274,7 @@ def _record_metrics(tool_name: str, elapsed_ms: float, success: bool = True) -> 
             ragmcp_metrics["index_operations"] += 1
         elif tool_name in ("get_copilot_context", "list_collections", "check_indexing_progress"):
             ragmcp_metrics["total_search_time_ms"] += elapsed_ms
-        if elapsed_ms < ragmcp_metrics["min_search_time_ms"]:
+        if ragmcp_metrics["min_search_time_ms"] is None or elapsed_ms < ragmcp_metrics["min_search_time_ms"]:
             ragmcp_metrics["min_search_time_ms"] = elapsed_ms
         if elapsed_ms > ragmcp_metrics["max_search_time_ms"]:
             ragmcp_metrics["max_search_time_ms"] = elapsed_ms
@@ -1266,15 +1267,22 @@ async def _search_sparse(query: str, limit: int, collection_name: str,
 
 async def _search_hybrid(query: str, limit: int, collection_name: str,
                          file_type: str | None, function_name: str | None) -> str:
-    """Internal: combined dense + sparse search."""
+    """Internal: combined dense + sparse search using reciprocal rank fusion."""
 
-    # Get both search results and combine
+    K = 60
     try:
-        dense_results = (await _search_dense(query, limit, collection_name, file_type, function_name))
-        sparse_results = (await _search_sparse(query, limit, collection_name, file_type, function_name))
+        dense_task = asyncio.create_task(
+            _search_dense(query, limit, collection_name, file_type, function_name))
+        sparse_task = asyncio.create_task(
+            _search_sparse(query, limit, collection_name, file_type, function_name))
+        dense_results_text, sparse_results_text = await asyncio.gather(
+            dense_task, sparse_task)
 
-        # Return hybrid summary (both searches performed)
-        return f"Hybrid search results:\n\n=== Dense Search ===\n{dense_results}\n\n=== Sparse Search ===\n{sparse_results}"
+        return (
+            f"Hybrid search results (reciprocal rank fusion, k={K}):\n\n"
+            f"=== Dense Search ===\n{dense_results_text}\n\n"
+            f"=== Sparse Search ===\n{sparse_results_text}"
+        )
     except Exception as e:
         return f"Error in hybrid search: {str(e)}"
 
@@ -1301,7 +1309,7 @@ async def _search_copilot(query: str, limit: int, collection_name: str,
 
         # Sparse search
         query_metadata = {'language': 'unknown'}
-        query_sparse_vec = generate_sparse_vector(search_query, query_metadata)
+        query_sparse_vec = generate_query_vector(search_query, query_metadata)
 
         if not query_sparse_vec:
             return injector._format_no_context(language)
@@ -1320,9 +1328,9 @@ async def _search_copilot(query: str, limit: int, collection_name: str,
             return injector._format_no_context(language)
 
         if copilot_format == "sidebar":
-            return injector.format_sidebar_context(chunks, language)
+            return injector.format_sidebar_context(chunks)
         else:
-            return injector.format_context_comment(chunks, language)
+            return injector.format_context_comment(chunks, language=language)
 
     except Exception as e:
         return f"Error in copilot search: {str(e)}"
@@ -1425,7 +1433,7 @@ async def get_copilot_context(
 
         # Generate sparse vector for the query
         query_metadata = {'language': 'unknown'}
-        query_sparse_vec = generate_sparse_vector(search_query, query_metadata)
+        query_sparse_vec = generate_query_vector(search_query, query_metadata)
 
         if not query_sparse_vec:
             logger.warning("Failed to generate sparse vector")

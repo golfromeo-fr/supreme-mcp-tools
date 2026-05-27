@@ -55,11 +55,20 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
         self.tool_name = tool_name
 
         # In-memory stores for OAuth flow (per-tool, per-server process)
-        self._pending_codes: dict[str, tuple[str, str]] = {}  # code -> (client_id, redirect_uri)
-        self._registered_clients: dict[str, dict] = {}  # client_id -> client_info
+        self._pending_codes: dict[str, tuple[str, str, float]] = {}  # code -> (client_id, redirect_uri, created_at)
+        self._registered_clients: dict[str, tuple[dict, float]] = {}  # client_id -> (client_info, created_at)
+        self._oauth_ttl = 600  # 10 minutes
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        now = time.time()
+        expired_codes = [k for k, v in self._pending_codes.items() if now - v[2] > self._oauth_ttl]
+        for k in expired_codes:
+            del self._pending_codes[k]
+        expired_clients = [k for k, v in self._registered_clients.items() if now - v[1] > self._oauth_ttl]
+        for k in expired_clients:
+            del self._registered_clients[k]
 
         # --- OAuth endpoints suppressed by oauth_fix — FastMCP now returns 404.
         # The handlers below are now dead code but kept for backwards compatibility
@@ -101,7 +110,7 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
             # Accept X-API-Key header
             if provided_key:
                 if provided_key != self.api_key:
-                    logger.warning(f"[{self.tool_name}] AUTH rejected: invalid API key (got={provided_key[:8]}...)")
+                    logger.warning(f"[{self.tool_name}] AUTH rejected: invalid API key")
                     return self._jsonrpc_auth_error("Invalid X-API-Key header")
                 logger.info(f"[{self.tool_name}] AUTH ok via X-API-Key")
                 return await call_next(request)
@@ -183,7 +192,7 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
             "redirect_uris": body.get("redirect_uris", []),
             "token_endpoint_auth_method": body.get("token_endpoint_auth_method", "client_secret_post"),
         }
-        self._registered_clients[client_id] = client_info
+        self._registered_clients[client_id] = (client_info, time.time())
         logger.info(f"[AUTH-OAUTH] Client registered: {client_id}")
         return JSONResponse(client_info, status_code=201)
 
@@ -200,7 +209,7 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
 
         # Generate auth code and store pending exchange
         code = f"mcp-code-{secrets.token_hex(16)}"
-        self._pending_codes[code] = (client_id, redirect_uri)
+        self._pending_codes[code] = (client_id, redirect_uri, time.time())
 
         # Redirect back to client with code and state
         sep = "&" if "?" in redirect_uri else "?"
@@ -228,7 +237,7 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
                 status_code=400
             )
 
-        client_id, redirect_uri = pending
+        client_id, redirect_uri, _ = pending
         logger.info(f"[AUTH-OAUTH] Token issued for client={client_id}")
 
         return JSONResponse({
@@ -355,7 +364,7 @@ class ServerManager:
             mgmt_server = None
 
             if self.enable_management and mgmt_port:
-                # Set environment variable so tool can use the same management port
+                os.environ[f"MCP_MGMT_PORT_{tool_name}"] = str(mgmt_port)
                 os.environ["MCP_MGMT_PORT"] = str(mgmt_port)
                 logger.info(f"Set MCP_MGMT_PORT={mgmt_port} for {tool_name}")
 
@@ -517,6 +526,7 @@ class ServerManager:
             if tool_name in self.tasks:
                 task = self.tasks[tool_name]
                 if not task.done():
+                    instance.server.should_exit = True
                     task.cancel()
                     try:
                         await task
@@ -524,8 +534,8 @@ class ServerManager:
                         pass
                 del self.tasks[tool_name]
             
-            # Shutdown the server
-            if instance.server.started:
+            # Shutdown the server only if no task was managing it
+            if instance.server.started and tool_name not in self.tasks:
                 await instance.server.shutdown()
             
             instance.status = "stopped"

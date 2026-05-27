@@ -17,6 +17,13 @@ class TTLCache:
         self.default_ttl = default_ttl
         self.hits = 0
         self.misses = 0
+        self._last_cleanup = time.time()
+        self._cleanup_interval = 300
+    
+    def _maybe_cleanup(self):
+        if time.time() - self._last_cleanup >= self._cleanup_interval:
+            self.cleanup_expired()
+            self._last_cleanup = time.time()
     
     def get(self, key: str) -> Any | None:
         """Get value from cache if not expired."""
@@ -35,6 +42,7 @@ class TTLCache:
     def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Set value in cache with TTL."""
         with self.lock:
+            self._maybe_cleanup()
             expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
             self.cache[key] = (value, expiry)
     
@@ -71,7 +79,7 @@ class TTLCache:
 
 def generate_cache_key(url: str, params: dict) -> str:
     """Generate a cache key from URL and parameters."""
-    param_str = str(sorted(params.items()))
+    param_str = str(sorted(params.items(), key=lambda x: str(x[0])))
     combined = f"{url}:{param_str}"
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 

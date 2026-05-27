@@ -202,9 +202,11 @@ class CodeSparseVectorGenerator:
             term_counts[term] += 1
             term_domains[term].add(domain)
 
-        # Update statistics
         doc_length = len(tokens)
-        self.update_statistics(doc_length, set(term_counts.keys()))
+
+        is_indexing = metadata is None or metadata.get('_is_query', False) is False
+        if is_indexing:
+            self.update_statistics(doc_length, set(term_counts.keys()))
 
         # Compute sparse vector
         sparse_vector = {}
@@ -284,6 +286,25 @@ def generate_sparse_vector(text: str, metadata: dict | None = None) -> dict[int,
     """
     generator = get_global_generator()
     return generator.generate_sparse_vector(text, metadata)
+
+
+def generate_query_vector(text: str, metadata: dict | None = None) -> dict[int, float]:
+    """
+    Generate a query-only sparse vector that does NOT update BM25 statistics.
+
+    Use this for search queries. Use generate_sparse_vector for indexing.
+
+    Args:
+        text: Query text to vectorize
+        metadata: Optional metadata
+
+    Returns:
+        Sparse vector as {term_id: weight} dict
+    """
+    meta = dict(metadata) if metadata else {}
+    meta['_is_query'] = True
+    generator = get_global_generator()
+    return generator.generate_sparse_vector(text, meta)
 
 
 # Example usage and testing

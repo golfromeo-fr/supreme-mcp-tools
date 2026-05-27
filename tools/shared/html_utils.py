@@ -147,7 +147,7 @@ _COMPILED_PATTERNS = {
     'html_tags': re.compile(r'<[^>]+>'),
     'img_tags': re.compile(r'<img[^>]*>', re.IGNORECASE),
     'table_tags': re.compile(r'<table[^>]*>.*?</table>', re.DOTALL | re.IGNORECASE),
-    'link_tags': re.compile(r'<a[^>]*>.*?</a>', re.DOTALL | re.IGNORECASE),
+    'link_tags': re.compile(r'<a[^>]*>(.*?)</a>', re.DOTALL | re.IGNORECASE),
 }
 
 
@@ -173,11 +173,12 @@ def clean_html_optimized(html_content: str, include_images: bool = True,
     # Remove script, style, noscript, iframe tags
     text = patterns['script_style'].sub('', html_content)
     
-    # Remove navigation, header, footer, aside tags (common boilerplate)
-    text = patterns['nav_footer'].sub('', text)
-    
     # Remove HTML comments
     text = patterns['comments'].sub('', text)
+    
+    # Remove navigation, header, footer, aside tags (common boilerplate)
+    if not include_tables:
+        text = patterns['nav_footer'].sub('', text)
     
     # Handle images
     if not include_images:

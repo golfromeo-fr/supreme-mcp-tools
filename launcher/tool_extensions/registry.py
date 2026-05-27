@@ -12,6 +12,7 @@ Global Registry Tracking:
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 # This allows tools to find the launcher's registry when running under management
 _global_registries: dict[str, "ExtensionRegistry"] = {}
 _registry_lock = asyncio.Lock()
+_registry_write_lock = threading.Lock()
 
 
 async def get_registry_for_tool(tool_name: str) -> "ExtensionRegistry | None":
@@ -133,7 +135,8 @@ class ExtensionRegistry:
         
         # Register globally if tool_name is provided
         if tool_name:
-            _global_registries[tool_name] = self
+            with _registry_write_lock:
+                _global_registries[tool_name] = self
             logger.info(f"Registered global registry for tool '{tool_name}'")
     
     def register_global(self, tool_name: str) -> None:
@@ -144,13 +147,16 @@ class ExtensionRegistry:
             tool_name: Tool name to register under
         """
         self._tool_name = tool_name
-        _global_registries[tool_name] = self
+        with _registry_write_lock:
+            _global_registries[tool_name] = self
         logger.info(f"Registered global registry for tool '{tool_name}'")
     
     def unregister_global(self) -> None:
         """Unregister this registry from global tracking."""
-        if self._tool_name and self._tool_name in _global_registries:
-            del _global_registries[self._tool_name]
+        if self._tool_name:
+            with _registry_write_lock:
+                if self._tool_name in _global_registries:
+                    del _global_registries[self._tool_name]
             logger.info(f"Unregistered global registry for tool '{self._tool_name}'")
     
     def register(self, tool_name: str, extension: Extension) -> None:

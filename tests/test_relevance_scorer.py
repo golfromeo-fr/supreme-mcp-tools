@@ -53,7 +53,7 @@ class TestComputeRecencyDecay(unittest.TestCase):
 
     def test_none_last_accessed(self):
         from shared.relevance_scorer import compute_recency_decay
-        self.assertEqual(compute_recency_decay(None), 0.0)
+        self.assertEqual(compute_recency_decay(None), 1.0)
 
     def test_just_accessed(self):
         from shared.relevance_scorer import compute_recency_decay
@@ -131,7 +131,7 @@ class TestComputeRelevanceScore(unittest.TestCase):
             last_accessed=None,
             usage_count=0,
         )
-        self.assertAlmostEqual(score, 0.0)
+        self.assertGreater(score, 0.0)
 
     def test_clamps_to_one(self):
         from shared.relevance_scorer import compute_relevance_score, ScoringWeights

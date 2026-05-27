@@ -4,6 +4,7 @@ Rate Limiting for FEF V3
 Provides token bucket rate limiting for API endpoints.
 """
 
+import threading
 import time
 import logging
 from collections import defaultdict
@@ -43,7 +44,8 @@ class RateLimiter:
             "tokens": self.burst_size,
             "last_update": time.time()
         })
-        self._lock = None  # Will be set if asyncio is available
+        self._lock = threading.Lock()
+        self._async_lock = None  # Will be set if asyncio is available
     
     def is_allowed(self, key: str, tokens: int = 1) -> bool:
         """
@@ -56,23 +58,24 @@ class RateLimiter:
         Returns:
             True if request is allowed, False otherwise
         """
-        bucket = self.buckets[key]
-        now = time.time()
-        
-        # Refill tokens based on elapsed time
-        elapsed = now - bucket["last_update"]
-        bucket["tokens"] = min(
-            self.burst_size,
-            bucket["tokens"] + elapsed * self.refill_rate
-        )
-        bucket["last_update"] = now
-        
-        # Check if enough tokens available
-        if bucket["tokens"] >= tokens:
-            bucket["tokens"] -= tokens
-            return True
-        
-        return False
+        with self._lock:
+            bucket = self.buckets[key]
+            now = time.time()
+            
+            # Refill tokens based on elapsed time
+            elapsed = now - bucket["last_update"]
+            bucket["tokens"] = min(
+                self.burst_size,
+                bucket["tokens"] + elapsed * self.refill_rate
+            )
+            bucket["last_update"] = now
+            
+            # Check if enough tokens available
+            if bucket["tokens"] >= tokens:
+                bucket["tokens"] -= tokens
+                return True
+            
+            return False
     
     def get_remaining(self, key: str) -> int:
         """
@@ -84,18 +87,18 @@ class RateLimiter:
         Returns:
             Number of remaining tokens
         """
-        bucket = self.buckets.get(key)
-        if bucket is None:
-            return self.burst_size
-        
-        # Calculate current tokens
-        now = time.time()
-        elapsed = now - bucket["last_update"]
-        tokens = min(
-            self.burst_size,
-            bucket["tokens"] + elapsed * self.refill_rate
-        )
-        return int(tokens)
+        with self._lock:
+            bucket = self.buckets.get(key)
+            if bucket is None:
+                return self.burst_size
+            
+            now = time.time()
+            elapsed = now - bucket["last_update"]
+            tokens = min(
+                self.burst_size,
+                bucket["tokens"] + elapsed * self.refill_rate
+            )
+            return int(tokens)
     
     def get_reset_time(self, key: str) -> float:
         """
@@ -121,11 +124,12 @@ class RateLimiter:
         Args:
             key: Client identifier
         """
-        if key in self.buckets:
-            self.buckets[key] = {
-                "tokens": self.burst_size,
-                "last_update": time.time()
-            }
+        with self._lock:
+            if key in self.buckets:
+                self.buckets[key] = {
+                    "tokens": self.burst_size,
+                    "last_update": time.time()
+                }
     
     def clear(self) -> None:
         """Clear all buckets."""

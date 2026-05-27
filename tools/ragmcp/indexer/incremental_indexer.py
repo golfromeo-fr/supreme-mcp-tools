@@ -872,10 +872,17 @@ def main():
             rel_path = file_path.relative_to(workspace_path)
             file_start = time.time()
 
-            # Log per-file at DEBUG level only
             logger.debug(f"Indexing: {rel_path}")
 
-            chunks = asyncio.run(index_file(file_path, workspace_path, args.collection, qdrant_client, metadata_store))
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            chunks = loop.run_until_complete(index_file(file_path, workspace_path, args.collection, qdrant_client, metadata_store))
             total_chunks += chunks
 
             # Track timing for ETA

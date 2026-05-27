@@ -14,14 +14,15 @@ import os
 import json
 import logging
 import hashlib
+import threading
 from typing import Any
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# Global connection pool
 _pool: Any = None
 _pg_available: bool = False
+_init_lock = threading.Lock()
 
 
 def _get_pg_dsn() -> str | None:
@@ -48,44 +49,63 @@ def init_pg() -> bool:
     if _pg_available:
         return True
 
-    dsn = _get_pg_dsn()
-    if not dsn:
-        logger.info("PostgreSQL not configured (POSTGRES_HOST not set), using Qdrant-only mode")
-        return False
+    with _init_lock:
+        if _pg_available:
+            return True
 
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
+        dsn = _get_pg_dsn()
+        if not dsn:
+            logger.info("PostgreSQL not configured (POSTGRES_HOST not set), using Qdrant-only mode")
+            return False
 
-        pool = psycopg_pool(dsn)
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
 
-        # Test connection and create schema before marking available
-        with pool.connection() as conn:
-            conn.execute("SELECT 1")
-            _ensure_schema(conn)
+            pool = psycopg_pool(dsn)
 
-        _pool = pool
-        _pg_available = True
-        logger.info("PostgreSQL store initialized")
-        return True
+            with pool.connection() as conn:
+                conn.execute("SELECT 1")
+                _ensure_schema(conn)
 
-    except ImportError:
-        logger.warning("psycopg not installed, using Qdrant-only mode")
-        return False
-    except Exception as e:
-        logger.warning(f"PostgreSQL init failed, using Qdrant-only mode: {e}")
-        _pool = None
-        _pg_available = False
-        return False
+            _pool = pool
+            _pg_available = True
+            logger.info("PostgreSQL store initialized")
+            return True
+
+        except ImportError:
+            logger.warning("psycopg not installed, using Qdrant-only mode")
+            return False
+        except Exception as e:
+            logger.warning(f"PostgreSQL init failed, using Qdrant-only mode: {e}")
+            _pool = None
+            _pg_available = False
+            return False
 
 
 class psycopg_pool:
-    """Minimal connection pool (since psycopg_pool may not be installed)."""
+    """Connection pool using psycopg_pool if available, else per-connection fallback."""
 
     def __init__(self, dsn: str):
         self._dsn = dsn
+        self._real_pool = None
+        try:
+            from psycopg_pool import ConnectionPool
+            self._real_pool = ConnectionPool(
+                conninfo=dsn,
+                min_size=1,
+                max_size=5,
+                open=False,
+                kwargs={"row_factory": __import__('psycopg.rows', fromlist=['dict_row']).dict_row},
+            )
+            self._real_pool.open(wait=True)
+            logger.info("Using psycopg_pool.ConnectionPool")
+        except (ImportError, Exception) as e:
+            logger.info(f"psycopg_pool not available, using per-connection fallback: {e}")
 
     def connection(self):
+        if self._real_pool is not None:
+            return self._real_pool.connection()
         import psycopg
         from psycopg.rows import dict_row
         conn = psycopg.connect(self._dsn, row_factory=dict_row)
@@ -132,10 +152,16 @@ def _ensure_schema(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id);
         CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
         CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(text_hash);
-
-        CREATE EXTENSION IF NOT EXISTS pg_trgm;
-        CREATE INDEX IF NOT EXISTS idx_memories_text_trgm ON memories USING gin (text gin_trgm_ops);
     """)
+
+    try:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_text_trgm "
+            "ON memories USING gin (text gin_trgm_ops)"
+        )
+    except Exception as e:
+        logger.warning(f"pg_trgm extension not available (full-text search disabled): {e}")
 
 
 def text_hash(text: str) -> str:
@@ -226,14 +252,16 @@ def get_memory(memory_id: str) -> dict | None:
 
     try:
         with _pool.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM memories WHERE id = %s", (memory_id,)
+            ).fetchone()
+            if row is None:
+                return None
             conn.execute("""
                 UPDATE memories SET usage_count = usage_count + 1, last_accessed = NOW()
                 WHERE id = %s
             """, (memory_id,))
-            row = conn.execute(
-                "SELECT * FROM memories WHERE id = %s", (memory_id,)
-            ).fetchone()
-            return dict(row) if row else None
+            return dict(row)
     except Exception as e:
         logger.error(f"PG get failed: {e}")
         return None

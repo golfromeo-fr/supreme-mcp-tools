@@ -288,8 +288,8 @@ class ServiceRegistry:
                     logger.warning(
                         f"Health check returned {response.status} for '{name}'"
                     )
-        except BaseException as e:
-            # Catch BaseException to handle CancelledError and all other exceptions
+        except (asyncio.CancelledError, Exception) as e:
+            # Catch CancelledError and regular exceptions, but NOT KeyboardInterrupt/SystemExit
             async with self._lock:
                 if name in self._services:
                     self._services[name].status = "unhealthy"

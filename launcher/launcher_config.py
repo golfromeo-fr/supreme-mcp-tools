@@ -11,6 +11,7 @@ ARCHITECTURAL NOTE:
     Call sites can use the new typed configs directly when isolation is needed.
 """
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -221,7 +222,7 @@ class Config:
     def _load_config(self) -> None:
         """Load configuration from file and environment variables."""
         # Start with defaults
-        self.config = self.DEFAULT_CONFIG.copy()
+        self.config = copy.deepcopy(self.DEFAULT_CONFIG)
         
         # Ensure port defaults are loaded from port_config.json
         self._ensure_port_defaults()

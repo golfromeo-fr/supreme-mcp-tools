@@ -40,8 +40,9 @@ except Exception as e:
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
 logger = logging.getLogger(TOOL_NAME)
 
 # ============================================================================
@@ -124,6 +125,7 @@ fef_setup_done = False
 @mcp.tool()
 async def double(value: float) -> str:
     """Doubles the value of a number."""
+    logger.info(f"double(value={value})")
     start_time = time.perf_counter()
     try:
         result = str(value * 2)
@@ -155,6 +157,7 @@ async def double(value: float) -> str:
 @mcp.tool()
 async def square(value: float) -> str:
     """Calculates the square of a number."""
+    logger.info(f"square(value={value})")
     start_time = time.perf_counter()
     try:
         result = str(value ** 2)
@@ -186,6 +189,7 @@ async def square(value: float) -> str:
 @mcp.tool()
 async def greet(name: str, greeting: str = "Hello") -> str:
     """Generates a greeting message."""
+    logger.info(f"greet(name={name!r}, greeting={greeting!r})")
     start_time = time.perf_counter()
     try:
         result = f"{greeting}, {name}!"
@@ -217,6 +221,7 @@ async def greet(name: str, greeting: str = "Hello") -> str:
 @mcp.tool()
 async def get_secret() -> str:
     """Returns the current value of SIMPLEMCP_SECRET env var for hot-reload testing."""
+    logger.info("get_secret()")
     start_time = time.perf_counter()
     try:
         secret_value = os.environ.get("SIMPLEMCP_SECRET", "")

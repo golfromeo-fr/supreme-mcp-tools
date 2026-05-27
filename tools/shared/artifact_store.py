@@ -85,7 +85,11 @@ class ArtifactStore:
 
     def _local_path(self, key: str) -> Path:
         """Get local filesystem path for a key."""
-        return Path(self.local_dir) / key
+        path = (Path(self.local_dir) / key).resolve()
+        base = Path(self.local_dir).resolve()
+        if not str(path).startswith(str(base)):
+            raise ValueError(f"Key escapes artifact directory: {key}")
+        return path
 
     def _meta_path(self, key: str) -> Path:
         """Get local filesystem path for a key's metadata file."""
@@ -202,6 +206,10 @@ class ArtifactStore:
 
         if self._client:
             try:
+                self._client.head_object(Bucket=self.bucket, Key=key)
+            except Exception:
+                return False
+            try:
                 self._client.delete_object(Bucket=self.bucket, Key=key)
                 logger.debug(f"Deleted artifact from S3: {key}")
                 return True
@@ -229,7 +237,11 @@ class ArtifactStore:
             try:
                 self._client.head_object(Bucket=self.bucket, Key=key)
                 return True
-            except Exception:
+            except Exception as e:
+                import botocore.exceptions
+                if isinstance(e, botocore.exceptions.ClientError) and e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
+                    return False
+                logger.error(f"S3 exists check failed for {key}: {e}")
                 return False
         else:
             return self._local_path(key).exists()

@@ -83,8 +83,13 @@ class PluginLoader:
         # Load module
         spec = importlib.util.spec_from_file_location(plugin_name, plugin_path)
         module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            if plugin_name in sys.modules:
+                del sys.modules[plugin_name]
+            raise
         sys.modules[plugin_name] = module
-        spec.loader.exec_module(module)
         
         # Call plugin's register function
         if hasattr(module, "register"):

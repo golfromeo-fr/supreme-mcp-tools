@@ -56,7 +56,7 @@ def compute_recency_decay(
         Float between 0 and 1, where 1 = just accessed
     """
     if not last_accessed:
-        return 0.0
+        return 1.0
 
     try:
         last_time = datetime.fromisoformat(last_accessed.replace("Z", "+00:00"))

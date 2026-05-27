@@ -99,7 +99,8 @@ async def upsertMemory(
 
     # Generate embedding if not provided
     if embedding is None:
-        embedding = generate_embedding(text)
+        import asyncio
+        embedding = await asyncio.to_thread(generate_embedding, text)
         if embedding is None:
             return "Error: Could not generate embedding. Install sentence-transformers or provide embedding."
 
@@ -193,8 +194,8 @@ async def queryMemory(
     if not qdrant_client:
         return "Error: Qdrant client not initialized"
 
-    # Generate query embedding
-    query_embedding = generate_embedding(query)
+    import asyncio
+    query_embedding = await asyncio.to_thread(generate_embedding, query)
     if query_embedding is None:
         return "Error: Could not generate query embedding"
 
@@ -224,6 +225,7 @@ async def queryMemory(
         weights = ScoringWeights()
         weights.alpha = 1.0 - recency_weight
         weights.beta = recency_weight
+        weights.gamma = 0.0
 
         now_iso = get_now_iso()
         usage_updates: dict[int, list[str]] = {}
@@ -456,14 +458,29 @@ async def decayOrExpire(
 
             # Check TTL - expired if last accessed (or created) before cutoff
             ts = last_accessed or payload.get("created_at")
+            ttl_expired = False
             if ts:
                 last_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 if last_time < cutoff:
-                    should_delete = True
+                    ttl_expired = True
 
-            # Check usage - too low if under threshold (only if TTL didn't already flag it)
-            if not should_delete and usage_count < min_usage_count:
+            # Check usage - too low if under threshold
+            low_usage = usage_count < min_usage_count
+
+            # Delete if BOTH conditions hold: TTL expired AND low usage,
+            # OR if TTL expired with no usage threshold,
+            # OR if explicitly low usage and not freshly created
+            if ttl_expired and low_usage:
                 should_delete = True
+            elif ttl_expired and min_usage_count == 0:
+                should_delete = True
+            elif low_usage:
+                created_at = payload.get("created_at")
+                if created_at:
+                    created_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    age_days = (datetime.now(timezone.utc) - created_time).days
+                    if age_days > ttl_days:
+                        should_delete = True
 
             if should_delete:
                 to_delete.append(str(point.id))
@@ -767,6 +784,20 @@ async def reindexMemory(
 
         logger.info(f"Loading new model: {new_model}")
         model = SentenceTransformer(new_model)
+
+        test_embedding = model.encode(["test"])[0]
+        new_dim = len(test_embedding)
+
+        from qdrant_client.models import VectorParams, Distance
+        collection_info = qdrant_client.get_collection(COLLECTION_NAME)
+        current_dim = collection_info.config.params.vectors.size
+
+        if new_dim != current_dim:
+            return (
+                f"Error: Dimension mismatch. Collection uses {current_dim}d vectors, "
+                f"but model '{new_model}' produces {new_dim}d vectors. "
+                f"Recreate the collection or use a compatible model."
+            )
 
         # Get all points
         all_points = scroll_all(COLLECTION_NAME)

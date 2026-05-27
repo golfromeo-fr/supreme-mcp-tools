@@ -63,26 +63,24 @@ class PortManager:
         """
         self.mode = mode
         
+        # Primary source: ranges and reserved from ports_config
+        if port_ranges:
+            self.port_ranges = port_ranges
+        else:
+            self.port_ranges = {
+                k: tuple(v) for k, v in ports_config.get("ranges", {}).items()
+            }
+        
         # Use provided base_port or derive from mcp range for legacy support
         if base_port is not None:
             self.base_port = base_port
         elif PortType.MCP in self.port_ranges:
-            self.base_port = self.port_ranges[PortType.MCP][0]  # Start of mcp range
+            self.base_port = self.port_ranges[PortType.MCP][0]
         else:
             raise ValueError(
                 "base_port is required. Either provide it explicitly or ensure "
                 "ports.json contains an mcp range."
             )
-        
-        # Primary source: ranges and reserved from ports_config
-        if port_ranges:
-            # Override from constructor parameter
-            self.port_ranges = port_ranges
-        else:
-            # From ports_config (convert lists to tuples)
-            self.port_ranges = {
-                k: tuple(v) for k, v in ports_config.get("ranges", {}).items()
-            }
         
         if reserved_ports:
             self.reserved_ports = reserved_ports

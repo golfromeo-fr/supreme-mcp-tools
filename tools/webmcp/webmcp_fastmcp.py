@@ -6,6 +6,7 @@ import sys
 import os
 import logging
 import time
+import asyncio
 import re
 import hashlib
 import threading
@@ -49,7 +50,7 @@ webmcp_metrics = {
     "fetch_errors": 0,
     "total_search_time_ms": 0.0,
     "total_fetch_time_ms": 0.0,
-    "min_search_time_ms": float('inf'),
+    "min_search_time_ms": None,
     "max_search_time_ms": 0.0,
     "min_fetch_time_ms": float('inf'),
     "max_fetch_time_ms": 0.0,
@@ -76,6 +77,8 @@ def get_fetch_cache_hits(params: dict[str, Any]) -> dict[str, Any]:
 
 def _is_internal_url(url: str) -> bool:
     try:
+        import ipaddress
+        import socket
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower()
         internal_hosts = {
@@ -86,25 +89,30 @@ def _is_internal_url(url: str) -> bool:
         }
         if hostname in internal_hosts:
             return True
-        private_patterns = [
-            r'^10\.',
-            r'^172\.(1[6-9]|2[0-9]|3[0-1])\.',
-            r'^192\.168\.',
-            r'^127\.',
-        ]
-        for pattern in private_patterns:
-            if re.match(pattern, hostname):
-                return True
+        try:
+            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except (socket.gaierror, OSError):
+            return True
+        for family, _, _, _, sockaddr in resolved:
+            ip_str = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                    return True
+            except ValueError:
+                continue
         return False
     except Exception:
         return True
 
 class SimpleCache:
+    MAX_SIZE = 1000
+
     def __init__(self, default_ttl: int = 3600):
         self.cache: dict[str, tuple[str, float]] = {}
         self.lock = threading.RLock()
         self.default_ttl = default_ttl
-    
+
     def get(self, key: str) -> str | None:
         with self.lock:
             if key in self.cache:
@@ -114,9 +122,17 @@ class SimpleCache:
                 else:
                     del self.cache[key]
         return None
-    
+
     def set(self, key: str, value: str, ttl: int | None = None) -> None:
         with self.lock:
+            if len(self.cache) >= self.MAX_SIZE:
+                expired_keys = [k for k, (_, exp) in self.cache.items() if time.time() >= exp]
+                if expired_keys:
+                    for k in expired_keys:
+                        del self.cache[k]
+                else:
+                    oldest_key = next(iter(self.cache))
+                    del self.cache[oldest_key]
             expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
             self.cache[key] = (value, expiry)
     
@@ -161,41 +177,64 @@ def _clean_html(html_content: str, include_images: bool = True, include_tables: 
 
 def _html_to_markdown(html_content: str) -> str:
     try:
-        from bs4 import BeautifulSoup
+        from bs4 import BeautifulSoup, NavigableString
     except ImportError:
         return html_content
     soup = BeautifulSoup(html_content, 'html.parser')
     markdown = []
-    for element in soup.descendants:
-        if element.name == 'h1':
-            markdown.append(f"\n# {element.get_text().strip()}\n")
-        elif element.name == 'h2':
-            markdown.append(f"\n## {element.get_text().strip()}\n")
-        elif element.name == 'h3':
-            markdown.append(f"\n### {element.get_text().strip()}\n")
-        elif element.name == 'p':
-            text = element.get_text().strip()
+    _visited = set()
+    def _render(el, list_depth=0):
+        if el in _visited:
+            return
+        _visited.add(el)
+        if isinstance(el, NavigableString):
+            text = str(el).strip()
             if text:
-                markdown.append(f"\n{text}\n")
-        elif element.name == 'strong' or element.name == 'b':
-            markdown.append(f"**{element.get_text()}**")
-        elif element.name == 'em' or element.name == 'i':
-            markdown.append(f"*{element.get_text()}*")
-        elif element.name == 'a':
-            href = element.get('href', '')
-            text = element.get_text()
+                markdown.append(text)
+            return
+        if el.name in ('script', 'style', 'noscript', 'iframe'):
+            return
+        if el.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            level = int(el.name[1])
+            markdown.append(f"\n{'#' * level} {el.get_text().strip()}\n")
+            return
+        if el.name == 'p':
+            markdown.append(f"\n{el.get_text().strip()}\n")
+            return
+        if el.name in ('strong', 'b'):
+            markdown.append(f"**{el.get_text()}**")
+            return
+        if el.name in ('em', 'i'):
+            markdown.append(f"*{el.get_text()}*")
+            return
+        if el.name == 'a':
+            href = el.get('href', '')
+            text = el.get_text()
             if href and text:
                 markdown.append(f"[{text}]({href})")
-        elif element.name == 'ul':
+            return
+        if el.name == 'li':
+            prefix = '  ' * list_depth + '- '
+            markdown.append(f"{prefix}{el.get_text().strip()}")
+            for child in el.children:
+                if hasattr(child, 'name') and child.name not in (None, 'ul', 'ol'):
+                    _render(child)
+            return
+        if el.name in ('ul', 'ol'):
             markdown.append("\n")
-        elif element.name == 'ol':
+            for child in el.children:
+                if hasattr(child, 'name'):
+                    _render(child, list_depth + 1)
+            return
+        if el.name == 'br':
             markdown.append("\n")
-        elif element.name == 'li':
-            markdown.append(f"- {element.get_text().strip()}")
-        elif element.name == 'br':
-            markdown.append("\n")
-        elif element.name == 'hr':
+            return
+        if el.name == 'hr':
             markdown.append("\n---\n")
+            return
+        for child in el.children:
+            _render(child, list_depth)
+    _render(soup)
     return ''.join(markdown)
 
 def _extract_text_content(html_content: str) -> str:
@@ -251,7 +290,7 @@ async def brave_search_web(query: str, count: int = 10, timeout: float = 30.0, l
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             webmcp_metrics["search_count"] += 1
             webmcp_metrics["total_search_time_ms"] += elapsed_ms
-            if elapsed_ms < webmcp_metrics["min_search_time_ms"]:
+            if webmcp_metrics["min_search_time_ms"] is None or elapsed_ms < webmcp_metrics["min_search_time_ms"]:
                 webmcp_metrics["min_search_time_ms"] = elapsed_ms
             if elapsed_ms > webmcp_metrics["max_search_time_ms"]:
                 webmcp_metrics["max_search_time_ms"] = elapsed_ms
@@ -363,7 +402,7 @@ async def brave_search_api(query: str, count: int = 10, timeout: float = 30.0, l
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
                 webmcp_metrics["search_count"] += 1
                 webmcp_metrics["total_search_time_ms"] += elapsed_ms
-                if elapsed_ms < webmcp_metrics["min_search_time_ms"]:
+                if webmcp_metrics["min_search_time_ms"] is None or elapsed_ms < webmcp_metrics["min_search_time_ms"]:
                     webmcp_metrics["min_search_time_ms"] = elapsed_ms
                 if elapsed_ms > webmcp_metrics["max_search_time_ms"]:
                     webmcp_metrics["max_search_time_ms"] = elapsed_ms
@@ -407,7 +446,7 @@ async def brave_search_api(query: str, count: int = 10, timeout: float = 30.0, l
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             webmcp_metrics["search_count"] += 1
             webmcp_metrics["total_search_time_ms"] += elapsed_ms
-            if elapsed_ms < webmcp_metrics["min_search_time_ms"]:
+            if webmcp_metrics["min_search_time_ms"] is None or elapsed_ms < webmcp_metrics["min_search_time_ms"]:
                 webmcp_metrics["min_search_time_ms"] = elapsed_ms
             if elapsed_ms > webmcp_metrics["max_search_time_ms"]:
                 webmcp_metrics["max_search_time_ms"] = elapsed_ms
@@ -502,7 +541,7 @@ async def google_search_api(query: str, engine: str = "google", google_domain: s
             params["device"] = device
 
         search = GoogleSearch(params)
-        results = search.get_dict()
+        results = await asyncio.to_thread(search.get_dict)
         logger.info(f"Raw SerpAPI response keys: {list(results.keys())}")
 
         if llm_mode:
@@ -521,7 +560,7 @@ async def google_search_api(query: str, engine: str = "google", google_domain: s
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             webmcp_metrics["search_count"] += 1
             webmcp_metrics["total_search_time_ms"] += elapsed_ms
-            if elapsed_ms < webmcp_metrics["min_search_time_ms"]:
+            if webmcp_metrics["min_search_time_ms"] is None or elapsed_ms < webmcp_metrics["min_search_time_ms"]:
                 webmcp_metrics["min_search_time_ms"] = elapsed_ms
             if elapsed_ms > webmcp_metrics["max_search_time_ms"]:
                 webmcp_metrics["max_search_time_ms"] = elapsed_ms
@@ -625,7 +664,7 @@ async def google_search_api(query: str, engine: str = "google", google_domain: s
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         webmcp_metrics["search_count"] += 1
         webmcp_metrics["total_search_time_ms"] += elapsed_ms
-        if elapsed_ms < webmcp_metrics["min_search_time_ms"]:
+        if webmcp_metrics["min_search_time_ms"] is None or elapsed_ms < webmcp_metrics["min_search_time_ms"]:
             webmcp_metrics["min_search_time_ms"] = elapsed_ms
         if elapsed_ms > webmcp_metrics["max_search_time_ms"]:
             webmcp_metrics["max_search_time_ms"] = elapsed_ms
@@ -657,6 +696,9 @@ async def post_url(url: str, data: str | None = None, headers: dict | None = Non
     if not url:
         logger.error("Missing required parameter: url")
         return "Missing required parameter: url"
+
+    if _is_internal_url(url):
+        return "Error: Internal URLs are not allowed for security reasons"
 
     headers = headers or {}
 

@@ -36,7 +36,7 @@ class PIIRedactor:
             True
         ),
         "ssn": (
-            r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b',
+            r'\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b',
             True
         ),
         "credit_card": (

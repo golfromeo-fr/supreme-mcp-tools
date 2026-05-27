@@ -321,6 +321,14 @@ class ManagementServer:
             extension_name: str
         ):
             """WebSocket endpoint for real-time event streaming."""
+            if self.api_key is not None:
+                auth = websocket.query_params.get("token") or websocket.headers.get("authorization", "")
+                if auth.startswith("Bearer "):
+                    auth = auth[7:]
+                if auth != self.api_key:
+                    await websocket.close(code=4001, reason="Unauthorized")
+                    return
+            
             await websocket.accept()
             
             # Verify tool exists
@@ -525,6 +533,10 @@ class ManagementServer:
             from pathlib import Path
 
             config_path = Path(__file__).parent.parent / "tools" / tool_name / "config.json"
+            if ".." in tool_name or "/" in tool_name or "\\" in tool_name:
+                raise HTTPException(status_code=400, detail="Invalid tool name")
+            if not config_path.resolve().parent.parent.name == "tools":
+                raise HTTPException(status_code=400, detail="Invalid tool name")
             if not config_path.exists():
                 raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
 

@@ -190,40 +190,39 @@ def get_tool_logger(tool_name: str) -> logging.Logger:
 def is_internal_url(url: str) -> bool:
     """Check if URL is internal (SSRF protection)."""
     try:
+        import ipaddress
+        import socket
         from urllib.parse import urlparse
-        import re
         
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower()
         
-        # localhost variants
-        if hostname in {'localhost', '127.0.0.1', '::1', '0.0.0.0'}:
+        if hostname in {'localhost', '::1', '0.0.0.0'}:
             return True
             
-        # Internal/internal-like hostnames
         internal_hosts = {
-            '169.254.169.254',  # AWS/Azure metadata
+            '169.254.169.254',
             'metadata.google.internal',
             'metadata.azure.internal',
             'metadata.internal',
         }
         if hostname in internal_hosts:
             return True
-            
-        # Private IP ranges
-        private_patterns = [
-            r'^10\.',
-            r'^172\.(1[6-9]|2[0-9]|3[0-1])\.',
-            r'^192\.168\.',
-            r'^127\.',
-            r'^169\.254\.',
-        ]
         
-        for pattern in private_patterns:
-            if re.match(pattern, hostname):
-                return True
-                
+        try:
+            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except (socket.gaierror, OSError):
+            return True
+        
+        for family, _, _, _, sockaddr in resolved:
+            ip_str = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                    return True
+            except ValueError:
+                continue
+        
         return False
     except Exception:
-        # In case of parsing error, treat as internal for safety
         return True

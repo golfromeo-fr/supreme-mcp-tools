@@ -493,7 +493,7 @@ async def list_resource_templates() -> list[types.ResourceTemplate]:
 # ============================================================================
 
 app = Starlette(
-    debug=True,
+    debug=False,
     routes=[
         Route("/sse", endpoint=handle_sse, methods=["GET"]),
         Mount("/messages/", app=sse_transport.handle_post_message),

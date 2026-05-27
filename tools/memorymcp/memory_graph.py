@@ -54,6 +54,25 @@ async def createMemoryEdge(
         return "Error: Qdrant client not initialized"
 
     try:
+        if from_id == to_id:
+            results = qdrant_client.retrieve(
+                collection_name=COLLECTION_NAME,
+                ids=[from_id],
+                with_payload=True,
+            )
+            if not results:
+                return f"Error: Memory not found: {from_id}"
+            src = results[0]
+            edge = {"to": to_id, "relation": relation, "label": label}
+            current_edges = src.payload.get("edges", [])
+            if edge not in current_edges:
+                qdrant_client.set_payload(
+                    collection_name=COLLECTION_NAME,
+                    payload={"edges": current_edges + [edge]},
+                    points=[from_id],
+                )
+            return f"Created self-loop edge: {from_id[:8]} --[{relation}]--> {from_id[:8]}"
+
         # Verify both memories exist
         results = qdrant_client.retrieve(
             collection_name=COLLECTION_NAME,
@@ -67,28 +86,24 @@ async def createMemoryEdge(
 
         edge = {"to": to_id, "relation": relation, "label": label}
 
-        # Append edge to source memory's edges list
         src = next(r for r in results if str(r.id) == from_id)
-        edges = src.payload.get("edges", [])
-        edges.append(edge)
+        current_edges = src.payload.get("edges", [])
+        if edge not in current_edges:
+            qdrant_client.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload={"edges": current_edges + [edge]},
+                points=[from_id],
+            )
 
-        qdrant_client.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={"edges": edges},
-            points=[from_id],
-        )
-
-        # Also store reverse reference
         rev_edge = {"to": from_id, "relation": f"back:{relation}", "label": label}
         dst = next(r for r in results if str(r.id) == to_id)
-        dst_edges = dst.payload.get("edges", [])
-        dst_edges.append(rev_edge)
-
-        qdrant_client.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={"edges": dst_edges},
-            points=[to_id],
-        )
+        current_dst_edges = dst.payload.get("edges", [])
+        if rev_edge not in current_dst_edges:
+            qdrant_client.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload={"edges": current_dst_edges + [rev_edge]},
+                points=[to_id],
+            )
 
         return f"Created edge: {from_id[:8]} --[{relation}]--> {to_id[:8]}"
 
@@ -163,6 +178,8 @@ async def getMemoryGraph(
                 safe = nid[:8]
                 lines.append(f'    {safe}["{safe} [{info["type"]}]\n{info["text"]}"]')
             for src, dst, rel, lbl in edges:
+                if dst not in nodes:
+                    continue
                 s, d = src[:8], dst[:8]
                 edge_label = lbl or rel
                 lines.append(f'    {s} -->|"{edge_label}"| {d}')
@@ -173,6 +190,8 @@ async def getMemoryGraph(
                 lines.append(f"  [{info['type']}] {nid[:8]}: {info['text']}")
             lines.append("")
             for src, dst, rel, lbl in edges:
+                if dst not in nodes:
+                    continue
                 lines.append(f"  {src[:8]} --[{rel}]--> {dst[:8]}")
             return "\n".join(lines)
 
@@ -282,13 +301,14 @@ async def exportGraphAsMarkdown(
             mtype = point.payload.get("memory_type", "unknown")
             preview = point.payload.get("text", "")[:30].replace('"', "'")
             lines.append(f'    {mid}["{mid} [{mtype}]\n{preview}"]')
+        point_ids = {str(p.id) for p in points}
         for point in points:
             mid = str(point.id)
             for edge in point.payload.get("edges", []):
                 if edge.get("relation", "").startswith("back:"):
                     continue
                 to_id = edge.get("to", "")
-                if any(str(p.id) == to_id for p in points):
+                if to_id in point_ids:
                     rel = edge.get("relation", "related_to")
                     s, d = mid[:8], to_id[:8]
                     lines.append(f'    {s} -->|"{rel}"| {d}')

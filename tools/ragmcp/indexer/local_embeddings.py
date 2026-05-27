@@ -82,18 +82,21 @@ def get_local_model(
             logger.info(f"✓ Loaded from cache: {resolved_name}")
         except Exception as cache_error:
             logger.info(f"Model not in cache, downloading from HuggingFace...")
-            if 'HF_HUB_OFFLINE' in os.environ:
-                del os.environ['HF_HUB_OFFLINE']
-            if 'TRANSFORMERS_OFFLINE' in os.environ:
-                del os.environ['TRANSFORMERS_OFFLINE']
-
-            model = SentenceTransformer(
-                resolved_name,
-                cache_folder=cache_folder,
-                device='cpu',
-                local_files_only=False,
-                trust_remote_code=trust_code,
-            )
+            old_offline = os.environ.pop('HF_HUB_OFFLINE', None)
+            old_transformers = os.environ.pop('TRANSFORMERS_OFFLINE', None)
+            try:
+                model = SentenceTransformer(
+                    resolved_name,
+                    cache_folder=cache_folder,
+                    device='cpu',
+                    local_files_only=False,
+                    trust_remote_code=trust_code,
+                )
+            finally:
+                if old_offline is not None:
+                    os.environ['HF_HUB_OFFLINE'] = old_offline
+                if old_transformers is not None:
+                    os.environ['TRANSFORMERS_OFFLINE'] = old_transformers
             logger.info(f"✓ Downloaded and loaded: {resolved_name}")
 
         _model_cache[resolved_name] = model

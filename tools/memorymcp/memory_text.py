@@ -239,6 +239,7 @@ async def textToGraph(
                     else:
                         break
                 heading_text = stripped.lstrip("#").strip()
+                heading_text = heading_text.rstrip("#").strip()
 
                 heading_lower = heading_text.lower().strip()
                 all_refs = re.findall(r'\b(pctech\d+|pcgene\d+|commontech\d+|pkgtech\d+|pctmeta\d+)\b', heading_text)
@@ -293,6 +294,7 @@ async def textToGraph(
                 for ref_label, ref_target in refs:
                     nid = make_node(ref_label, f"Link: {ref_label} ({ref_target})", stack[-1][1] + 1, "reference", line_number)
                     edges.append({"from": parent_id, "to": nid, "relation": "references"})
+                continue
 
             # ── Key: Value patterns ─────────────────────────
             kv_match = re.match(r'^\*\*(.+?)\*\*:\s*(.+)', stripped)

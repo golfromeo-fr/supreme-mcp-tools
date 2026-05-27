@@ -416,27 +416,19 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
     with Path(env_path).open("r") as f:
         lines = f.readlines()
 
-    # Find the last active (uncommented) line for this variable
-    active_line_idx = None
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith(f"{var_name}="):
-            active_line_idx = i
+    active_indices = [i for i, line in enumerate(lines) if line.strip().startswith(f"{var_name}=")]
 
     now = datetime.now().strftime("%Y-%m-%d")
     new_line = f"{var_name}={value}\n"
 
-    if active_line_idx is not None:
-        # Comment out the existing active line
-        old_line = lines[active_line_idx].rstrip("\n")
-        lines[active_line_idx] = f"# {old_line}  # updated {now}\n"
-
-        # Insert new line right after the commented line
-        lines.insert(active_line_idx + 1, new_line)
-        logger.info(f"Updated {var_name} in .env (old value commented out)")
+    if active_indices:
+        for idx in reversed(active_indices):
+            old_line = lines[idx].rstrip("\n")
+            lines[idx] = f"# {old_line}  # updated {now}\n"
+        insert_at = active_indices[-1] + 1
+        lines.insert(insert_at, new_line)
+        logger.info(f"Updated {var_name} in .env ({len(active_indices)} old value(s) commented out)")
     else:
-        # Variable not in file yet - append at end
-        # Ensure there's a blank line before if file doesn't end with one
         if lines and not lines[-1].endswith("\n"):
             lines.append("\n")
         elif lines and lines[-1].strip():
@@ -444,8 +436,18 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
         lines.append(new_line)
         logger.info(f"Added {var_name} to .env")
 
-    with Path(env_path).open("w") as f:
-        f.writelines(lines)
+    try:
+        import fcntl
+        fd = os.open(str(env_path), os.O_WRONLY | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.ftruncate(fd, 0)
+            os.write(fd, "".join(lines).encode())
+        finally:
+            os.close(fd)
+    except ImportError:
+        with Path(env_path).open("w") as f:
+            f.writelines(lines)
 
 
 def _comment_out_env_line(var_name: str, env_path: Path) -> None:

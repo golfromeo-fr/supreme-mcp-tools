@@ -214,20 +214,12 @@ class CacheManager:
         return None
     
     async def set(self, key: str, value: Any, ttl: int = 60) -> None:
-        """
-        Set cached value with TTL.
-        
-        Args:
-            key: Cache key
-            value: Value to cache
-            ttl: Time to live in seconds
-        """
         async with self._lock:
-            if len(self.cache) >= self.max_size:
-                # Remove oldest entry
+            if key in self.cache:
+                del self.cache[key]
+            elif len(self.cache) >= self.max_size:
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
-            
             self.cache[key] = {
                 "value": value,
                 "expires_at": time.time() + ttl
@@ -321,8 +313,8 @@ class EventAggregator:
         }
         
         async with self._lock:
-            subscribers = self.subscribers.get(tool_name, [])
-        
+            subscribers = list(self.subscribers.get(tool_name, []))
+
         for queue in subscribers:
             try:
                 await queue.put(event)

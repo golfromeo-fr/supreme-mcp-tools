@@ -104,7 +104,7 @@ try:
     from qdrant_client import QdrantClient
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
-    qdrant_client = QdrantClient(host=qdrant_host, port=qdrant_port)
+    qdrant_client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=30)
     logger.info(f"Qdrant client connected to {qdrant_host}:{qdrant_port}")
 
     # Ensure collection exists
@@ -114,9 +114,10 @@ try:
     except Exception:
         logger.info(f"Creating collection '{COLLECTION_NAME}'")
         from qdrant_client.models import VectorParams, Distance
+        embedding_dim = int(os.getenv('EMBEDDING_DIM', '1024'))
         qdrant_client.create_collection(
             collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
         )
 
 except Exception as e:

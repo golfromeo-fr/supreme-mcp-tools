@@ -120,6 +120,11 @@ class ToolDiscovery:
 
                 # Find Python files in the tool directory only (not subdirectories)
                 # Subdirectories contain support modules (indexer/, shared/, etc.)
+                #
+                # If any *_fastmcp.py exists in the directory, ONLY consider those
+                # as tool candidates — all other .py files are support modules.
+                fastmcp_files = list(tool_dir.glob("*_fastmcp.py"))
+
                 for py_file in tool_dir.glob("*.py"):
                     # Skip __init__.py and test files
                     if py_file.name.startswith("_") or py_file.name.startswith("test_"):
@@ -128,6 +133,11 @@ class ToolDiscovery:
                     # Skip excluded patterns
                     if any(pattern in py_file.name for pattern in exclude_set):
                         logger.debug(f"Skipping excluded file: {py_file}")
+                        continue
+
+                    # If fastmcp files exist, only consider fastmcp files as tools
+                    if fastmcp_files and not py_file.name.endswith("_fastmcp.py"):
+                        logger.debug(f"Skipping support module: {py_file.name} (fastmcp entry point exists)")
                         continue
 
                     try:

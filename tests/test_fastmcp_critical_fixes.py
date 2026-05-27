@@ -48,8 +48,8 @@ class TestWebMCPFixes:
 
     def test_internal_ip_blocks_private_ranges(self):
         content = Path("tools/webmcp/webmcp_fastmcp.py").read_text()
-        assert r"^10\." in content
-        assert r"^192\.168\." in content
+        assert "ipaddress" in content, "ipaddress module not imported for IP validation"
+        assert "is_private" in content, "is_private check missing"
 
     def test_fetch_url_uses_internal_ip_check(self):
         content = Path("tools/webmcp/webmcp_fastmcp.py").read_text()

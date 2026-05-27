@@ -95,8 +95,11 @@ def strip_llm_artifacts(text: str) -> str:
         next_lower = next_line.lower()
         has_preamble = any(phrase in next_lower for phrase in _PREAMBLE_PHRASES)
         marker_word = lines[pos].strip().rstrip(':').strip().upper()
-        if marker_word == 'CLUSTERS' and re.match(r'^\d+[\.\)]\s', next_line):
-            continue
+        has_numbered_items = bool(re.match(r'^\d+[\.\)]\s', next_line))
+        if marker_word == 'CLUSTERS' and has_numbered_items:
+            if pos > 0:
+                return '\n'.join(lines[pos:]).strip()
+            return text
         if not has_preamble:
             if pos > 0:
                 return '\n'.join(lines[pos:]).strip()

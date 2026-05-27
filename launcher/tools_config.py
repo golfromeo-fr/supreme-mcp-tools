@@ -207,14 +207,15 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_
                 ),
                 stream=True,
             )
-            if init_resp.status_code != 200:
+            try:
+                if init_resp.status_code != 200:
+                    return []
+                session_id = init_resp.headers.get("mcp-session-id")
+                async for line in init_resp.aiter_lines():
+                    if line.startswith("data: "):
+                        break
+            finally:
                 await init_resp.aclose()
-                return []
-            session_id = init_resp.headers.get("mcp-session-id")
-            async for line in init_resp.aiter_lines():
-                if line.startswith("data: "):
-                    break
-            await init_resp.aclose()
 
             if not session_id:
                 return []
@@ -234,16 +235,17 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_
                 ),
                 stream=True,
             )
-            if tools_resp.status_code != 200:
-                await tools_resp.aclose()
+            try:
+                if tools_resp.status_code != 200:
+                    return []
+                async for line in tools_resp.aiter_lines():
+                    if line.startswith("data: "):
+                        data = json.loads(line[6:])
+                        tools = data.get("result", {}).get("tools", [])
+                        return [t.get("name") for t in tools if t.get("name")]
                 return []
-            async for line in tools_resp.aiter_lines():
-                if line.startswith("data: "):
-                    await tools_resp.aclose()
-                    data = json.loads(line[6:])
-                    tools = data.get("result", {}).get("tools", [])
-                    return [t.get("name") for t in tools if t.get("name")]
-            await tools_resp.aclose()
+            finally:
+                await tools_resp.aclose()
     except Exception:
         pass
     return []
