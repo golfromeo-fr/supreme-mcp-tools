@@ -943,14 +943,14 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 
 | Status | Count | Description |
 |--------|-------|-------------|
-| **🟢 DONE** | 37 | Fixed in current branch (verified 2026-05-29) |
-| **❌ UNFIXED** | 9 | Bug still present in current code |
+| **🟢 DONE** | 40 | Fixed in current branch (verified 2026-05-29) |
+| **❌ UNFIXED** | 6 | Bug still present in current code |
 | **⚠️ PARTIAL** | 4 | Partially addressed |
 | **❌ N/A** | 2 | False positive (not a bug) |
 | **INFO** | 14 | Dead code, style issues, deprecated APIs |
 | **TOTAL** | 67 | All tracked bugs (excl. INFO)
 
-**Fix Progress** (verified 2026-05-29): 37 fixed (🟢), 9 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A) — out of 67 tracked bugs
+**Fix Progress** (verified 2026-05-29): 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A) — out of 67 tracked bugs
 
 ---
 
@@ -1081,7 +1081,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **CRIT-8** | ✅ CONFIRMED | `format_sidebar_context(chunks)` correctly called with 1 arg (sidebar) | 🟢 DONE | Verified: ragmcp_fastmcp.py:1331 calls with 1 arg; 1333 passes language=keyword arg |
 | **CRIT-9** | ✅ CONFIRMED | `config.json` uses nested `"auth": {"api_key": ...}` | 🟢 DONE | Verified: memorymcp/config.json:2-4 has nested auth structure |
 | **CRIT-10** | ✅ CONFIRMED | Fixed in branch: `_is_internal_url()` check added at `webmcp_fastmcp.py:699` | 🟢 DONE | Verified: webmcp_fastmcp.py:703 checks `_is_internal_url()` before POST |
-| **CRIT-11** | ✅ CONFIRMED | Requires split of `generate_sparse_vector()` into index-only and query-only methods in `sparse_vector_gen.py` | ❌ UNFIXED | Verified: sparse_vector_gen.py:207-209 adds `is_indexing` guard but may not fully prevent BM25 corruption during search |
+| **CRIT-11** | ✅ CONFIRMED | Requires split of `generate_sparse_vector()` into index-only and query-only methods in `sparse_vector_gen.py` | 🟢 DONE | Verified: sparse_vector_gen.py split into generate_index_vector() + generate_query_vector(); _search_sparse uses query vector |
 | **CRIT-12** | ✅ CONFIRMED + FIXED | FastMCP upgraded to 3.3.1 | 🟢 DONE | Verified: server_factory.py uses DualHeaderVerifier (TokenVerifier subclass), no OAuth routes |
 | **HIGH-1** | ✅ CONFIRMED | Hardcoded 1024-dim vector size needs dynamic dimension from model | 🟢 DONE | Verified: memory_tools.py:789-799 validates dimension before reindex |
 | **HIGH-2** | ✅ CONFIRMED | Change OR logic to AND, or exclude fresh memories from usage deletion check | 🟢 DONE | Verified: memory_tools.py:473-483 uses AND logic with age_days check |
@@ -1100,7 +1100,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **HIGH-15** | ✅ CONFIRMED | Fall back to `created_at` when `last_accessed` is None, or return 1.0 for fresh memories | 🟢 DONE | Verified: relevance_scorer.py:59 returns 1.0 when last_accessed is None |
 | **HIGH-16** | ✅ CONFIRMED | Wrap `search.get_dict()` in `await asyncio.to_thread()` in `webmcp_fastmcp.py:496` | 🟢 DONE | Verified: webmcp_fastmcp.py:547 uses `await asyncio.to_thread(search.get_dict)` |
 | **HIGH-17** | ✅ CONFIRMED | Track visited descendants to avoid double-emitting in `_html_to_markdown` | 🟢 DONE | Verified: webmcp_fastmcp.py:188-192 uses `_visited` set to prevent duplicates |
-| **HIGH-18** | ✅ CONFIRMED | Implement proper score fusion (RRF or Converge) + deduplication in hybrid search | ❌ UNFIXED | Verified: ragmcp_fastmcp.py:1270-1285 still concatenates dense + sparse without fusion or deduplication |
+| **HIGH-18** | ✅ CONFIRMED | Implement proper score fusion (RRF or Converge) + deduplication in hybrid search | 🟢 DONE | Verified: ragmcp_fastmcp.py uses _do_dense_search/_do_sparse_search + _reciprocal_rank_fusion() |
 | **MED-1** | ✅ CONFIRMED | Normalize weights so alpha+beta+gamma always equals 1.0 | 🟢 DONE | Verified: memory_tools.py:226-228 sets alpha+beta=1.0, gamma=0.0 |
 | **MED-2** | ✅ CONFIRMED | Strip trailing `#` after lstrip: `stripped.lstrip("#").rstrip("#").strip()` | 🟢 DONE | Verified: memory_text.py:241-242 strips both leading and trailing `#` |
 | **MED-3** | ✅ CONFIRMED | Allow self-loop edges (from_id == to_id) or return meaningful error | 🟢 DONE | Verified: memory_graph.py:74 handles self-loop and returns message |
@@ -1108,17 +1108,17 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **MED-5** | ✅ CONFIRMED | Add size-bounded LRU cache or background eviction task to `cache.py` | 🟢 DONE | Verified: cache.py:23-26 calls `_maybe_cleanup()` on every `set()` |
 | **MED-6** | ✅ CONFIRMED | Wrap SELECT-UPDATE in `BEGIN...COMMIT` transaction or use `ON CONFLICT DO UPDATE` | 🟢 DONE | Verified: pg_store.py:231 uses `ON CONFLICT DO UPDATE` |
 | **MED-7** | ✅ CONFIRMED | Move `usage_count` increment to AFTER successful SELECT in `pg_store.py:222` | 🟢 DONE | Verified: pg_store.py:260-263 runs UPDATE after successful SELECT |
-| **MED-8** | ✅ CONFIRMED | Align `clean_html_optimized` and `clean_html_basic` to both check `include_tables` for nav/footer | ❌ UNFIXED | Verified: html_utils.py:180-181 still uses `if not include_tables` for nav/footer removal in optimized; basic (line 36-37) also uses `include_tables` |
+| **MED-8** | ✅ CONFIRMED | Align `clean_html_optimized` and `clean_html_basic` to both check `include_tables` for nav/footer | 🟢 DONE | Verified: html_utils.py:180-181 nav/footer removal now unconditional (removed `if not include_tables` check) |
 | **MED-9** | ✅ CONFIRMED | Wrap `sorted(params.items())` in try/except TypeError, or use key=str on mixed types | 🟢 DONE | Verified: cache.py:82 uses try/except TypeError, returns error string |
 | **MED-10** | ✅ CONFIRMED | Narrow SSN regex to require first digit 0-9 and area number constraints | 🟢 DONE | Verified: pii_redactor.py:39 uses `(?!000|666|9\d{2})` and `(?!00)` etc |
 | **MED-11** | ❌ NOT FOUND | No fix needed — code review confirmed naming is correct | 🟢 N/A | Verified: `range(max_retries)` correctly implements N attempts |
 | **MED-12** | ✅ CONFIRMED | Use atomic write: write to temp file, then `os.replace()` (atomic rename) | 🟢 DONE | Verified: env_manager.py:440-447 uses fcntl.LOCK_EX with os.ftruncate/os.write |
 | **MED-13** | ✅ CONFIRMED | Collect all matching line indices, comment out all of them (not just last) | 🟢 DONE | Verified: env_manager.py:419-430 collects all `active_indices` and comments out all |
 | **MED-14** | ✅ CONFIRMED | Close response in `except` block (not just `finally`) or use `async with` for auto-close | 🟢 DONE | Verified: tools_config.py:218,248 closes in `finally` block |
-| **MED-15** | ✅ CONFIRMED | Add TTL-based cleanup for `_pending_codes` with periodic `asyncio.create_task()` sweep | ❌ UNFIXED | Verified: server_manager.py:58 still stores codes with no TTL expiration mechanism |
+| **MED-15** | ✅ CONFIRMED | Add TTL-based cleanup for `_pending_codes` with periodic `asyncio.create_task()` sweep | 🟢 DONE | Verified: server_manager.py adds _cleanup_expired() and background task every 60s |
 | **MED-16** | ⚠️ PARTIAL | Replace FIFO dict with `collections.OrderedDict` and move accessed keys to end (true LRU) | ❌ UNFIXED | Verified: distributed_registry.py:222 still uses FIFO dict, not OrderedDict |
 | **MED-17** | ⚠️ PARTIAL | Hold lock through subscriber queue iteration, or copy list before iterating | ⚠️ PARTIAL | Verified: distributed_registry.py:315-316 releases lock before iterating; copy is made |
-| **MED-18** | ✅ CONFIRMED | Reuse single `asyncio.EventLoop` across all files in incremental indexer | ❌ UNFIXED | Verified: incremental_indexer.py:878-885 still creates new loop per file |
+| **MED-18** | ✅ CONFIRMED | Reuse single `asyncio.EventLoop` across all files in incremental indexer | 🟢 DONE | Verified: incremental_indexer.py:860-920 uses single event loop with concurrent semaphore (max 20), `asyncio.as_completed()` for progress, model caching via `local_embeddings._model_cache` |
 | **MED-19** | ✅ CONFIRMED | Pass config via parameters instead of mutating `os.environ` globally | 🟢 DONE | Verified: local_embeddings.py:85-99 restores old env values in finally block |
 | **MED-20** | ✅ CONFIRMED | Move metrics increment before early return in `convertermcp_fastmcp.py:230` | 🟢 DONE | Verified: convertermcp_fastmcp.py:248 increments before return |
 | **MED-21** | ✅ CONFIRMED | Enforce `MCP_CACHE_MAX_SIZE` with LRU eviction on insert in `SimpleCache` | 🟢 DONE | Verified: webmcp_fastmcp.py:128-135 enforces MAX_SIZE=1000 with LRU eviction |
@@ -1152,7 +1152,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **P2** | Significant refactor (half-day each) |
 | **P3** | Major structural work (full day+) |
 
-**Summary:** 12 CRIT / 16 HIGH / 21 MED / 16 LOW = 65 tracked bugs (+ 14 INFO). 37 fixed (🟢), 9 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A).
+**Summary:** 12 CRIT / 16 HIGH / 21 MED / 16 LOW = 65 tracked bugs (+ 14 INFO). 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A).
 
 ---
 
@@ -1160,7 +1160,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 
 **✅ FIXED (37):** CRIT-1,2,4,5,6,7,8,9,10,12 | HIGH-1,2,3,4,5,6,7,9,10,11,12,13,15,16,17 | MED-1,2,3,4,5,6,7,9,10,12,13,14,19,20,21 | LOW-1,2,3,6,10,11,12,13,14,15,16
 
-**❌ UNFIXED (9):** CRIT-3, CRIT-11 | HIGH-18 | MED-8, MED-15, MED-16, MED-18 | LOW-7, LOW-8, LOW-9
+**❌ UNFIXED (6):** CRIT-3 | MED-16 | LOW-7, LOW-8, LOW-9
 
 **⚠️ PARTIAL (4):** HIGH-14 | MED-17 | LOW-4 | LOW-5
 

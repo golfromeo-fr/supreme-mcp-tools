@@ -860,48 +860,66 @@ def main():
     if to_index:
         import time
         from collections import deque
+        import concurrent.futures
 
         total_files = len(to_index)
         total_chunks = 0
         start_time = time.time()
-        recent_times = deque(maxlen=50)  # Rolling average for ETA
 
-        logger.info(f"📝 Indexing {total_files} files...")
+        logger.info(f"📝 Indexing {total_files} files concurrently...")
 
-        for i, file_path in enumerate(to_index, 1):
-            rel_path = file_path.relative_to(workspace_path)
+        # Single event loop for all concurrent work
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Concurrency limit: don't overwhelm Qdrant or file handles
+        MAX_CONCURRENT = min(20, total_files)
+
+        async def index_file_with_tracking(file_path: Path, idx: int) -> tuple[int, float, Path]:
+            """Index a single file and return (chunks, duration, path)."""
             file_start = time.time()
-
-            logger.debug(f"Indexing: {rel_path}")
-
+            rel_path = file_path.relative_to(workspace_path)
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            chunks = loop.run_until_complete(index_file(file_path, workspace_path, args.collection, qdrant_client, metadata_store))
-            total_chunks += chunks
+                chunks = await index_file(file_path, workspace_path, args.collection, qdrant_client, metadata_store)
+                return chunks, time.time() - file_start, rel_path
+            except Exception as e:
+                logger.error(f"Error indexing {rel_path}: {e}")
+                return 0, time.time() - file_start, rel_path
 
-            # Track timing for ETA
-            file_duration = time.time() - file_start
-            if chunks > 0:
-                recent_times.append(file_duration)
+        async def run_all() -> int:
+            """Run all file indexing concurrently with a semaphore."""
+            semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-            # Log large files (10+ chunks) at INFO
-            if chunks >= 10:
-                logger.info(f"📄 {rel_path}: {chunks} chunks (took {file_duration:.1f}s)")
+            async def bounded_index(fp: Path, idx: int) -> tuple[int, float, Path]:
+                async with semaphore:
+                    return await index_file_with_tracking(fp, idx)
 
-            # Progress every 50 files
-            if i % 50 == 0 or i == total_files:
-                elapsed = time.time() - start_time
-                rate = i / elapsed if elapsed > 0 else 0
-                avg_time = sum(recent_times) / len(recent_times) if recent_times else 0
-                remaining = total_files - i
-                eta_seconds = (remaining * avg_time) if avg_time > 0 else 0
-                logger.info(f"   [{i}/{total_files}] {total_chunks} chunks, {rate:.1f} files/sec, ETA: {eta_seconds/60:.0f}min")
+            tasks = [bounded_index(fp, i) for i, fp in enumerate(to_index, 1)]
+            results: list[tuple[int, float, Path]] = []
+            completed = 0
+
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                results.append(result)
+                completed += 1
+
+                chunks, duration, rel_path = result
+                if chunks >= 10:
+                    logger.info(f"📄 {rel_path}: {chunks} chunks ({duration:.1f}s)")
+
+                if completed % 50 == 0 or completed == total_files:
+                    elapsed = time.time() - start_time
+                    rate = completed / elapsed if elapsed > 0 else 0
+                    eta_seconds = (elapsed / completed) * (total_files - completed) if completed > 0 else 0
+                    total_so_far = sum(r[0] for r in results)
+                    logger.info(f"   [{completed}/{total_files}] {total_so_far} chunks, {rate:.1f} files/sec, ETA: {eta_seconds/60:.0f}min")
+
+            return sum(r[0] for r in results)
+
+        try:
+            total_chunks = loop.run_until_complete(run_all())
+        finally:
+            loop.close()
 
         logger.info(f"   ✅ Indexed {total_chunks} chunks in {time.time() - start_time:.0f}s")
         logger.info("")
