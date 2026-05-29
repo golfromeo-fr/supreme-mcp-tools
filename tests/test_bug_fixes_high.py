@@ -277,5 +277,114 @@ class TestHIGH18HybridParallel(unittest.TestCase):
         self.assertIn("asyncio.create_task", chunk)
 
 
+class TestHIGH18RRFFusion(unittest.TestCase):
+    """HIGH-18: Hybrid search uses Reciprocal Rank Fusion with deduplication."""
+
+    def _make_result(self, doc_id, score, file_path="test.py"):
+        return {"id": doc_id, "score": score, "payload": {"filePath": file_path, "codeChunk": "code"}}
+
+    def test_rrf_function_exists(self):
+        source = (PROJECT_ROOT / "tools/ragmcp/ragmcp_fastmcp.py").read_text()
+        self.assertIn("def _reciprocal_rank_fusion", source)
+
+    def test_rrf_deduplicates_by_id(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        dense = [self._make_result("A", 0.9), self._make_result("B", 0.7)]
+        sparse = [self._make_result("A", 0.8), self._make_result("C", 0.6)]
+
+        fused = _reciprocal_rank_fusion([dense, sparse], k=60)
+        ids = [r["id"] for r in fused]
+        self.assertEqual(len(ids), len(set(ids)), "Duplicate IDs in fused results")
+        self.assertEqual(set(ids), {"A", "B", "C"})
+
+    def test_rrf_combined_score_higher_for_overlap(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        dense = [self._make_result("A", 0.9)]
+        sparse = [self._make_result("A", 0.8), self._make_result("B", 0.6)]
+
+        fused = _reciprocal_rank_fusion([dense, sparse], k=60)
+        a_score = next(r["score"] for r in fused if r["id"] == "A")
+        b_score = next(r["score"] for r in fused if r["id"] == "B")
+        self.assertGreater(a_score, b_score, "Doc appearing in both lists should rank higher")
+
+    def test_rrf_formula_correct(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        k = 60
+        dense = [self._make_result("A", 0.9), self._make_result("B", 0.7)]
+        sparse = [self._make_result("A", 0.8)]
+
+        fused = _reciprocal_rank_fusion([dense, sparse], k=k)
+        a_score = next(r["score"] for r in fused if r["id"] == "A")
+        b_score = next(r["score"] for r in fused if r["id"] == "B")
+
+        expected_a = 1.0 / (k + 1) + 1.0 / (k + 1)
+        expected_b = 1.0 / (k + 2)
+        self.assertAlmostEqual(a_score, expected_a, places=10)
+        self.assertAlmostEqual(b_score, expected_b, places=10)
+
+    def test_rrf_sorted_descending(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        dense = [self._make_result("A", 0.9), self._make_result("C", 0.5)]
+        sparse = [self._make_result("B", 0.8), self._make_result("A", 0.7)]
+
+        fused = _reciprocal_rank_fusion([dense, sparse], k=60)
+        scores = [r["score"] for r in fused]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_rrf_empty_input(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        fused = _reciprocal_rank_fusion([[], []], k=60)
+        self.assertEqual(fused, [])
+
+    def test_rrf_single_list(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        items = [self._make_result("A", 0.9), self._make_result("B", 0.7)]
+        fused = _reciprocal_rank_fusion([items], k=60)
+        self.assertEqual(len(fused), 2)
+
+    def test_rrf_preserves_payload(self):
+        sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
+        from ragmcp_fastmcp import _reciprocal_rank_fusion
+
+        dense = [{"id": "X", "score": 0.9, "payload": {"filePath": "a.py", "codeChunk": "code"}}]
+        sparse = [{"id": "X", "score": 0.8, "payload": {"filePath": "a.py", "codeChunk": "code"}}]
+
+        fused = _reciprocal_rank_fusion([dense, sparse], k=60)
+        self.assertEqual(len(fused), 1)
+        self.assertEqual(fused[0]["payload"]["filePath"], "a.py")
+
+    def test_hybrid_calls_rrf_not_concatenation(self):
+        source = (PROJECT_ROOT / "tools/ragmcp/ragmcp_fastmcp.py").read_text()
+        hybrid_section = source[source.find("async def _search_hybrid"):]
+        chunk = hybrid_section[:2000]
+        self.assertIn("_reciprocal_rank_fusion", chunk)
+        self.assertNotIn("=== Dense Search ===\n{dense_results_text}", chunk)
+        self.assertIn("=== Fused Results ===", chunk)
+
+    def test_hybrid_uses_structured_search_functions(self):
+        source = (PROJECT_ROOT / "tools/ragmcp/ragmcp_fastmcp.py").read_text()
+        hybrid_section = source[source.find("async def _search_hybrid"):]
+        chunk = hybrid_section[:2000]
+        self.assertIn("_do_dense_search", chunk)
+        self.assertIn("_do_sparse_search", chunk)
+
+    def test_do_dense_returns_structured_data(self):
+        source = (PROJECT_ROOT / "tools/ragmcp/ragmcp_fastmcp.py").read_text()
+        self.assertIn("async def _do_dense_search", source)
+        self.assertIn("async def _do_sparse_search", source)
+
+
 if __name__ == "__main__":
     unittest.main()

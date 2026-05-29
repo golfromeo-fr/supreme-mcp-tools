@@ -316,10 +316,10 @@ class TestSparseVectorIdempotency(unittest.TestCase):
     def test_query_does_not_affect_idf(self):
         from tools.ragmcp.indexer.sparse_vector_gen import CodeSparseVectorGenerator
         gen = CodeSparseVectorGenerator()
-        gen.generate_sparse_vector("SELECT * FROM foo", {"language": "sql"})
+        gen.generate_index_vector("SELECT * FROM foo", {"language": "sql"})
         idf_before = gen._compute_idf("select")
         for _ in range(100):
-            gen.generate_sparse_vector("SELECT * FROM bar", {"_is_query": True})
+            gen.generate_query_vector("SELECT * FROM bar", {"language": "sql"})
         idf_after = gen._compute_idf("select")
         self.assertAlmostEqual(idf_before, idf_after, places=5)
 

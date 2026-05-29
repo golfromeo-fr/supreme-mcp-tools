@@ -177,8 +177,7 @@ def clean_html_optimized(html_content: str, include_images: bool = True,
     text = patterns['comments'].sub('', text)
     
     # Remove navigation, header, footer, aside tags (common boilerplate)
-    if not include_tables:
-        text = patterns['nav_footer'].sub('', text)
+    text = patterns['nav_footer'].sub('', text)
     
     # Handle images
     if not include_images:

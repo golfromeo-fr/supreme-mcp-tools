@@ -79,7 +79,7 @@ class TestCRIT2ArtifactStorePathTraversal(unittest.TestCase):
 
 
 class TestCRIT3SSRFBypass(unittest.TestCase):
-    """CRIT-3: is_internal_url bypass via hex/decimal IP."""
+    """CRIT-3: is_internal_url bypass via hex/decimal/IPv6-encoded IP."""
 
     def test_blocks_localhost_string(self):
         from tools.shared.utils import is_internal_url
@@ -104,6 +104,46 @@ class TestCRIT3SSRFBypass(unittest.TestCase):
     def test_blocks_private_192_range(self):
         from tools.shared.utils import is_internal_url
         self.assertTrue(is_internal_url("http://192.168.1.1/"))
+
+    def test_blocks_hex_encoded_loopback(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://0x7f000001/"))
+
+    def test_blocks_hex_encoded_private(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://0xC0A80101/"))
+
+    def test_blocks_hex_encoded_link_local(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://0xA9FEA9FE/"))
+
+    def test_decimal_encoded_loopback(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://2130706433/"))
+
+    def test_decimal_encoded_private(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://3232235841/"))
+
+    def test_blocks_ipv6_mapped_loopback(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://[::ffff:127.0.0.1]/"))
+
+    def test_blocks_ipv6_mapped_private(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://[::ffff:192.168.1.1]/"))
+
+    def test_blocks_ipv6_loopback(self):
+        from tools.shared.utils import is_internal_url
+        self.assertTrue(is_internal_url("http://[::1]/"))
+
+    def test_allows_public_hex_ip(self):
+        from tools.shared.utils import is_internal_url
+        self.assertFalse(is_internal_url("http://0x08080808/"))
+
+    def test_allows_public_decimal_ip(self):
+        from tools.shared.utils import is_internal_url
+        self.assertFalse(is_internal_url("http://134744072/"))
 
 
 class TestCRIT4ManagementServerTraversal(unittest.TestCase):
@@ -205,26 +245,28 @@ class TestCRIT11BM25StatsIsolation(unittest.TestCase):
             CodeSparseVectorGenerator,
         )
         gen = CodeSparseVectorGenerator()
-        gen.generate_sparse_vector("SELECT * FROM users", {"language": "sql"})
+        gen.generate_index_vector("SELECT * FROM users", {"language": "sql"})
         stats_before = gen.get_statistics()
 
-        gen.generate_sparse_vector("SELECT * FROM orders", {"_is_query": True})
+        gen.generate_query_vector("SELECT * FROM orders")
         stats_after = gen.get_statistics()
 
         self.assertEqual(stats_before["doc_count"], stats_after["doc_count"])
+        self.assertEqual(stats_before["avg_doc_length"], stats_after["avg_doc_length"])
 
     def test_indexing_does_update_stats(self):
         from tools.ragmcp.indexer.sparse_vector_gen import (
             CodeSparseVectorGenerator,
         )
         gen = CodeSparseVectorGenerator()
-        gen.generate_sparse_vector("SELECT * FROM users", {"language": "sql"})
+        gen.generate_index_vector("SELECT * FROM users", {"language": "sql"})
         stats_before = gen.get_statistics()
 
-        gen.generate_sparse_vector("INSERT INTO products VALUES (1)", {"language": "sql"})
+        gen.generate_index_vector("INSERT INTO products VALUES (1)", {"language": "sql"})
         stats_after = gen.get_statistics()
 
         self.assertGreater(stats_after["doc_count"], stats_before["doc_count"])
+        self.assertNotEqual(stats_after["avg_doc_length"], stats_before["avg_doc_length"])
 
     def test_convenience_query_function(self):
         from tools.ragmcp.indexer.sparse_vector_gen import (
@@ -239,6 +281,30 @@ class TestCRIT11BM25StatsIsolation(unittest.TestCase):
         stats_after = get_global_generator().get_statistics()
 
         self.assertEqual(stats_before["doc_count"], stats_after["doc_count"])
+
+    def test_query_never_touches_term_doc_freq(self):
+        from tools.ragmcp.indexer.sparse_vector_gen import (
+            CodeSparseVectorGenerator,
+        )
+        gen = CodeSparseVectorGenerator()
+        gen.generate_index_vector("SELECT * FROM users WHERE id = 1", {"language": "sql"})
+        freq_before = dict(gen.term_doc_freq)
+
+        gen.generate_query_vector("SELECT * FROM orders JOIN products")
+        freq_after = dict(gen.term_doc_freq)
+
+        self.assertEqual(freq_before, freq_after)
+
+    def test_backward_compat_generate_sparse_vector_still_indexes(self):
+        from tools.ragmcp.indexer.sparse_vector_gen import (
+            CodeSparseVectorGenerator,
+        )
+        gen = CodeSparseVectorGenerator()
+        gen.generate_sparse_vector("SELECT * FROM users", {"language": "sql"})
+        self.assertEqual(gen.doc_count, 1)
+
+        gen.generate_sparse_vector("INSERT INTO products VALUES (1)")
+        self.assertEqual(gen.doc_count, 2)
 
 
 if __name__ == "__main__":

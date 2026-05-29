@@ -111,11 +111,11 @@ class TestMED7GetMemoryOrder(unittest.TestCase):
 class TestMED8NavFooterRemoval(unittest.TestCase):
     """MED-8: Nav/footer removal conditioned on include_tables."""
 
-    def test_optimized_keeps_nav_when_tables(self):
+    def test_optimized_removes_nav_even_with_tables(self):
         from tools.shared.html_utils import clean_html_optimized
         html = '<nav>Menu</nav><table><tr><td>Data</td></tr></table>'
         result = clean_html_optimized(html, include_tables=True)
-        self.assertIn("Menu", result)
+        self.assertNotIn("Menu", result)
         self.assertIn("Data", result)
 
     def test_optimized_removes_nav_when_no_tables(self):

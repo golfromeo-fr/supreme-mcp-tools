@@ -207,7 +207,11 @@ class ArtifactStore:
         if self._client:
             try:
                 self._client.head_object(Bucket=self.bucket, Key=key)
-            except Exception:
+            except Exception as e:
+                import botocore.exceptions
+                if isinstance(e, botocore.exceptions.ClientError) and e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
+                    return False
+                logger.error(f"S3 head_object failed for {key}: {e}")
                 return False
             try:
                 self._client.delete_object(Bucket=self.bucket, Key=key)

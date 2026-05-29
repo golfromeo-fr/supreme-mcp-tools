@@ -172,76 +172,101 @@ class CodeSparseVectorGenerator:
         for term in term_set:
             self.term_doc_freq[term] += 1
 
-    def generate_sparse_vector(
-        self,
-        text: str,
-        metadata: dict | None = None
-    ) -> dict[int, float]:
-        """
-        Generate sparse vector for code text.
-
-        Args:
-            text: Code text to vectorize
-            metadata: Optional metadata for domain-specific boosting
-                     (e.g., {'language': 'sql', 'file_type': 'table_definition'})
-
-        Returns:
-            Sparse vector as {term_id: weight} dict
-        """
-        # Tokenize with domain awareness
+    def _tokenize_and_count(self, text: str) -> tuple[list[tuple[str, str]], Counter, dict[str, set[str]], int] | None:
+        """Tokenize text and compute term frequencies. Returns None if no tokens."""
         tokens = self._tokenize_code(text)
-
         if not tokens:
-            return {}
+            return None
 
-        # Count term frequencies by domain
         term_counts = Counter()
         term_domains = defaultdict(set)
-
         for term, domain in tokens:
             term_counts[term] += 1
             term_domains[term].add(domain)
 
-        doc_length = len(tokens)
+        return tokens, term_counts, term_domains, len(tokens)
 
-        is_indexing = metadata is None or metadata.get('_is_query', False) is False
-        if is_indexing:
-            self.update_statistics(doc_length, set(term_counts.keys()))
-
-        # Compute sparse vector
+    def _build_vector(
+        self,
+        term_counts: Counter,
+        term_domains: dict[str, set[str]],
+        doc_length: int,
+        metadata: dict | None = None,
+    ) -> dict[int, float]:
+        """Compute the sparse vector from term counts and domain info."""
         sparse_vector = {}
-
         for term, freq in term_counts.items():
-            # Base TF-IDF score
             tf = self._compute_tf(freq, doc_length)
             idf = self._compute_idf(term)
             score = tf * idf
 
-            # Apply domain-specific boosts
             domains = term_domains[term]
             max_boost = 1.0
             for domain in domains:
                 boost = self.BOOST_FACTORS.get(domain, 1.0)
                 max_boost = max(max_boost, boost)
-
             score *= max_boost
 
-            # Additional metadata-based boosts
             if metadata:
-                # Boost SQL keywords in SQL files
                 if metadata.get('language') == 'sql' and 'sql_keyword' in domains:
                     score *= 1.3
-
-                # Boost table names in table definitions
                 if metadata.get('file_type') == 'table_definition' and 'table_name' in domains:
                     score *= 1.5
 
-            # Only include significant terms
             if score > 0.01:
                 term_id = self._get_term_id(term)
                 sparse_vector[term_id] = round(score, 4)
 
         return sparse_vector
+
+    def generate_index_vector(
+        self,
+        text: str,
+        metadata: dict | None = None,
+    ) -> dict[int, float]:
+        """
+        Generate sparse vector for INDEXING a document.
+
+        Updates BM25 statistics (doc_count, avg_doc_length, term_doc_freq).
+        Use this only when indexing documents into the collection.
+        """
+        result = self._tokenize_and_count(text)
+        if result is None:
+            return {}
+        tokens, term_counts, term_domains, doc_length = result
+
+        self.update_statistics(doc_length, set(term_counts.keys()))
+        return self._build_vector(term_counts, term_domains, doc_length, metadata)
+
+    def generate_query_vector(
+        self,
+        text: str,
+        metadata: dict | None = None,
+    ) -> dict[int, float]:
+        """
+        Generate sparse vector for a SEARCH query.
+
+        NEVER updates BM25 statistics. Use for all query/search operations.
+        """
+        result = self._tokenize_and_count(text)
+        if result is None:
+            return {}
+        tokens, term_counts, term_domains, doc_length = result
+
+        return self._build_vector(term_counts, term_domains, doc_length, metadata)
+
+    def generate_sparse_vector(
+        self,
+        text: str,
+        metadata: dict | None = None,
+    ) -> dict[int, float]:
+        """
+        Generate sparse vector for indexing (backward-compatible alias).
+
+        Delegates to generate_index_vector(). For search queries, use
+        generate_query_vector() instead.
+        """
+        return self.generate_index_vector(text, metadata)
 
     def get_vocabulary_size(self) -> int:
         """Get current vocabulary size."""
@@ -301,10 +326,8 @@ def generate_query_vector(text: str, metadata: dict | None = None) -> dict[int, 
     Returns:
         Sparse vector as {term_id: weight} dict
     """
-    meta = dict(metadata) if metadata else {}
-    meta['_is_query'] = True
     generator = get_global_generator()
-    return generator.generate_sparse_vector(text, meta)
+    return generator.generate_query_vector(text, metadata)
 
 
 # Example usage and testing

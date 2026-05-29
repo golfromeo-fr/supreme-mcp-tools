@@ -187,19 +187,38 @@ def get_tool_logger(tool_name: str) -> logging.Logger:
     return logging.getLogger(tool_name)
 
 
+def _is_internal_ip(ip) -> bool:
+    return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved
+
+
+def _check_ipv4_mapped(ip) -> bool:
+    if hasattr(ip, 'ipv4_mapped') and ip.ipv4_mapped:
+        return _is_internal_ip(ip.ipv4_mapped)
+    return False
+
+
 def is_internal_url(url: str) -> bool:
-    """Check if URL is internal (SSRF protection)."""
+    """Check if URL is internal (SSRF protection).
+
+    Handles hex-encoded IPv4 (0x7f000001), decimal-encoded (2130706433),
+    IPv6-mapped IPv4 (::ffff:127.0.0.1), and plain IPv4/IPv6 literals
+    before falling back to DNS resolution for hostnames.
+    """
     try:
         import ipaddress
+        import re
         import socket
         from urllib.parse import urlparse
-        
+
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower()
-        
+
+        if not hostname:
+            return True
+
         if hostname in {'localhost', '::1', '0.0.0.0'}:
             return True
-            
+
         internal_hosts = {
             '169.254.169.254',
             'metadata.google.internal',
@@ -208,21 +227,54 @@ def is_internal_url(url: str) -> bool:
         }
         if hostname in internal_hosts:
             return True
-        
+
+        hex_match = re.match(r'^0x([0-9a-f]+)$', hostname)
+        if hex_match:
+            try:
+                ip_int = int(hex_match.group(1), 16)
+                ip = ipaddress.IPv4Address(ip_int)
+                if _is_internal_ip(ip):
+                    return True
+                return False
+            except (ValueError, OverflowError):
+                return True
+
+        if hostname.isdigit():
+            try:
+                ip_int = int(hostname)
+                ip = ipaddress.IPv4Address(ip_int)
+                if _is_internal_ip(ip):
+                    return True
+                return False
+            except (ValueError, OverflowError):
+                return True
+
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if _is_internal_ip(ip):
+                return True
+            if _check_ipv4_mapped(ip):
+                return True
+            return False
+        except ValueError:
+            pass
+
         try:
             resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         except (socket.gaierror, OSError):
             return True
-        
+
         for family, _, _, _, sockaddr in resolved:
             ip_str = sockaddr[0]
             try:
                 ip = ipaddress.ip_address(ip_str)
-                if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                if _is_internal_ip(ip):
+                    return True
+                if _check_ipv4_mapped(ip):
                     return True
             except ValueError:
                 continue
-        
+
         return False
     except Exception:
         return True

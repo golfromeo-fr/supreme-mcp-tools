@@ -58,10 +58,9 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
         self._pending_codes: dict[str, tuple[str, str, float]] = {}  # code -> (client_id, redirect_uri, created_at)
         self._registered_clients: dict[str, tuple[dict, float]] = {}  # client_id -> (client_info, created_at)
         self._oauth_ttl = 600  # 10 minutes
+        self._cleanup_task: asyncio.Task | None = None
 
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-
+    def _cleanup_expired(self):
         now = time.time()
         expired_codes = [k for k, v in self._pending_codes.items() if now - v[2] > self._oauth_ttl]
         for k in expired_codes:
@@ -69,6 +68,21 @@ class MCPApiKeyMiddleware(BaseHTTPMiddleware):
         expired_clients = [k for k, v in self._registered_clients.items() if now - v[1] > self._oauth_ttl]
         for k in expired_clients:
             del self._registered_clients[k]
+
+    async def _cleanup_loop(self):
+        while True:
+            await asyncio.sleep(60)
+            self._cleanup_expired()
+
+    async def _ensure_cleanup_task(self):
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        self._cleanup_expired()
+        await self._ensure_cleanup_task()
 
         # --- OAuth endpoints suppressed by oauth_fix — FastMCP now returns 404.
         # The handlers below are now dead code but kept for backwards compatibility

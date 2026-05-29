@@ -862,12 +862,15 @@ async def search(
         return f"Error: Unknown mode '{mode}'. Use: auto, dense, sparse, hybrid"
 
 
-async def _search_dense(query: str, limit: int, collection_name: str,
-                        file_type: str | None, function_name: str | None) -> str:
-    """Internal: dense semantic search."""
+async def _do_dense_search(query: str, limit: int, collection_name: str,
+                           file_type: str | None, function_name: str | None) -> list:
+    """Execute dense search and return raw scoreless points list.
+
+    Returns list of dicts: {id, score, payload}.
+    Raises on error (caller handles).
+    """
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
-    # Generate embedding
     embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'azure')
 
     if embedding_provider == 'azure':
@@ -878,7 +881,7 @@ async def _search_dense(query: str, limit: int, collection_name: str,
         api_key = os.getenv('AI_API_KEY', '')
 
         if not api_key:
-            return "Error: AI_API_KEY not set. Cannot generate search embedding."
+            raise ValueError("AI_API_KEY not set. Cannot generate search embedding.")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -891,25 +894,20 @@ async def _search_dense(query: str, limit: int, collection_name: str,
             query_vector = data['data'][0]['embedding']
     else:
         if not LOCAL_EMBEDDINGS_AVAILABLE:
-            return "Error: Local embeddings module not available. Install sentence-transformers."
+            raise ValueError("Local embeddings module not available. Install sentence-transformers.")
 
-        try:
-            model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
-            query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
-            if query_embeddings is None or len(query_embeddings) == 0:
-                return "Error: Failed to generate local embedding for query."
-            query_vector = query_embeddings[0].tolist()
-        except Exception as e:
-            return f"Error generating local embedding: {str(e)}"
+        model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
+        query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
+        if query_embeddings is None or len(query_embeddings) == 0:
+            raise ValueError("Failed to generate local embedding for query.")
+        query_vector = query_embeddings[0].tolist()
 
-    # Validate dimension matches collection
     validation = validate_search_request(collection_name, query_vector)
     if not validation.get('valid', True) and 'error' in validation:
-        return f"Error: {validation['error']}"
+        raise ValueError(validation['error'])
     if validation.get('warning'):
         logger.warning(validation['warning'])
 
-    # Build filter
     conditions = []
     if file_type:
         conditions.append(FieldCondition(key="fileType", match=MatchValue(value=file_type)))
@@ -917,60 +915,61 @@ async def _search_dense(query: str, limit: int, collection_name: str,
         conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
     search_filter = Filter(must=conditions) if conditions else None
 
-    # Perform search
-    try:
-        collection_info = qdrant_client.get_collection(collection_name)
-        vectors_config = collection_info.config.params.vectors
+    collection_info = qdrant_client.get_collection(collection_name)
+    vectors_config = collection_info.config.params.vectors
 
-        if isinstance(vectors_config, dict):
-            vector_names = list(vectors_config.keys())
-            vector_dim = len(query_vector)
-            vector_name = None
+    if isinstance(vectors_config, dict):
+        vector_names = list(vectors_config.keys())
+        vector_dim = len(query_vector)
+        vector_name = None
 
-            for vname in vector_names:
-                vconfig = vectors_config[vname]
-                if hasattr(vconfig, 'size') and vconfig.size == vector_dim:
-                    vector_name = vname
-                    break
+        for vname in vector_names:
+            vconfig = vectors_config[vname]
+            if hasattr(vconfig, 'size') and vconfig.size == vector_dim:
+                vector_name = vname
+                break
 
-            if not vector_name:
-                vector_name = vector_names[0]
+        if not vector_name:
+            vector_name = vector_names[0]
 
-            query_response = qdrant_client.query_points(
-                collection_name=collection_name,
-                query=query_vector,
-                using=vector_name,
-                query_filter=search_filter,
-                limit=limit,
-                with_payload=True
-            )
-        else:
-            query_response = qdrant_client.query_points(
-                collection_name=collection_name,
-                query=query_vector,
-                query_filter=search_filter,
-                limit=limit,
-                with_payload=True
-            )
-    except Exception as e:
-        return f"Error in dense search: {str(e)}"
+        query_response = qdrant_client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            using=vector_name,
+            query_filter=search_filter,
+            limit=limit,
+            with_payload=True
+        )
+    else:
+        query_response = qdrant_client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            query_filter=search_filter,
+            limit=limit,
+            with_payload=True
+        )
 
-    return _format_search_results(query_response.points)
+    return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
+            for p in query_response.points]
 
 
-async def _search_sparse(query: str, limit: int, collection_name: str,
-                         file_type: str | None, function_name: str | None) -> str:
-    """Internal: sparse BM25 lexical search."""
+async def _do_sparse_search(query: str, limit: int, collection_name: str,
+                            file_type: str | None, function_name: str | None) -> list:
+    """Execute sparse search and return structured results list.
+
+    Returns list of dicts: {id, score, payload}.
+    Raises on error (caller handles).
+    """
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
     if not SPARSE_VECTORS_AVAILABLE:
-        return "Error: Sparse vector search not available. Missing sparse_vector_gen.py module."
+        raise ValueError("Sparse vector search not available. Missing sparse_vector_gen.py module.")
 
     query_metadata = {'language': file_type if file_type else 'unknown'}
     query_sparse_vec = generate_sparse_vector(query, query_metadata)
 
     if not query_sparse_vec:
-        return "Error: Failed to generate sparse vector for query."
+        raise ValueError("Failed to generate sparse vector for query.")
 
     conditions = []
     if file_type:
@@ -979,19 +978,104 @@ async def _search_sparse(query: str, limit: int, collection_name: str,
         conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
     search_filter = Filter(must=conditions) if conditions else None
 
+    query_response = qdrant_client.query_points(
+        collection_name=collection_name,
+        query=SparseVector(indices=list(query_sparse_vec.keys()), values=list(query_sparse_vec.values())),
+        using="sparse",
+        query_filter=search_filter,
+        limit=limit,
+        with_payload=True
+    )
+
+    return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
+            for p in query_response.points]
+
+
+def _reciprocal_rank_fusion(ranked_lists: list[list[dict]], k: int = 60) -> list[dict]:
+    """Merge multiple ranked result lists using Reciprocal Rank Fusion.
+
+    Args:
+        ranked_lists: Each list contains dicts with 'id', 'score', 'payload'.
+        k: RRF constant (default 60).
+
+    Returns:
+        Single deduplicated list sorted by fused RRF score (desc).
+    """
+    rrf_scores: dict[str, float] = {}
+    payloads: dict[str, dict] = {}
+
+    for result_list in ranked_lists:
+        for rank, item in enumerate(result_list, start=1):
+            doc_id = item["id"]
+            if doc_id not in payloads:
+                payloads[doc_id] = item["payload"]
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+
+    fused = [
+        {"id": doc_id, "score": score, "payload": payloads[doc_id]}
+        for doc_id, score in rrf_scores.items()
+    ]
+    fused.sort(key=lambda x: x["score"], reverse=True)
+    return fused
+
+
+def _format_structured_results(results: list[dict]) -> str:
+    """Format structured search results (list of dicts) into display string."""
+    if not results:
+        return "No results found."
+
+    formatted = []
+    formatted.append(f"Found {len(results)} relevant code chunks:\n")
+    formatted.append("=" * 80 + "\n")
+
+    for i, item in enumerate(results, 1):
+        payload = item["payload"]
+        score = item["score"]
+
+        formatted.append(f"\n**Result {i}** (relevance: {score:.3f})\n")
+        formatted.append(f"File: {payload.get('filePath', 'Unknown')}\n")
+        formatted.append(f"Lines: {payload.get('startLine', '?')}-{payload.get('endLine', '?')}\n")
+        formatted.append(f"Type: {payload.get('fileType', 'Unknown')}\n")
+
+        if payload.get('functionName'):
+            formatted.append(f"Function: {payload['functionName']}\n")
+        if payload.get('chunkType'):
+            formatted.append(f"Chunk Type: {payload['chunkType']}\n")
+
+        formatted.append("\nCode:\n```\n")
+        code_chunk = payload.get('codeChunk', '')
+        lines = code_chunk.split('\n')
+        if len(lines) > 50:
+            formatted.append('\n'.join(lines[:50]))
+            formatted.append(f"\n... ({len(lines) - 50} more lines)")
+        else:
+            formatted.append(code_chunk)
+        formatted.append("\n```\n")
+        formatted.append("-" * 80 + "\n")
+
+    return ''.join(formatted)
+
+
+async def _search_dense(query: str, limit: int, collection_name: str,
+                        file_type: str | None, function_name: str | None) -> str:
+    """Internal: dense semantic search."""
     try:
-        query_response = qdrant_client.query_points(
-            collection_name=collection_name,
-            query=SparseVector(indices=list(query_sparse_vec.keys()), values=list(query_sparse_vec.values())),
-            using="sparse",
-            query_filter=search_filter,
-            limit=limit,
-            with_payload=True
-        )
+        results = await _do_dense_search(query, limit, collection_name, file_type, function_name)
+    except Exception as e:
+        return f"Error in dense search: {str(e)}"
+
+    return _format_structured_results(results)
+
+
+async def _search_sparse(query: str, limit: int, collection_name: str,
+                         file_type: str | None, function_name: str | None) -> str:
+    """Internal: sparse BM25 lexical search."""
+    try:
+        results = await _do_sparse_search(query, limit, collection_name, file_type, function_name)
     except Exception as e:
         return f"Error in sparse search: {str(e)}"
 
-    return _format_search_results(query_response.points)
+    return _format_structured_results(results)
 
 
 async def _search_hybrid(query: str, limit: int, collection_name: str,
@@ -1001,16 +1085,22 @@ async def _search_hybrid(query: str, limit: int, collection_name: str,
     K = 60
     try:
         dense_task = asyncio.create_task(
-            _search_dense(query, limit, collection_name, file_type, function_name))
+            _do_dense_search(query, limit, collection_name, file_type, function_name))
         sparse_task = asyncio.create_task(
-            _search_sparse(query, limit, collection_name, file_type, function_name))
-        dense_results_text, sparse_results_text = await asyncio.gather(
+            _do_sparse_search(query, limit, collection_name, file_type, function_name))
+        dense_results, sparse_results = await asyncio.gather(
             dense_task, sparse_task)
 
+        fused = _reciprocal_rank_fusion([dense_results, sparse_results], k=K)
+        fused = fused[:limit]
+
+        formatted = _format_structured_results(fused)
+
         return (
-            f"Hybrid search results (reciprocal rank fusion, k={K}):\n\n"
-            f"=== Dense Search ===\n{dense_results_text}\n\n"
-            f"=== Sparse Search ===\n{sparse_results_text}"
+            f"Hybrid search results (reciprocal rank fusion, k={K}):\n"
+            f"Dense: {len(dense_results)} results | Sparse: {len(sparse_results)} results | "
+            f"Merged (deduplicated): {len(fused)} results\n\n"
+            f"=== Fused Results ===\n{formatted}"
         )
     except Exception as e:
         return f"Error in hybrid search: {str(e)}"
