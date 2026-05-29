@@ -150,7 +150,10 @@ class SimpleCache:
 _cache = SimpleCache(default_ttl=3600)
 
 def _generate_cache_key(url: str, params: dict) -> str:
-    param_str = str(sorted(params.items()))
+    try:
+        param_str = str(sorted(params.items(), key=lambda x: str(x[0])))
+    except TypeError:
+        return "error:mixed-type-keys"
     combined = f"{url}:{param_str}"
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 def _clean_html(html_content: str, include_images: bool = True, include_tables: bool = True, include_links: bool = True) -> str:

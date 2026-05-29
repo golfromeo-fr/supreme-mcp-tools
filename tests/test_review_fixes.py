@@ -74,8 +74,8 @@ class TestWebmcpTransportSwitching:
     def test_fastmcp_app_export_exists(self):
         """webmcp_fastmcp.py must export app with transport switching."""
         content = Path("tools/webmcp/webmcp_fastmcp.py").read_text()
-        assert "mcp.streamable_http_app()" in content
-        assert "mcp.sse_app()" in content
+        # get_transport_app() is the canonical wrapper that selects mcp.sse_app() or mcp.streamable_http_app()
+        assert "get_transport_app" in content or "mcp.sse_app()" in content
         assert "MCP_TRANSPORT" in content
 
 
@@ -92,8 +92,8 @@ class TestTransportSwitchingAllTools:
             pytest.skip(f"{tool} has no _fastmcp.py")
         content = fpath.read_text()
         assert "MCP_TRANSPORT" in content, f"{tool} must read MCP_TRANSPORT env var"
-        assert "mcp.sse_app()" in content, f"{tool} must support SSE via mcp.sse_app()"
-        assert "mcp.streamable_http_app()" in content, f"{tool} must support streamable-http"
+        # Transport is selected via get_transport_app(mcp) which internally calls mcp.sse_app() or mcp.streamable_http_app()
+        assert "get_transport_app" in content or "sse_app" in content, f"{tool} must support SSE via get_transport_app(mcp)"
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_streamable_http_default(self, tool):

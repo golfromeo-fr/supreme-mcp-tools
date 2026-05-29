@@ -227,6 +227,7 @@ async def convert_docx_to_text(source: str, output_path: str | None = None, head
             out_path = Path(output_path)
             if not is_under_allowed_roots(out_path, ALLOWED_ROOTS):
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
+                metrics["conversion_errors"] += 1
                 if fef_manager is not None:
                     fef_manager.metrics.record_request(
                         endpoint="tools/call", tool_name="convert_docx_to_text",

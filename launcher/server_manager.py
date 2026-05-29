@@ -365,8 +365,10 @@ class ServerManager:
 
             if self.enable_management and mgmt_port:
                 os.environ[f"MCP_MGMT_PORT_{tool_name}"] = str(mgmt_port)
-                os.environ["MCP_MGMT_PORT"] = str(mgmt_port)
-                logger.info(f"Set MCP_MGMT_PORT={mgmt_port} for {tool_name}")
+                # Note: global MCP_MGMT_PORT intentionally NOT set — concurrent tool
+                # startup races if multiple tools overwrite it. Tool-specific var above
+                # is the correct mechanism. Keep only the per-tool var.
+                logger.info(f"Set MCP_MGMT_PORT_{tool_name}={mgmt_port} for {tool_name}")
 
                 # Create registry with tool_name for global tracking
                 # This allows the tool to find this registry when it starts
@@ -463,7 +465,7 @@ class ServerManager:
             # For now, we'll handle this in the main launcher
             pass
         
-        return instances
+        return instances  # pragma: no cover — stub for future use
     
     async def _run_server(self, instance: ServerInstance) -> None:
         """

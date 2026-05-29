@@ -413,14 +413,14 @@ class StreamableHttpTransportBase:
             if session_id not in self._sessions:
                 self._sessions[session_id] = {
                     "id": session_id,
-                    "created_at": asyncio.get_event_loop().time(),
-                    "last_activity": asyncio.get_event_loop().time(),
+                    "created_at": asyncio.get_running_loop().time(),
+                    "last_activity": asyncio.get_running_loop().time(),
                     "initialized": False,
                     "capabilities": {},
                 }
             
             # Update last activity
-            self._sessions[session_id]["last_activity"] = asyncio.get_event_loop().time()
+            self._sessions[session_id]["last_activity"] = asyncio.get_running_loop().time()
             
             return self._sessions[session_id]
     
@@ -430,7 +430,7 @@ class StreamableHttpTransportBase:
             return
         
         async with self._session_lock:
-            current_time = asyncio.get_event_loop().time()
+            current_time = asyncio.get_running_loop().time()
             expired_sessions = [
                 sid for sid, session in self._sessions.items()
                 if current_time - session["last_activity"] > self.config.session_timeout
