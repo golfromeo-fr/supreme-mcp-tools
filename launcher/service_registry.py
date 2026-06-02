@@ -6,15 +6,50 @@ Provides automatic tool registration and health checks.
 """
 
 import asyncio
+import ipaddress
+import json
 import logging
 import os
+import socket
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
+
+
+def _is_private_url(url: str) -> bool:
+    """Check if a URL points to a private/internal address (not public internet).
+
+    Allows: loopback (127.x), private (10.x, 172.16-31.x, 192.168.x),
+    link-local (169.254.x, fe80::), hostname 'localhost', and hostnames that
+    resolve to private IPs.
+    Blocks: all public IPs, external hostnames.
+    """
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+
+    if hostname == "localhost":
+        return True
+
+    try:
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except (socket.gaierror, OSError):
+        return False
+
+    for family, _, _, _, sockaddr in resolved:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            if not (ip.is_loopback or ip.is_private or ip.is_link_local
+                    or ip.is_reserved):
+                return False
+        except ValueError:
+            continue
+    return True
 
 
 @dataclass
@@ -129,6 +164,11 @@ class ServiceRegistry:
             mcp_port: Port of the MCP server
             capabilities: Optional capabilities information
         """
+        if not _is_private_url(management_url):
+            raise ValueError(
+                f"Rejected management_url for '{name}': {management_url} "
+                f"does not resolve to a private/internal address"
+            )
         async with self._lock:
             self._services[name] = ServiceInfo(
                 name=name,
@@ -255,10 +295,9 @@ class ServiceRegistry:
             ) as response:
                 if response.status == 200:
                     try:
-                        data = await response.json()
-                    except Exception as json_err:
-                        # Log the raw response text for debugging
                         response_text = await response.text()
+                        data = json.loads(response_text)
+                    except Exception as json_err:
                         logger.error(
                             f"Health check JSON parse failed for '{name}': {json_err}. "
                             f"Response status: {response.status}, Text: {response_text[:500]}"

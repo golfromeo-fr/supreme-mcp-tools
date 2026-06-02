@@ -376,7 +376,7 @@ class TestPortManagerAllocation(unittest.TestCase):
 
     def _config(self):
         return {
-            "ranges": {"mcp": [9000, 9099], "mgmt": [9100, 9199]},
+            "ranges": {"mcp": [9000, 9099], "mgmt": [9100, 9199], "system": [9200, 9299]},
             "reserved": {"central_management": 9200},
             "assignments": {"webmcp": 9001, "simplemcp": 9002},
         }

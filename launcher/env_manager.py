@@ -413,39 +413,63 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
         logger.info(f"Created .env file at {env_path} with {var_name}")
         return
 
-    with Path(env_path).open("r") as f:
-        lines = f.readlines()
-
-    active_indices = [i for i, line in enumerate(lines) if line.strip().startswith(f"{var_name}=")]
-
-    now = datetime.now().strftime("%Y-%m-%d")
-    new_line = f"{var_name}={value}\n"
-
-    if active_indices:
-        for idx in reversed(active_indices):
-            old_line = lines[idx].rstrip("\n")
-            lines[idx] = f"# {old_line}  # updated {now}\n"
-        insert_at = active_indices[-1] + 1
-        lines.insert(insert_at, new_line)
-        logger.info(f"Updated {var_name} in .env ({len(active_indices)} old value(s) commented out)")
-    else:
-        if lines and not lines[-1].endswith("\n"):
-            lines.append("\n")
-        elif lines and lines[-1].strip():
-            lines.append("\n")
-        lines.append(new_line)
-        logger.info(f"Added {var_name} to .env")
-
     try:
         import fcntl
-        fd = os.open(str(env_path), os.O_WRONLY | os.O_CREAT, 0o644)
+        fd = os.open(str(env_path), os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
+            content = os.read(fd, os.path.getsize(env_path) if env_path.exists() else 0).decode()
+            lines = content.splitlines(True)
+
+            active_indices = [i for i, line in enumerate(lines) if line.strip().startswith(f"{var_name}=")]
+
+            now = datetime.now().strftime("%Y-%m-%d")
+            new_line = f"{var_name}={value}\n"
+
+            if active_indices:
+                for idx in reversed(active_indices):
+                    old_line = lines[idx].rstrip("\n")
+                    lines[idx] = f"# {old_line}  # updated {now}\n"
+                insert_at = active_indices[-1] + 1
+                lines.insert(insert_at, new_line)
+                logger.info(f"Updated {var_name} in .env ({len(active_indices)} old value(s) commented out)")
+            else:
+                if lines and not lines[-1].endswith("\n"):
+                    lines.append("\n")
+                elif lines and lines[-1].strip():
+                    lines.append("\n")
+                lines.append(new_line)
+                logger.info(f"Added {var_name} to .env")
+
+            os.lseek(fd, 0, os.SEEK_SET)
             os.ftruncate(fd, 0)
             os.write(fd, "".join(lines).encode())
         finally:
             os.close(fd)
     except ImportError:
+        with Path(env_path).open("r") as f:
+            lines = f.readlines()
+
+        active_indices = [i for i, line in enumerate(lines) if line.strip().startswith(f"{var_name}=")]
+
+        now = datetime.now().strftime("%Y-%m-%d")
+        new_line = f"{var_name}={value}\n"
+
+        if active_indices:
+            for idx in reversed(active_indices):
+                old_line = lines[idx].rstrip("\n")
+                lines[idx] = f"# {old_line}  # updated {now}\n"
+            insert_at = active_indices[-1] + 1
+            lines.insert(insert_at, new_line)
+            logger.info(f"Updated {var_name} in .env ({len(active_indices)} old value(s) commented out)")
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines.append("\n")
+            elif lines and lines[-1].strip():
+                lines.append("\n")
+            lines.append(new_line)
+            logger.info(f"Added {var_name} to .env")
+
         with Path(env_path).open("w") as f:
             f.writelines(lines)
 

@@ -156,6 +156,10 @@ class MigrationManager:
                 result["phases"].append({"name": "backup", **phase_result})
                 if not dry_run and phase_result["success"]:
                     self.status.mark_phase_complete("backup")
+                if not phase_result["success"]:
+                    result["success"] = False
+                    result["errors"].append(f"Phase 'backup' failed: {phase_result.get('message', '')}")
+                    return result
             
             # Phase 2: Add management servers to tools
             if "add_management" not in self.status.phases_completed:
@@ -163,6 +167,10 @@ class MigrationManager:
                 result["phases"].append({"name": "add_management", **phase_result})
                 if not dry_run and phase_result["success"]:
                     self.status.mark_phase_complete("add_management")
+                if not phase_result["success"]:
+                    result["success"] = False
+                    result["errors"].append(f"Phase 'add_management' failed: {phase_result.get('message', '')}")
+                    return result
             
             # Phase 3: Update configuration
             if "update_config" not in self.status.phases_completed:
@@ -170,6 +178,10 @@ class MigrationManager:
                 result["phases"].append({"name": "update_config", **phase_result})
                 if not dry_run and phase_result["success"]:
                     self.status.mark_phase_complete("update_config")
+                if not phase_result["success"]:
+                    result["success"] = False
+                    result["errors"].append(f"Phase 'update_config' failed: {phase_result.get('message', '')}")
+                    return result
             
             # Phase 4: Validate
             if "validate" not in self.status.phases_completed:
@@ -177,6 +189,10 @@ class MigrationManager:
                 result["phases"].append({"name": "validate", **phase_result})
                 if not dry_run and phase_result["success"]:
                     self.status.mark_phase_complete("validate")
+                if not phase_result["success"]:
+                    result["success"] = False
+                    result["errors"].append(f"Phase 'validate' failed: {phase_result.get('message', '')}")
+                    return result
             
             # Update version
             if not dry_run:

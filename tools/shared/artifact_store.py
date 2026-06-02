@@ -87,7 +87,7 @@ class ArtifactStore:
         """Get local filesystem path for a key."""
         path = (Path(self.local_dir) / key).resolve()
         base = Path(self.local_dir).resolve()
-        if not str(path).startswith(str(base)):
+        if not path.is_relative_to(base):
             raise ValueError(f"Key escapes artifact directory: {key}")
         return path
 

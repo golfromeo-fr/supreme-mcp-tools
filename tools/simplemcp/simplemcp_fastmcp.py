@@ -220,7 +220,16 @@ async def greet(name: str, greeting: str = "Hello") -> str:
 
 @mcp.tool()
 async def get_secret() -> str:
-    """Returns the current value of SIMPLEMCP_SECRET env var for hot-reload testing."""
+    """Returns the current value of SIMPLEMCP_SECRET env var for hot-reload testing.
+
+    SECURITY NOTE (H-7 — by design):
+        This tool intentionally exposes the value of SIMPLEMCP_SECRET to
+        authenticated callers.  It exists solely as a development/test fixture
+        for verifying that the management UI can hot-reload environment
+        variables without restarting the server.  Do NOT place real production
+        secrets in SIMPLEMCP_SECRET.  The .env file is git-ignored and scoped
+        to the local developer machine.
+    """
     logger.info("get_secret()")
     start_time = time.perf_counter()
     try:

@@ -92,7 +92,7 @@ def main():
     logger.info("Discovering tools from servers...")
     from launcher.env_manager import load_auth_config
     auth_keys = {name: load_auth_config(name).get("api_key") for name in server_urls}
-    discovered = update_config_with_discovered_tools(server_urls, timeout=args.timeout)
+    discovered = update_config_with_discovered_tools(server_urls, timeout=args.timeout, auth_keys=auth_keys)
 
     for server_name, tools in discovered.items():
         if tools:

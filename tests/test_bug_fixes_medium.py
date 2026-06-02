@@ -244,19 +244,25 @@ class TestMED14StreamingResponseClose(unittest.TestCase):
 
 
 class TestMED15OAuthExpiration(unittest.TestCase):
-    """MED-15: OAuth pending codes never expire."""
+    """MED-15: OAuth auto-approve middleware removed — C-1 fix.
 
-    def test_ttl_field_in_data_structures(self):
-        source = (PROJECT_ROOT / "launcher/server_manager.py").read_text()
-        self.assertIn("_oauth_ttl", source)
-        self.assertIn("expired_codes", source)
-        self.assertIn("expired_clients", source)
+    The vulnerable MCPApiKeyMiddleware (with /register, /authorize, /token
+    that leaked the API key) has been removed. Auth is now handled entirely
+    by FastMCP 3's DualHeaderVerifier (see test_auth_c1_oauth_removal.py).
+    """
 
-    def test_pending_codes_have_timestamp(self):
+    def test_oauth_middleware_removed(self):
         source = (PROJECT_ROOT / "launcher/server_manager.py").read_text()
-        self.assertIn("time.time())", source)
-        idx = source.find("_pending_codes[code]")
-        self.assertTrue(idx > 0, "_pending_codes should store timestamps")
+        self.assertNotIn("MCPApiKeyMiddleware", source)
+        self.assertNotIn("_pending_codes", source)
+        self.assertNotIn("_oauth_ttl", source)
+
+    def test_no_add_middleware_call(self):
+        source = (PROJECT_ROOT / "launcher/server_manager.py").read_text()
+        self.assertNotIn("add_middleware(MCPApiKeyMiddleware", source)
+        self.assertNotIn("_handle_token", source)
+        self.assertNotIn("_handle_register", source)
+        self.assertNotIn("_handle_authorize", source)
 
 
 class TestMED16LRUCacheEviction(unittest.TestCase):

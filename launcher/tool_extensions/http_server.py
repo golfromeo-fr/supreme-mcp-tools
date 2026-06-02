@@ -6,6 +6,7 @@ This server provides REST endpoints and WebSocket support for cross-process comm
 """
 
 import asyncio
+import hmac
 import logging
 from typing import Any
 
@@ -121,9 +122,14 @@ class ExtensionHTTPServer:
         )
         
         # Add CORS middleware
+        _mgmt_port = self._get_default_mgmt_port(tool_name) or 8400
+        _allowed_origins = [
+            f"http://localhost:{_mgmt_port}",
+            f"http://127.0.0.1:{_mgmt_port}",
+        ]
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=_allowed_origins,
             allow_credentials=False,  # Not using cookies; header-based auth only
             allow_methods=["*"],
             allow_headers=["*"],
@@ -140,7 +146,7 @@ class ExtensionHTTPServer:
             return True  # No auth configured
         if key is None:
             raise HTTPException(status_code=401, detail="Missing API key")
-        if key != self.api_key:
+        if not hmac.compare_digest(key, self.api_key):
             raise HTTPException(status_code=401, detail="Invalid API key")
         return True
     

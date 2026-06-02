@@ -7,8 +7,11 @@ This allows disabling specific tools per MCP server without modifying code.
 
 import json
 import asyncio
+import logging
 import httpx
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Default config directory
 _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "supreme-mcp-tools"
@@ -246,7 +249,8 @@ async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_
                 return []
             finally:
                 await tools_resp.aclose()
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error discovering tools from {server_url}: {e}")
         pass
     return []
 
@@ -291,7 +295,8 @@ def discover_all_tools(
                 return future.result()
         else:
             return asyncio.run(_discover())
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error discovering all tools: {e}")
         return {}
 
 

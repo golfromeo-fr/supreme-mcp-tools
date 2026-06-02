@@ -1648,25 +1648,19 @@ async def stop_indexing(
             collection_name = pid_info.get("collection_name", "unknown")
             workspace_root = pid_info.get("workspace_root", "unknown")
         
-        # 2. Find ALL indexer processes (handles orphans too)
+        # 2. Build kill list from tracked PID + its children only
         indexer_pids = []
-        for proc in psutil.process_iter(['pid', 'cmdline', 'name']):
-            try:
-                cmdline = proc.info.get('cmdline') or []
-                cmdline_str = ' '.join(cmdline)
-                if 'incremental_indexer' in cmdline_str:
-                    indexer_pids.append(proc.info['pid'])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        
-        # If no processes found via psutil, try tracked PID
-        if not indexer_pids and tracked_pid:
+        if tracked_pid:
             try:
                 proc = psutil.Process(tracked_pid)
                 if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
                     indexer_pids.append(tracked_pid)
+                    for child in proc.children(recursive=True):
+                        indexer_pids.append(child.pid)
             except psutil.NoSuchProcess:
                 pass
+            except psutil.AccessDenied:
+                indexer_pids.append(tracked_pid)
         
         if not indexer_pids:
             # Clean up stale PID file

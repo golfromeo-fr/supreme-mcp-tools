@@ -247,7 +247,7 @@ def is_under_allowed_roots(p: Path, allowed_roots: list[Path]) -> bool:
             rr = root.resolve()
         except Exception:
             continue
-        if str(rp).startswith(str(rr)):
+        if rp.is_relative_to(rr):
             return True
     return False
 

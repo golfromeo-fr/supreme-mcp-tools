@@ -23,6 +23,9 @@ Usage in each *_fastmcp.py:
 from __future__ import annotations
 
 import os
+import hmac
+import secrets as _secrets
+import warnings
 from typing import TYPE_CHECKING, Any
 
 # ── Single source of truth for bind host ──────────────────────────────────
@@ -116,9 +119,14 @@ class DualHeaderVerifier(TokenVerifier):
 
     async def verify_token(self, token: str) -> AccessToken | None:
         """Validate token against the static token dict."""
-        if token not in self._tokens:
+        found = None
+        for key, val in self._tokens.items():
+            if hmac.compare_digest(token, key):
+                found = val
+                break
+        if found is None:
             return None
-        info = self._tokens[token]
+        info = found
         return AccessToken(
             token=token,
             client_id=info.get("client_id", "unknown"),
@@ -235,4 +243,9 @@ def _resolve_api_key(name: str, fallback: str | None) -> str:
     # 4. Fallback
     if fallback:
         return fallback
-    return f"{name}-dev-key-set-{name.upper()}_API_KEY"
+    generated = f"{name}-dev-{_secrets.token_hex(16)}"
+    warnings.warn(
+        f"No API key configured for '{name}'. Generated random key: {generated[:12]}...",
+        stacklevel=2,
+    )
+    return generated

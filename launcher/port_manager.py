@@ -108,6 +108,13 @@ class PortManager:
             ptype: ranges[0] for ptype, ranges in self.port_ranges.items()
         }
         self.next_port = self.base_port  # Legacy support
+
+        range_errors = self.validate_ranges()
+        if range_errors:
+            raise ValueError("Port range validation failed: " + "; ".join(range_errors))
+        reserved_errors = self.validate_reserved_ports_in_ranges()
+        if reserved_errors:
+            raise ValueError("Reserved port validation failed: " + "; ".join(reserved_errors))
     
     def _get_range_for_type(self, port_type: str) -> tuple[int, int]:
         """Get the port range for a given port type.

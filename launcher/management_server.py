@@ -6,6 +6,7 @@ This server acts as the central hub for the Flexible Extensibility Framework V3.
 """
 
 import asyncio
+import hmac
 import logging
 import os
 from typing import Any
@@ -146,9 +147,14 @@ class ManagementServer:
         )
         
         # Add CORS middleware
+        _mgmt_port = _get_default_management_port() or 8400
+        _allowed_origins = [
+            f"http://localhost:{_mgmt_port}",
+            f"http://127.0.0.1:{_mgmt_port}",
+        ]
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=_allowed_origins,
             allow_credentials=False,  # Not using cookies; header-based auth only
             allow_methods=["*"],
             allow_headers=["*"],
@@ -170,7 +176,7 @@ class ManagementServer:
         if credentials is None:
             raise HTTPException(status_code=401, detail="Missing API key")
         
-        if credentials.credentials != self.api_key:
+        if not hmac.compare_digest(credentials.credentials, self.api_key):
             raise HTTPException(status_code=401, detail="Invalid API key")
         
         return True
@@ -322,10 +328,14 @@ class ManagementServer:
         ):
             """WebSocket endpoint for real-time event streaming."""
             if self.api_key is not None:
-                auth = websocket.query_params.get("token") or websocket.headers.get("authorization", "")
-                if auth.startswith("Bearer "):
+                auth = websocket.headers.get("authorization", "")
+                if auth.lower().startswith("bearer "):
                     auth = auth[7:]
-                if auth != self.api_key:
+                elif auth.startswith("X-API-Key: "):
+                    auth = auth[10:]
+                else:
+                    auth = websocket.query_params.get("token", "")
+                if not hmac.compare_digest(auth, self.api_key):
                     await websocket.close(code=4001, reason="Unauthorized")
                     return
             

@@ -17,6 +17,8 @@ from urllib.parse import urlparse, parse_qs
 import re
 from contextlib import asynccontextmanager
 
+from tools.shared.utils import is_internal_url
+
 # ============================================================================
 # Port Configuration (from ports.json only)
 # ============================================================================
@@ -100,7 +102,7 @@ def is_under_allowed_roots(p: Path, allowed_roots: list[Path]) -> bool:
             rr = root.resolve()
         except Exception:
             continue
-        if str(rp).startswith(str(rr)):
+        if rp.is_relative_to(rr):
             return True
     return False
 
@@ -113,6 +115,9 @@ async def download_docx_to_temp(url: str, max_size_mb: int = MAX_DOCX_SIZE_MB, h
     if parsed.scheme not in ("http", "https"):
         raise ValueError("Only http/https URLs are allowed for DOCX download")
 
+    if is_internal_url(url):
+        raise ValueError("Cannot download DOCX from internal/private URLs")
+
     default_headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
         "Accept": "*/*",
@@ -121,6 +126,8 @@ async def download_docx_to_temp(url: str, max_size_mb: int = MAX_DOCX_SIZE_MB, h
 
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, headers=merged_headers) as client:
         response = await client.get(url)
+        if is_internal_url(str(response.url)):
+            raise ValueError("DOCX download redirected to internal URL")
         response.raise_for_status()
 
         def write_temp(content_bytes: bytes) -> Path:

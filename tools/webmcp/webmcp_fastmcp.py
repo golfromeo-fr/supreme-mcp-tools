@@ -75,35 +75,12 @@ def get_fetch_cache_hits(params: dict[str, Any]) -> dict[str, Any]:
     hit_ratio = cache_hits / total if total > 0 else 0.0
     return {"cache_hits": cache_hits, "cache_misses": cache_misses, "hit_ratio": round(hit_ratio, 3)}
 
-def _is_internal_url(url: str) -> bool:
-    try:
-        import ipaddress
-        import socket
-        parsed = urlparse(url)
-        hostname = (parsed.hostname or "").lower()
-        internal_hosts = {
-            'localhost', '127.0.0.1', '::1', '0.0.0.0',
-            '169.254.169.254',
-            'metadata.google.internal',
-            'metadata.azure.internal',
-        }
-        if hostname in internal_hosts:
-            return True
-        try:
-            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        except (socket.gaierror, OSError):
-            return True
-        for family, _, _, _, sockaddr in resolved:
-            ip_str = sockaddr[0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-                if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
-                    return True
-            except ValueError:
-                continue
-        return False
-    except Exception:
-        return True
+from tools.shared.utils import is_internal_url as _is_internal_url
+
+# KNOWN LIMITATION: DNS rebinding / TOCTOU — DNS is resolved twice (once here,
+# once by httpx). follow_redirects is limited to max_redirects=5 and the final
+# URL is checked after redirects, but per-redirect validation requires a custom
+# transport which is not yet implemented.
 
 class SimpleCache:
     MAX_SIZE = 1000
@@ -708,8 +685,10 @@ async def post_url(url: str, data: str | None = None, headers: dict | None = Non
     start_time = time.perf_counter()
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, max_redirects=5) as client:
             response = await client.post(url, data=data, headers=headers)
+            if _is_internal_url(str(response.url)):
+                return "Error: Redirected to internal URL"
             response.raise_for_status()
             logger.info(f"Successfully posted to URL: {url}")
             metadata_lines = ["## POST URL Results", f"- URL: {url}", f"- Status Code: {response.status_code}", f"- Content Type: {response.headers.get('content-type', 'unknown')}", f"- Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}"]
@@ -826,8 +805,11 @@ async def fetch_url(url: str, timeout: float = 30.0, max_length: int = 50000, st
     try:
         _cache.cleanup_expired()
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects, headers=merged_headers, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects, headers=merged_headers, max_redirects=5, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)) as client:
             response = await client.get(url)
+            if _is_internal_url(str(response.url)):
+                webmcp_metrics["fetch_errors"] += 1
+                return "Error: Redirected to internal URL"
             response.raise_for_status()
 
             content_size = len(response.content)

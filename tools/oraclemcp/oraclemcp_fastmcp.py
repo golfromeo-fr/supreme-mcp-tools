@@ -12,6 +12,7 @@ import logging
 import time
 import json
 import re
+import threading
 from contextlib import asynccontextmanager
 from typing import Any
 from pathlib import Path
@@ -138,8 +139,9 @@ def reset_connections(params: dict[str, Any]) -> dict[str, Any]:
 def clear_cache(params: dict[str, Any]) -> dict[str, Any]:
     """Action: Clear schema cache."""
     global table_columns_cache, schema_cache
-    table_columns_cache = {}
-    schema_cache = {}
+    with _db_lock:
+        table_columns_cache = {}
+        schema_cache = {}
     logger.info("[oraclemcp] Schema cache cleared")
     return {
         "success": True,
@@ -165,6 +167,31 @@ def get_pool_config() -> dict:
 # Database Connection Management
 # ============================================================================
 
+# Thread-safety guard for the shared connection and caches.
+#
+# oraclemcp runs behind FastMCP which may serve concurrent requests via
+# asyncio.to_thread.  A single global `connection` and two global dicts
+# (`schema_cache`, `table_columns_cache`) are shared across those threads.
+# Without locking, concurrent cursor operations on one Oracle connection
+# produce garbled results or InterfaceError.
+#
+# The lock serialises:
+#   - connection check / reconnect / reset-to-None  (get_db_connection)
+#   - cache writes (fetch_schema_from_cache, clear_cache)
+#
+# Known limitations (safe to ship, fix when Oracle is available for CI):
+#   - Serialises ALL DB access through one lock — limits throughput under
+#     heavy concurrency.  Replace with `oracledb.SessionPool` (the env
+#     vars ORACLE_MIN/MAX_CONNECTIONS are already declared in
+#     get_pool_config() but unused) to allow parallel queries.
+#   - Lock scope covers cursor creation + health-check query ("SELECT 1
+#     FROM DUAL").  Ideally only the global-state mutation should be
+#     locked; the cursor work should happen outside.  Tightening the
+#     scope requires refactoring the function contract and is deferred
+#     until we can test against a live Oracle instance.
+#   - `metrics` dict is intentionally NOT locked — it is only used for
+#     counters and a stale read is acceptable.
+_db_lock = threading.Lock()
 connection = None
 schema_cache = {}
 table_columns_cache = {}
@@ -173,35 +200,36 @@ table_columns_cache = {}
 def get_db_connection():
     """Get database connection with automatic reconnection."""
     global connection
-    try:
-        if connection is None:
-            raise oracledb.DatabaseError("Connection is not established")
-        cursor = connection.cursor()
-        cursor.execute("SELECT 1 FROM DUAL")
-    except oracledb.DatabaseError:
+    with _db_lock:
         try:
-            user_id = os.getenv('USERID')
-            if not user_id:
-                raise OSError("USERID environment variable not set")
+            if connection is None:
+                raise oracledb.DatabaseError("Connection is not established")
+            cursor = connection.cursor()
+            cursor.execute("SELECT 1 FROM DUAL")
+        except oracledb.DatabaseError:
+            try:
+                user_id = os.getenv('USERID')
+                if not user_id:
+                    raise OSError("USERID environment variable not set")
 
-            login, password = user_id.split('/')
+                login, password = user_id.split('/')
 
-            db_host = os.getenv('DB_HOST')
-            db_port = int(os.getenv('DB_PORT') or 1521)
-            db_service_name = os.getenv('DB_SERVICE_NAME')
-            if not db_host or not db_port or not db_service_name:
-                raise OSError("Database connection environment variables not set")
+                db_host = os.getenv('DB_HOST')
+                db_port = int(os.getenv('DB_PORT') or 1521)
+                db_service_name = os.getenv('DB_SERVICE_NAME')
+                if not db_host or not db_port or not db_service_name:
+                    raise OSError("Database connection environment variables not set")
 
-            dsn_tns = oracledb.makedsn(db_host, db_port, service_name=db_service_name)
-            connection = oracledb.connect(user=login, password=password, dsn=dsn_tns)
-            metrics["connection_count"] += 1
-            logger.info("Database connection re-established successfully.")
-        except Exception as e:
-            logger.error(f"Error re-establishing database connection: {e}")
-            metrics["connection_errors"] += 1
-            connection = None
-            raise
-    return connection
+                dsn_tns = oracledb.makedsn(db_host, db_port, service_name=db_service_name)
+                connection = oracledb.connect(user=login, password=password, dsn=dsn_tns)
+                metrics["connection_count"] += 1
+                logger.info("Database connection re-established successfully.")
+            except Exception as e:
+                logger.error(f"Error re-establishing database connection: {e}")
+                metrics["connection_errors"] += 1
+                connection = None
+                raise
+        return connection
 
 
 def fetch_schema_from_cache(table_name):
@@ -215,44 +243,46 @@ def fetch_schema_from_cache(table_name):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT utc.column_name, utc.data_type, utc.data_length, utc.data_precision, utc.data_scale, utc.nullable, utc.data_default, ucc.comments
                 FROM user_tab_columns utc
                 LEFT JOIN user_col_comments ucc
                 ON utc.table_name = ucc.table_name AND utc.column_name = ucc.column_name
-                WHERE utc.table_name = '{table_name}'
-            """)
+                WHERE utc.table_name = :table_name
+            """, {"table_name": table_name})
             columns = cursor.fetchall()
 
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT cols.column_name, cons.constraint_type, cons.search_condition
                 FROM user_constraints cons, user_cons_columns cols
-                WHERE cols.table_name = '{table_name}'
+                WHERE cols.table_name = :table_name
                   AND cons.constraint_type IN ('P', 'R', 'C', 'U')
                   AND cons.constraint_name = cols.constraint_name
-            """)
+            """, {"table_name": table_name})
             constraints = cursor.fetchall()
 
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT a.constraint_name, a.column_name, c_pk.table_name AS referenced_table, b.column_name AS referenced_column
                 FROM user_cons_columns a
                 JOIN user_constraints c ON a.constraint_name = c.constraint_name
                 JOIN user_constraints c_pk ON c.r_constraint_name = c_pk.constraint_name
                 JOIN user_cons_columns b ON c_pk.constraint_name = b.constraint_name AND a.position = b.position
-                WHERE c.constraint_type = 'R' AND a.table_name = '{table_name}'
-            """)
+                WHERE c.constraint_type = 'R' AND a.table_name = :table_name
+            """, {"table_name": table_name})
             foreign_keys = cursor.fetchall()
 
-            schema_cache[table_name] = {
-                "columns": columns,
-                "constraints": constraints,
-                "foreign_keys": foreign_keys
-            }
+            with _db_lock:
+                schema_cache[table_name] = {
+                    "columns": columns,
+                    "constraints": constraints,
+                    "foreign_keys": foreign_keys
+                }
             metrics["schema_lookups"] += 1
             logger.info(f"Schema details for table {table_name} cached successfully.")
         except Exception as e:
             logger.error(f"Error fetching schema details for table {table_name}: {e}")
-            connection = None
+            with _db_lock:
+                connection = None
             return "Error fetching schema details"
 
     return schema_cache[table_name]
