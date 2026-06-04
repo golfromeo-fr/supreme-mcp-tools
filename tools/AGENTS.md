@@ -50,3 +50,15 @@ They are **never** scanned by the tool discovery system. Importing from them wor
 The canonical tool server filename is `<name>_fastmcp.py`. The discovery system strips the `_fastmcp` suffix to derive the tool name (e.g. `webmcp_fastmcp.py` → tool name `webmcp`).
 
 When both `_fastmcp.py` and a non-suffixed `.py` exist, the `_fastmcp` variant wins.
+
+## Auto-use policy integrations
+
+A tool can ship an auto-use policy as repo-local Markdown files in its directory. The support module (named `<tool>_autouse.py`) should:
+
+1. Register MCP shortcut tools on the shared `FastMCP` instance that read repo-local `.md` files.
+2. Patch the always-injected prompt tool (if any) to prepend a pointer that teaches the LLM the names of the new tools.
+3. Have hard-coded inline fallbacks in case the files are unreadable so the LLM's flow is never broken.
+
+For memorymcp:
+- `tools/memorymcp/auto_use_policy.md` — full policy
+- `tools/memorymcp/auto_use_cheatsheet.md` — short cheatsheet
