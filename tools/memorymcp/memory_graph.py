@@ -15,7 +15,7 @@ import json
 from datetime import datetime, timezone
 
 from memory_core import (
-    mcp, logger, qdrant_client,
+    mcp, logger, vector_store,
     COLLECTION_NAME,
     get_now_iso, scroll_all,
 )
@@ -50,14 +50,13 @@ async def createMemoryEdge(
     Returns:
         Confirmation message
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
         if from_id == to_id:
-            results = qdrant_client.retrieve(
-                collection_name=COLLECTION_NAME,
-                ids=[from_id],
+            results = vector_store.retrieve(
+                COLLECTION_NAME, [from_id],
                 with_payload=True,
             )
             if not results:
@@ -66,17 +65,16 @@ async def createMemoryEdge(
             edge = {"to": to_id, "relation": relation, "label": label}
             current_edges = src.payload.get("edges", [])
             if edge not in current_edges:
-                qdrant_client.set_payload(
-                    collection_name=COLLECTION_NAME,
-                    payload={"edges": current_edges + [edge]},
-                    points=[from_id],
+                vector_store.set_payload(
+                    COLLECTION_NAME,
+                    {"edges": current_edges + [edge]},
+                    ids=[from_id],
                 )
             return f"Created self-loop edge: {from_id[:8]} --[{relation}]--> {from_id[:8]}"
 
         # Verify both memories exist
-        results = qdrant_client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[from_id, to_id],
+        results = vector_store.retrieve(
+            COLLECTION_NAME, [from_id, to_id],
             with_payload=True,
         )
         if len(results) < 2:
@@ -89,20 +87,20 @@ async def createMemoryEdge(
         src = next(r for r in results if str(r.id) == from_id)
         current_edges = src.payload.get("edges", [])
         if edge not in current_edges:
-            qdrant_client.set_payload(
-                collection_name=COLLECTION_NAME,
-                payload={"edges": current_edges + [edge]},
-                points=[from_id],
+            vector_store.set_payload(
+                COLLECTION_NAME,
+                {"edges": current_edges + [edge]},
+                ids=[from_id],
             )
 
         rev_edge = {"to": from_id, "relation": f"back:{relation}", "label": label}
         dst = next(r for r in results if str(r.id) == to_id)
         current_dst_edges = dst.payload.get("edges", [])
         if rev_edge not in current_dst_edges:
-            qdrant_client.set_payload(
-                collection_name=COLLECTION_NAME,
-                payload={"edges": current_dst_edges + [rev_edge]},
-                points=[to_id],
+            vector_store.set_payload(
+                COLLECTION_NAME,
+                {"edges": current_dst_edges + [rev_edge]},
+                ids=[to_id],
             )
 
         return f"Created edge: {from_id[:8]} --[{relation}]--> {to_id[:8]}"
@@ -132,7 +130,7 @@ async def getMemoryGraph(
     Returns:
         Graph visualization of connected memories
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
@@ -148,9 +146,8 @@ async def getMemoryGraph(
                 continue
             visited.add(current_id)
 
-            results = qdrant_client.retrieve(
-                collection_name=COLLECTION_NAME,
-                ids=[current_id],
+            results = vector_store.retrieve(
+                COLLECTION_NAME, [current_id],
                 with_payload=True,
             )
             if not results:
@@ -221,7 +218,7 @@ async def exportGraphAsMarkdown(
     Returns:
         Markdown document with memory content and Mermaid graph
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
@@ -337,7 +334,7 @@ async def memoryTypeChart(
     Returns:
         Type distribution chart
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:

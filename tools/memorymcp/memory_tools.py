@@ -27,15 +27,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from memory_core import (
-    mcp, logger, qdrant_client, pg_store,
+    mcp, logger, vector_store, sql_store,
     COLLECTION_NAME, SCRIPT_DIR,
     generate_embedding, get_now_iso, get_memory_id,
     scroll_all, parse_memory_type,
     memory_item_to_payload, payload_to_memory_hit,
     MemoryItem, RetentionPolicy, ScoringWeights, score_relevance,
     redact_sensitive_text, check_sensitivity,
-    Filter, FieldCondition, MatchValue,
 )
+from shared.store_models import Filter, FieldCondition, MatchValue, MatchContains, PointStruct
 
 # For FEF V3 extensions
 try:
@@ -88,7 +88,7 @@ async def upsertMemory(
     """
     logger.info(f"upsertMemory: {'update' if memory_id else 'create'}, type={memory_type}, text_len={len(text)}")
 
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     # Check sensitivity and redact if needed
@@ -128,19 +128,15 @@ async def upsertMemory(
 
     # Upsert to Qdrant
     try:
-        qdrant_client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=[{
-                "id": memory_id,
-                "vector": embedding,
-                "payload": payload,
-            }]
+        vector_store.upsert(
+            COLLECTION_NAME,
+            [PointStruct(id=memory_id, vector=embedding, payload=payload)]
         )
         logger.info(f"{'Updated' if is_update else 'Stored'} memory {memory_id}")
 
-        # Also store in PostgreSQL for metadata/dedup (if available)
-        if pg_store.is_available():
-            actual_id = pg_store.upsert_memory(
+        # Also store in SQL backend for metadata/dedup (if available)
+        if sql_store.is_available:
+            actual_id = sql_store.upsert_memory(
                 memory_id=memory_id,
                 text=text,
                 memory_type=memory_type,
@@ -153,7 +149,7 @@ async def upsertMemory(
                 retention_policy=retention_policy,
             )
             if actual_id != memory_id:
-                logger.info(f"PG dedup: remapping {memory_id} -> {actual_id}")
+                logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
                 return actual_id
 
         return memory_id
@@ -191,7 +187,7 @@ async def queryMemory(
     """
     logger.info(f"queryMemory: query={query[:50]}..., k={k}")
 
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     import asyncio
@@ -207,18 +203,17 @@ async def queryMemory(
         conditions.append(FieldCondition(key="agent_id", match=MatchValue(value=agent_id)))
     if tags:
         for tag in tags:
-            conditions.append(FieldCondition(key="tags", match=MatchValue(value=tag)))
+            conditions.append(FieldCondition(key="tags", match=MatchContains(value=tag)))
 
     search_filter = Filter(must=conditions) if conditions else None
 
     # Perform search
     try:
-        results = qdrant_client.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_embedding,
+        results = vector_store.query_dense(
+            COLLECTION_NAME,
+            query_embedding,
             limit=k,
-            query_filter=search_filter,
-            with_payload=True,
+            filter=search_filter,
         )
 
         hits = []
@@ -230,7 +225,7 @@ async def queryMemory(
         now_iso = get_now_iso()
         usage_updates: dict[int, list[str]] = {}
 
-        for result in results.points:
+        for result in results:
             payload = result.payload
             payload["id"] = str(result.id)
 
@@ -244,10 +239,10 @@ async def queryMemory(
             usage_updates.setdefault(new_usage, []).append(str(result.id))
 
         for new_usage, point_ids in usage_updates.items():
-            qdrant_client.set_payload(
-                collection_name=COLLECTION_NAME,
-                payload={"last_accessed": now_iso, "usage_count": new_usage},
-                points=point_ids,
+            vector_store.set_payload(
+                COLLECTION_NAME,
+                {"last_accessed": now_iso, "usage_count": new_usage},
+                ids=point_ids,
             )
 
         # Format output
@@ -282,15 +277,15 @@ async def getMemory(memory_id: str) -> str:
     Returns:
         Full memory details
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
-        pg_mem = pg_store.get_memory(memory_id) if pg_store.is_available() else None
+        pg_mem = sql_store.get_memory(memory_id) if sql_store.is_available else None
 
-        results = qdrant_client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[memory_id],
+        results = vector_store.retrieve(
+            COLLECTION_NAME,
+            [memory_id],
             with_payload=True,
         )
 
@@ -303,13 +298,13 @@ async def getMemory(memory_id: str) -> str:
         # Update usage
         new_usage = (payload.get("usage_count", 0)) + 1
         now_iso = get_now_iso()
-        qdrant_client.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={
+        vector_store.set_payload(
+            COLLECTION_NAME,
+            {
                 "last_accessed": now_iso,
                 "usage_count": new_usage,
             },
-            points=[memory_id],
+            ids=[memory_id],
         )
 
         payload["usage_count"] = new_usage
@@ -365,16 +360,16 @@ async def deleteMemory(memory_id: str) -> str:
     Returns:
         Success or error message
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
-        qdrant_client.delete(
-            collection_name=COLLECTION_NAME,
-            points_selector=[memory_id],
+        vector_store.delete(
+            COLLECTION_NAME,
+            ids=[memory_id],
         )
-        if pg_store.is_available():
-            pg_store.delete_memory(memory_id)
+        if sql_store.is_available:
+            sql_store.delete_memory(memory_id)
         logger.info(f"Deleted memory {memory_id}")
         return f"Deleted memory: {memory_id}"
 
@@ -433,7 +428,7 @@ async def decayOrExpire(
     Returns:
         Summary of cleanup operation
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
@@ -489,12 +484,12 @@ async def decayOrExpire(
             return f"Would delete {len(to_delete)} memories (ttl={ttl_days}d, min_usage={min_usage_count})\nIDs: {to_delete[:10]}{'...' if len(to_delete) > 10 else ''}"
         else:
             if to_delete:
-                qdrant_client.delete(
-                    collection_name=COLLECTION_NAME,
-                    points_selector=to_delete,
+                vector_store.delete(
+                    COLLECTION_NAME,
+                    ids=to_delete,
                 )
-            pg_deleted = pg_store.decay_memories(ttl_days, min_usage_count) if pg_store.is_available() else 0
-            return f"Deleted {len(to_delete)} expired from Qdrant, {pg_deleted} from PostgreSQL"
+            pg_deleted = sql_store.decay_memories(ttl_days, min_usage_count) if sql_store.is_available else 0
+            return f"Deleted {len(to_delete)} expired from Qdrant, {pg_deleted} from SQL backend"
 
     except Exception as e:
         logger.error(f"Decay/expire failed: {e}")
@@ -525,7 +520,7 @@ async def attachProvenance(
     Returns:
         Success or error message
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
@@ -538,9 +533,9 @@ async def attachProvenance(
         }
 
         # Get current payload
-        results = qdrant_client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[memory_id],
+        results = vector_store.retrieve(
+            COLLECTION_NAME,
+            [memory_id],
             with_payload=True,
         )
 
@@ -556,10 +551,10 @@ async def attachProvenance(
         else:
             current_provenance = {"history": [provenance]}
 
-        qdrant_client.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={"provenance": current_provenance},
-            points=[memory_id],
+        vector_store.set_payload(
+            COLLECTION_NAME,
+            {"provenance": current_provenance},
+            ids=[memory_id],
         )
 
         return f"Added provenance to memory {memory_id}"
@@ -611,12 +606,12 @@ async def getMemoryMetrics() -> str:
     Returns:
         Formatted metrics report
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
         # Get collection info
-        info = qdrant_client.get_collection(COLLECTION_NAME)
+        info = vector_store.get_collection(COLLECTION_NAME)
         total = info.points_count
 
         # Scroll for payload stats
@@ -636,7 +631,7 @@ async def getMemoryMetrics() -> str:
             by_agent[agent] = by_agent.get(agent, 0) + 1
             total_usage += usage
 
-        pg_stats = pg_store.get_metrics() if pg_store.is_available() else {}
+        sql_stats = sql_store.get_metrics() if sql_store.is_available else {}
 
         output = f"""Memory System Metrics
 ====================
@@ -776,7 +771,7 @@ async def reindexMemory(
     Returns:
         Summary of reindexing operation
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
@@ -788,9 +783,8 @@ async def reindexMemory(
         test_embedding = model.encode(["test"])[0]
         new_dim = len(test_embedding)
 
-        from qdrant_client.models import VectorParams, Distance
-        collection_info = qdrant_client.get_collection(COLLECTION_NAME)
-        current_dim = collection_info.config.params.vectors.size
+        collection_info = vector_store.get_collection(COLLECTION_NAME)
+        current_dim = collection_info.dim
 
         if new_dim != current_dim:
             return (
@@ -818,16 +812,16 @@ async def reindexMemory(
                     updated_payload = dict(point.payload)
                     updated_payload["embedding_model"] = new_model
                     updated_payload["reindexed_at"] = get_now_iso()
-                    points_to_update.append({
-                        "id": str(point.id),
-                        "vector": new_embedding,
-                        "payload": updated_payload,
-                    })
+                    points_to_update.append(PointStruct(
+                        id=str(point.id),
+                        vector=new_embedding,
+                        payload=updated_payload,
+                    ))
 
             if points_to_update:
-                qdrant_client.upsert(
-                    collection_name=COLLECTION_NAME,
-                    points=points_to_update,
+                vector_store.upsert(
+                    COLLECTION_NAME,
+                    points_to_update,
                 )
 
             logger.info(f"Reindexed batch {i // batch_size + 1}/{(total + batch_size - 1) // batch_size}")
@@ -857,13 +851,13 @@ async def auditTrail(
     Returns:
         Audit trail information
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
-        results = qdrant_client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[memory_id],
+        results = vector_store.retrieve(
+            COLLECTION_NAME,
+            [memory_id],
             with_payload=True,
         )
 
@@ -923,7 +917,7 @@ async def mergeDuplicates(
     Returns:
         Summary of merge operation
     """
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized"
 
     try:
@@ -972,9 +966,9 @@ async def mergeDuplicates(
             return f"Would merge {merged_count} duplicate pairs\nWould delete {len(to_delete)} memories"
         else:
             if to_delete:
-                qdrant_client.delete(
-                    collection_name=COLLECTION_NAME,
-                    points_selector=list(set(to_delete)),
+                vector_store.delete(
+                    COLLECTION_NAME,
+                    ids=list(set(to_delete)),
                 )
             return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories"
 
@@ -1004,7 +998,7 @@ def setup_fef_v3(registry=None):
     def get_memory_stats(params: dict) -> dict:
         """Data source: Get memory system statistics."""
         try:
-            info = qdrant_client.get_collection(COLLECTION_NAME)
+            info = vector_store.get_collection(COLLECTION_NAME)
             total = info.points_count
             return {
                 "collection": COLLECTION_NAME,

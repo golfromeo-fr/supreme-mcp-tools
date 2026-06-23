@@ -8,6 +8,10 @@ Works alongside Qdrant (vectors) to provide:
 - Easy backup via pg_dump
 
 Optional: if PostgreSQL is not configured, gracefully falls back to Qdrant-only mode.
+
+Note: This module is being superseded by sql_store.py + impls/postgres_sql.py.
+Use ``from shared.sql_store import get_sql_store`` for new code.
+This module remains as a backward-compat layer during the migration (Phase 1).
 """
 
 import os
@@ -17,6 +21,8 @@ import hashlib
 import threading
 from typing import Any
 from datetime import datetime, timezone
+
+from shared.hashing import text_hash
 
 logger = logging.getLogger(__name__)
 
@@ -165,8 +171,14 @@ def _ensure_schema(conn) -> None:
 
 
 def text_hash(text: str) -> str:
-    """Deterministic hash for deduplication."""
-    return hashlib.sha256(text.strip().lower().encode()).hexdigest()[:40]
+    """Deterministic hash for deduplication.
+
+    .. deprecated:: Phase 1
+        Import from ``shared.hashing`` instead. This function is kept
+        as a re-export for backward compatibility.
+    """
+    from shared.hashing import text_hash as _text_hash
+    return _text_hash(text)
 
 
 def upsert_memory(

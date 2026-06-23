@@ -41,8 +41,8 @@ else:
     from .sparse_vector_gen import generate_sparse_vector
     from .local_embeddings import generate_local_embeddings
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, Distance, VectorParams, SparseVector, SparseVectorParams, SparseIndexParams
+from shared.store_models import PointStruct as NeutralPointStruct, SparseVector as NeutralSparseVector, Filter, FieldCondition, MatchText
+from shared.vector_store import get_vector_store
 
 # Load configuration
 script_dir = Path(__file__).parent
@@ -181,25 +181,22 @@ def compute_file_hash(file_path: Path) -> str:
         return ""
 
 
-def get_qdrant_files(collection_name: str, workspace_root: Path) -> set[str]:
-    """Get set of files already in Qdrant."""
+def get_indexed_files(collection_name: str, workspace_root: Path, vector_store) -> set[str]:
+    """Get set of files already indexed."""
     try:
-        qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-
-        collections = qdrant_client.get_collections().collections
-        if not any(c.name == collection_name for c in collections):
+        collections = vector_store.list_collections()
+        if collection_name not in collections:
             return set()
 
         files = set()
         offset = None
 
         while True:
-            records, offset = qdrant_client.scroll(
-                collection_name=collection_name,
+            records, offset = vector_store.scroll(
+                collection_name,
                 limit=100,
                 offset=offset,
                 with_payload=True,
-                with_vectors=False
             )
 
             if not records:
@@ -223,7 +220,7 @@ def get_qdrant_files(collection_name: str, workspace_root: Path) -> set[str]:
         return files
 
     except Exception as e:
-        logger.warning(f"Could not query Qdrant: {e}")
+        logger.warning(f"Could not query vector store: {e}")
         return set()
 
 
@@ -487,7 +484,7 @@ async def get_embeddings(texts: list[str]) -> list[list[float]]:
 
 
 async def index_file(file_path: Path, workspace_root: Path, collection_name: str,
-                    qdrant_client: QdrantClient, metadata_store: MetadataStore) -> int:
+                    vector_store, metadata_store: MetadataStore) -> int:
     """Index a single file. Returns number of chunks indexed."""
     try:
         rel_path = str(file_path.relative_to(workspace_root))
@@ -610,49 +607,75 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
 
             # Prepare vector data based on mode
             if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
-                # Sparse-only mode: use named sparse vectors
-                vector_data = {
-                    "sparse": SparseVector(
-                        indices=list(sparse_vectors[i].keys()),
-                        values=list(sparse_vectors[i].values())
-                    )
-                }
+                # Sparse-only mode
+                sparse_vec = NeutralSparseVector(
+                    indices=list(sparse_vectors[i].keys()),
+                    values=list(sparse_vectors[i].values())
+                )
+                points.append(NeutralPointStruct(
+                    id=point_id,
+                    vector=[],  # empty dense — sparse-only collection
+                    sparse_vector=sparse_vec,
+                    payload={
+                        'filePath': str(file_path),
+                        'codeChunk': chunk['code_chunk'],
+                        'contentHash': file_hash,
+                        'indexedAt': datetime.now(timezone.utc).isoformat(),
+                        'fileMtime': file_mtime,
+                        'fileSize': file_size,
+                        'chunkIndex': i,
+                        'startLine': chunk.get('start_line', 1),
+                        'endLine': chunk.get('end_line', 1),
+                        'fileType': chunk.get('file_type', 'unknown'),
+                        'functionName': chunk.get('function_name', '')
+                    }
+                ))
             elif USE_SPARSE_VECTORS and embeddings:
                 # Hybrid mode: both dense and sparse
-                vector_data = {
-                    "dense": embeddings[i],
-                    "sparse": SparseVector(
-                        indices=list(sparse_vectors[i].keys()),
-                        values=list(sparse_vectors[i].values())
-                    )
-                }
+                sparse_vec = NeutralSparseVector(
+                    indices=list(sparse_vectors[i].keys()),
+                    values=list(sparse_vectors[i].values())
+                )
+                points.append(NeutralPointStruct(
+                    id=point_id,
+                    vector=embeddings[i],
+                    sparse_vector=sparse_vec,
+                    payload={
+                        'filePath': str(file_path),
+                        'codeChunk': chunk['code_chunk'],
+                        'contentHash': file_hash,
+                        'indexedAt': datetime.now(timezone.utc).isoformat(),
+                        'fileMtime': file_mtime,
+                        'fileSize': file_size,
+                        'chunkIndex': i,
+                        'startLine': chunk.get('start_line', 1),
+                        'endLine': chunk.get('end_line', 1),
+                        'fileType': chunk.get('file_type', 'unknown'),
+                        'functionName': chunk.get('function_name', '')
+                    }
+                ))
             else:
                 # Dense-only mode (legacy)
-                vector_data = embeddings[i]
+                points.append(NeutralPointStruct(
+                    id=point_id,
+                    vector=embeddings[i],
+                    payload={
+                        'filePath': str(file_path),
+                        'codeChunk': chunk['code_chunk'],
+                        'contentHash': file_hash,
+                        'indexedAt': datetime.now(timezone.utc).isoformat(),
+                        'fileMtime': file_mtime,
+                        'fileSize': file_size,
+                        'chunkIndex': i,
+                        'startLine': chunk.get('start_line', 1),
+                        'endLine': chunk.get('end_line', 1),
+                        'fileType': chunk.get('file_type', 'unknown'),
+                        'functionName': chunk.get('function_name', '')
+                    }
+                ))
 
-            points.append(PointStruct(
-                id=point_id,
-                vector=vector_data,
-                payload={
-                    'filePath': str(file_path),
-                    'codeChunk': chunk['code_chunk'],
-                    'contentHash': file_hash,
-                    'indexedAt': datetime.now(timezone.utc).isoformat(),
-                    'fileMtime': file_mtime,
-                    'fileSize': file_size,
-                    'chunkIndex': i,
-                    'startLine': chunk.get('start_line', 1),
-                    'endLine': chunk.get('end_line', 1),
-                    'fileType': chunk.get('file_type', 'unknown'),
-                    'functionName': chunk.get('function_name', '')
-                }
-            ))
-
-        # Upsert to Qdrant
-        qdrant_client.upsert(
-            collection_name=collection_name,
-            points=points
-        )
+        # Upsert to vector store
+        vector_store.upsert(collection_name, points)
 
         # Update metadata
         metadata_store.update_file_metadata(rel_path, file_mtime, file_size, file_hash, len(points))
@@ -666,21 +689,19 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
 
 
 def remove_stale_files(stale_files: list[str], collection_name: str,
-                      qdrant_client: QdrantClient, metadata_store: MetadataStore):
-    """Remove stale files from Qdrant."""
+                      vector_store, metadata_store: MetadataStore):
+    """Remove stale files from the vector store."""
     if not stale_files:
         return
 
-    logger.info(f"Removing {len(stale_files)} stale files from Qdrant...")
+    logger.info(f"Removing {len(stale_files)} stale files...")
 
     for rel_path in stale_files:
         try:
             # Delete all points for this file
-            from qdrant_client.models import Filter, FieldCondition, MatchText
-
-            qdrant_client.delete(
-                collection_name=collection_name,
-                points_selector=Filter(
+            vector_store.delete(
+                collection_name,
+                filter=Filter(
                     must=[
                         FieldCondition(
                             key='filePath',
@@ -758,60 +779,47 @@ def main():
     metadata_store = MetadataStore(metadata_file)
     logger.info("   ✓ Metadata store ready")
 
-    logger.info("🔧 Connecting to Qdrant...")
-    qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-    logger.info(f"   ✓ Connected to {QDRANT_HOST}:{QDRANT_PORT}")
+    logger.info("🔧 Initializing vector store...")
+    vector_store = get_vector_store()
+    if vector_store is None:
+        logger.error("Could not initialize vector store. Check QDRANT_HOST and QDRANT_PORT environment variables.")
+        sys.exit(1)
+    logger.info(f"   ✓ Vector store ready")
 
     # Check/create collection with correct vector configuration
-    logger.info("📊 Checking Qdrant collection...")
+    logger.info("📊 Checking collection...")
     try:
-        qdrant_client.get_collection(args.collection)
+        vector_store.get_collection(args.collection)
         logger.info(f"   ✓ Collection '{args.collection}' exists")
     except Exception as e:
         if "Not found" in str(e) or "doesn't exist" in str(e):
             # Determine vector configuration based on mode
             if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
                 logger.info(f"   Creating SPARSE-ONLY collection '{args.collection}'...")
-                qdrant_client.create_collection(
-                    collection_name=args.collection,
-                    vectors_config={},  # Empty for sparse-only
-                    sparse_vectors_config={
-                        "sparse": SparseVectorParams(
-                            index=SparseIndexParams()
-                        )
-                    }
+                vector_store.ensure_collection(
+                    args.collection,
+                    dense_dim=None,
+                    sparse=True,
                 )
             elif USE_SPARSE_VECTORS:
                 logger.info(f"   Creating HYBRID collection '{args.collection}' (dense + sparse)...")
                 logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings with {EMBEDDING_DIMENSIONS} dimensions")
-                qdrant_client.create_collection(
-                    collection_name=args.collection,
-                    vectors_config={
-                        "dense": VectorParams(
-                            size=EMBEDDING_DIMENSIONS,
-                            distance=Distance.COSINE
-                        )
-                    },
-                    sparse_vectors_config={
-                        "sparse": SparseVectorParams(
-                            index=SparseIndexParams()
-                        )
-                    }
+                vector_store.ensure_collection(
+                    args.collection,
+                    dense_dim=EMBEDDING_DIMENSIONS,
+                    sparse=True,
                 )
             else:
                 logger.info(f"   Creating DENSE-ONLY collection '{args.collection}' with {EMBEDDING_DIMENSIONS} dimensions...")
                 logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings")
-                qdrant_client.create_collection(
-                    collection_name=args.collection,
-                    vectors_config=VectorParams(
-                        size=EMBEDDING_DIMENSIONS,
-                        distance=Distance.COSINE
-                    )
+                vector_store.ensure_collection(
+                    args.collection,
+                    dense_dim=EMBEDDING_DIMENSIONS,
+                    sparse=False,
                 )
             logger.info(f"   ✓ Collection '{args.collection}' created successfully")
 
             # Store collection metadata for search-time validation
-            from qdrant_client.models import PointStruct
             collection_meta = {
                 "embedding_provider": EMBEDDING_PROVIDER,
                 "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
@@ -821,22 +829,22 @@ def main():
             }
             logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
 
-            meta_point = PointStruct(
+            meta_point = NeutralPointStruct(
                 id="__collection_metadata__",
-                vector={},  # No vectors for metadata point
+                vector=[],  # No vectors for metadata point
                 payload={**collection_meta, "_is_metadata": True}
             )
             try:
-                qdrant_client.upsert(collection_name=args.collection, points=[meta_point])
+                vector_store.upsert(args.collection, [meta_point])
             except Exception as meta_e:
                 logger.warning(f"   Could not store collection metadata: {meta_e}")
         else:
             logger.error(f"   ✗ Error checking collection: {e}")
             raise
 
-    # Get Qdrant files
-    qdrant_files = get_qdrant_files(args.collection, workspace_path)
-    logger.info(f"   Files in Qdrant: {len(qdrant_files)}")
+    # Get already-indexed files
+    qdrant_files = get_indexed_files(args.collection, workspace_path, vector_store)
+    logger.info(f"   Files indexed: {len(qdrant_files)}")
     logger.info("")
 
     # Categorize files
@@ -880,7 +888,7 @@ def main():
             file_start = time.time()
             rel_path = file_path.relative_to(workspace_path)
             try:
-                chunks = await index_file(file_path, workspace_path, args.collection, qdrant_client, metadata_store)
+                chunks = await index_file(file_path, workspace_path, args.collection, vector_store, metadata_store)
                 return chunks, time.time() - file_start, rel_path
             except Exception as e:
                 logger.error(f"Error indexing {rel_path}: {e}")
@@ -926,7 +934,7 @@ def main():
 
     # Remove stale files
     if categories['stale']:
-        remove_stale_files(categories['stale'], args.collection, qdrant_client, metadata_store)
+        remove_stale_files(categories['stale'], args.collection, vector_store, metadata_store)
         logger.info("")
 
     # Save metadata

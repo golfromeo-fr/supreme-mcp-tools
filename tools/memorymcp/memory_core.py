@@ -6,13 +6,16 @@ This module contains:
 - Global imports and dependency checking
 - Logging configuration
 - .env loading from root
-- Qdrant and PostgreSQL client initialization
+- Backend initialization (via SqlStore + VectorStore ABCs)
 - Local embedding model management
 - Port configuration
 - FastMCP instance creation
 - Core utility functions (get_now_iso, get_memory_id, scroll_all, etc.)
 
 This is imported by all other memorymcp modules.
+
+Phase 5 cleanup: removed direct pg_store / qdrant_client references.
+Use get_sql_store() and get_vector_store() from the shared ABCs.
 """
 
 import sys
@@ -60,7 +63,8 @@ from shared.relevance_scorer import (
     ScoringWeights, score_relevance, compute_recency_decay, compute_usage_boost,
 )
 from shared.pii_redactor import redact_sensitive_text, check_sensitivity, get_redactor
-from shared import pg_store
+from shared.sql_store import get_sql_store
+from shared.vector_store import get_vector_store
 
 # ============================================================================
 # Logging Configuration
@@ -94,44 +98,35 @@ TOOL_NAME = "memorymcp"
 COLLECTION_NAME = os.getenv("MEMORY_COLLECTION", "memory-store")
 
 # ============================================================================
-# Qdrant Connection
+# Backend Initialization (Phase 2/3 abstraction)
 # ============================================================================
 
-qdrant_client = None
-try:
-    qdrant_host = os.getenv('QDRANT_HOST', 'qdrant')
-    qdrant_port = int(os.getenv('QDRANT_PORT', '6333'))
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
-
-    qdrant_client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=30)
-    logger.info(f"Qdrant client connected to {qdrant_host}:{qdrant_port}")
-
-    # Ensure collection exists
+# Vector store: resolved from env/config via the factory
+vector_store = get_vector_store()
+if vector_store is not None:
+    logger.info(f"VectorStore initialized: {type(vector_store).__name__}")
+    # Ensure the default collection exists
     try:
-        qdrant_client.get_collection(COLLECTION_NAME)
+        vector_store.get_collection(COLLECTION_NAME)
         logger.info(f"Collection '{COLLECTION_NAME}' exists")
     except Exception:
-        logger.info(f"Creating collection '{COLLECTION_NAME}'")
-        from qdrant_client.models import VectorParams, Distance
-        embedding_dim = int(os.getenv('EMBEDDING_DIM', '1024'))
-        qdrant_client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
-        )
-
-except Exception as e:
-    logger.warning(f"Could not initialize Qdrant client: {e}")
-
-# ============================================================================
-# PostgreSQL Store (Optional)
-# ============================================================================
-
-pg_store.init_pg()
-if pg_store.is_available():
-    logger.info("PostgreSQL store available for metadata and dedup")
+        try:
+            embedding_dim = int(os.getenv('EMBEDDING_DIM', '1024'))
+            vector_store.ensure_collection(
+                COLLECTION_NAME, dense_dim=embedding_dim, sparse=False,
+            )
+            logger.info(f"Created collection '{COLLECTION_NAME}'")
+        except Exception as e:
+            logger.warning(f"Could not create collection: {e}")
 else:
-    logger.info("PostgreSQL not available, using Qdrant-only mode")
+    logger.info("No vector backend configured")
+
+# SQL store: resolved from env/config via the factory
+sql_store = get_sql_store()
+if sql_store is not None and sql_store.is_available:
+    logger.info(f"SqlStore initialized: {type(sql_store).__name__}")
+else:
+    logger.info("No SQL backend configured (vector-only mode)")
 
 # ============================================================================
 # Local Embeddings
@@ -183,8 +178,12 @@ except Exception as e:
 # ============================================================================
 
 from tools.shared.server_factory import create_fastmcp_server
+from tools.shared.migrate_mcp import register_migrate_tools
 
 mcp = create_fastmcp_server(TOOL_NAME)
+
+# Register backend migration tools (migrateMemoryBackend, verifyBackendParity)
+register_migrate_tools(mcp)
 
 
 # ============================================================================
@@ -201,15 +200,19 @@ def get_memory_id() -> str:
 
 def scroll_all(collection_name: str, **kwargs) -> list:
     """Scroll through all points in a collection, handling pagination."""
+    from shared.store_models import Filter
+    payload_filter = None
+    if "filter" in kwargs:
+        payload_filter = kwargs.pop("filter")
     all_points = []
     offset = None
     while True:
-        results, next_offset = qdrant_client.scroll(
-            collection_name=collection_name,
+        results, next_offset = vector_store.scroll(
+            collection_name,
             limit=1000,
             offset=offset,
             with_payload=True,
-            **kwargs,
+            filter=payload_filter,
         )
         all_points.extend(results)
         if not next_offset or not results:

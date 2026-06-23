@@ -299,15 +299,14 @@ def get_collection_config() -> dict:
 def get_vector_db_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get vector database statistics."""
     collections = []
-    if qdrant_client:
+    if vector_store:
         try:
-            cols = qdrant_client.get_collections().collections
-            collections = [c.name for c in cols]
+            collections = vector_store.list_collections()
         except Exception:
             pass
 
     return {
-        "connected": qdrant_client is not None,
+        "connected": vector_store is not None,
         "collections": collections,
         "default_collection": get_collection_config()["default_collection"]
     }
@@ -326,15 +325,15 @@ def get_embedding_stats(params: dict[str, Any]) -> dict[str, Any]:
 def get_collection_stats(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: Get collection statistics."""
     collection_name = params.get("collection", get_collection_config()["default_collection"])
-    if not qdrant_client:
+    if not vector_store:
         return {"error": "Qdrant client not initialized"}
 
     try:
-        collection_info = qdrant_client.get_collection(collection_name)
+        collection_info = vector_store.get_collection(collection_name)
         return {
             "collection": collection_name,
             "points_count": collection_info.points_count,
-            "vectors_size": collection_info.config.params.vectors.size
+            "vectors_size": collection_info.dim
         }
     except Exception as e:
         # Return user-friendly message instead of raw error
@@ -346,29 +345,29 @@ def get_collection_stats(params: dict[str, Any]) -> dict[str, Any]:
 
 def list_collections_handler(params: dict[str, Any]) -> dict[str, Any]:
     """Data source: List all indexed collections with stats."""
-    if not qdrant_client:
+    if not vector_store:
         return {"error": "Qdrant not connected", "collections": []}
 
     try:
-        collections = qdrant_client.get_collections().collections
+        collections = vector_store.list_collections()
         result = {}
-        for coll in collections:
-            info = qdrant_client.get_collection(coll.name)
-            vectors_config = info.config.params.vectors
+        for coll_name in collections:
+            info = vector_store.get_collection(coll_name)
+            named_vectors = info.named_vectors
 
             # Handle both single vector and hybrid (dict) configurations
-            if isinstance(vectors_config, dict):
+            if named_vectors:
                 dims_parts = []
-                for name, cfg in vectors_config.items():
-                    if hasattr(cfg, 'size'):
-                        dims_parts.append(f"{name}={cfg.size}d")
-                    else:
-                        dims_parts.append(f"{name}=sparse")
+                for name, dim in named_vectors.items():
+                    dims_parts.append(f"{name}={dim}d")
+                # Check has_sparse for hybrid
+                if info.has_sparse:
+                    dims_parts.append("sparse")
                 dims = ", ".join(dims_parts) if dims_parts else "unknown"
             else:
-                dims = f"{vectors_config.size}d" if vectors_config and hasattr(vectors_config, 'size') else "unknown"
+                dims = f"{info.dim}d" if info.dim else "unknown"
 
-            result[coll.name] = f"{info.points_count:,} chunks @ {dims}"
+            result[coll_name] = f"{info.points_count:,} chunks @ {dims}"
 
         result["total"] = len(collections)
         return result
@@ -453,7 +452,7 @@ async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
     if not workspace_root:
         return {"success": False, "error": "workspace_root is required"}
 
-    if not qdrant_client:
+    if not vector_store:
         return {"success": False, "error": "Qdrant not initialized"}
 
     try:
@@ -548,13 +547,15 @@ def validate_search_request(collection_name: str, query_vector: list, using_vect
             - recommended_vector: str (if different vector recommended)
     """
     try:
-        info = qdrant_client.get_collection(collection_name)
-        vectors = info.config.params.vectors
+        info = vector_store.get_collection(collection_name)
+        named_vectors = info.named_vectors
 
-        if isinstance(vectors, dict):
-            available = {name: cfg.size for name, cfg in vectors.items() if hasattr(cfg, 'size')}
+        if named_vectors:
+            available = dict(named_vectors)
+        elif info.dim:
+            available = {"default": info.dim}
         else:
-            available = {"default": vectors.size} if vectors else {}
+            available = {}
 
         query_dim = len(query_vector)
 
@@ -592,13 +593,8 @@ def validate_search_request(collection_name: str, query_vector: list, using_vect
 
 
 def _get_collection_dimensions(collection_info) -> int | None:
-    """Get the dense vector dimensions from a collection info object."""
-    vectors = collection_info.config.params.vectors
-    if isinstance(vectors, dict):
-        if 'dense' in vectors:
-            return vectors['dense'].size
-        return None
-    return vectors.size if vectors else None
+    """Get the dense vector dimensions from a CollectionInfo object."""
+    return collection_info.dim
 
 
 def setup_fef_v3():
@@ -722,25 +718,30 @@ def setup_fef_v3():
 # Qdrant Client Initialization
 # ============================================================================
 
-logger.info("Initializing Qdrant client for semantic code search...")
+logger.info("Initializing vector store for semantic code search...")
+vector_store = None
 try:
-    qdrant_host = os.getenv('QDRANT_HOST', 'qdrant')
-    qdrant_port = int(os.getenv('QDRANT_PORT', '6333'))
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import Filter, FieldCondition, MatchValue, SparseVector
-    qdrant_client = QdrantClient(host=qdrant_host, port=qdrant_port)
-    logger.info(f"Qdrant client connected to {qdrant_host}:{qdrant_port}")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from shared.vector_store import get_vector_store
+    vector_store = get_vector_store()
+    if vector_store is not None:
+        logger.info(f"VectorStore initialized: {type(vector_store).__name__}")
+    else:
+        logger.info("No vector backend configured (Qdrant not available)")
 except Exception as e:
-    logger.warning(f"Could not initialize Qdrant client: {e}")
-    qdrant_client = None
+    logger.warning(f"Could not initialize VectorStore: {e}")
 
 # ============================================================================
 # FastMCP Instance (via shared factory — DualHeaderVerifier auth)
 # ============================================================================
 
 from tools.shared.server_factory import create_fastmcp_server, DEFAULT_HOST
+from tools.shared.migrate_mcp import register_migrate_tools
 
 mcp = create_fastmcp_server(TOOL_NAME)
+
+# Register backend migration tools (migrateMemoryBackend, verifyBackendParity)
+register_migrate_tools(mcp)
 
 
 # ============================================================================
@@ -815,7 +816,7 @@ async def search(
     """
     logger.debug(f"Processing unified search: query={query}, mode={mode}, copilot_format={copilot_format}")
 
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized."
 
     if not query:
@@ -823,15 +824,9 @@ async def search(
 
     # Detect collection capabilities
     try:
-        info = qdrant_client.get_collection(collection_name)
-        vectors_config = info.config.params.vectors
-        has_sparse = bool(info.config.params.sparse_vectors)
-
-        if isinstance(vectors_config, dict):
-            has_dense = "dense" in vectors_config
-            has_sparse = has_sparse or "sparse" in vectors_config
-        else:
-            has_dense = vectors_config is not None
+        info = vector_store.get_collection(collection_name)
+        has_dense = info.has_dense
+        has_sparse = info.has_sparse
     except Exception as e:
         return f"Error: Collection '{collection_name}' not found: {e}"
 
@@ -869,7 +864,7 @@ async def _do_dense_search(query: str, limit: int, collection_name: str,
     Returns list of dicts: {id, score, payload}.
     Raises on error (caller handles).
     """
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    from shared.store_models import Filter, FieldCondition, MatchValue
 
     embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'azure')
 
@@ -915,42 +910,33 @@ async def _do_dense_search(query: str, limit: int, collection_name: str,
         conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
     search_filter = Filter(must=conditions) if conditions else None
 
-    collection_info = qdrant_client.get_collection(collection_name)
-    vectors_config = collection_info.config.params.vectors
+    collection_info = vector_store.get_collection(collection_name)
+    named_vectors = collection_info.named_vectors
 
-    if isinstance(vectors_config, dict):
-        vector_names = list(vectors_config.keys())
+    if named_vectors:
         vector_dim = len(query_vector)
         vector_name = None
 
-        for vname in vector_names:
-            vconfig = vectors_config[vname]
-            if hasattr(vconfig, 'size') and vconfig.size == vector_dim:
+        for vname, dim in named_vectors.items():
+            if dim == vector_dim:
                 vector_name = vname
                 break
 
         if not vector_name:
-            vector_name = vector_names[0]
+            vector_name = next(iter(named_vectors.keys()))
 
-        query_response = qdrant_client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            using=vector_name,
-            query_filter=search_filter,
-            limit=limit,
-            with_payload=True
+        results = vector_store.query_dense(
+            collection_name, query_vector,
+            limit=limit, filter=search_filter, using=vector_name,
         )
     else:
-        query_response = qdrant_client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            query_filter=search_filter,
-            limit=limit,
-            with_payload=True
+        results = vector_store.query_dense(
+            collection_name, query_vector,
+            limit=limit, filter=search_filter,
         )
 
     return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
-            for p in query_response.points]
+            for p in results]
 
 
 async def _do_sparse_search(query: str, limit: int, collection_name: str,
@@ -960,7 +946,7 @@ async def _do_sparse_search(query: str, limit: int, collection_name: str,
     Returns list of dicts: {id, score, payload}.
     Raises on error (caller handles).
     """
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    from shared.store_models import Filter, FieldCondition, MatchValue, SparseVector as NeutralSparseVector
 
     if not SPARSE_VECTORS_AVAILABLE:
         raise ValueError("Sparse vector search not available. Missing sparse_vector_gen.py module.")
@@ -978,17 +964,17 @@ async def _do_sparse_search(query: str, limit: int, collection_name: str,
         conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
     search_filter = Filter(must=conditions) if conditions else None
 
-    query_response = qdrant_client.query_points(
-        collection_name=collection_name,
-        query=SparseVector(indices=list(query_sparse_vec.keys()), values=list(query_sparse_vec.values())),
-        using="sparse",
-        query_filter=search_filter,
-        limit=limit,
-        with_payload=True
+    sparse_vec = NeutralSparseVector(
+        indices=list(query_sparse_vec.keys()),
+        values=list(query_sparse_vec.values()),
+    )
+    results = vector_store.query_sparse(
+        collection_name, sparse_vec,
+        limit=limit, filter=search_filter,
     )
 
     return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
-            for p in query_response.points]
+            for p in results]
 
 
 def _reciprocal_rank_fusion(ranked_lists: list[list[dict]], k: int = 60) -> list[dict]:
@@ -1110,6 +1096,8 @@ async def _search_copilot(query: str, limit: int, collection_name: str,
                           file_type: str | None, function_name: str | None,
                           copilot_format: str, language: str, max_lines: int) -> str:
     """Internal: search with copilot formatting."""
+    from shared.store_models import SparseVector as NeutralSparseVector
+
     if not COPILOT_INJECTOR_AVAILABLE:
         return "Error: Copilot context injector not available. Missing copilot_context_injector.py module."
 
@@ -1133,15 +1121,16 @@ async def _search_copilot(query: str, limit: int, collection_name: str,
         if not query_sparse_vec:
             return injector._format_no_context(language)
 
-        query_response = qdrant_client.query_points(
-            collection_name=collection_name,
-            query=SparseVector(indices=list(query_sparse_vec.keys()), values=list(query_sparse_vec.values())),
-            using="sparse",
+        sparse_vec = NeutralSparseVector(
+            indices=list(query_sparse_vec.keys()),
+            values=list(query_sparse_vec.values()),
+        )
+        results = vector_store.query_sparse(
+            collection_name, sparse_vec,
             limit=limit,
-            with_payload=True
         )
 
-        chunks = [hit.payload for hit in query_response.points]
+        chunks = [hit.payload for hit in results]
 
         if not chunks:
             return injector._format_no_context(language)
@@ -1239,7 +1228,7 @@ async def index_code(
     """
     logger.debug(f"Processing index_code tool: workspace_root={workspace_root}, embedding_model={embedding_model}")
 
-    if not qdrant_client:
+    if not vector_store:
         return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT environment variables."
 
     # Resolve preset
@@ -1249,7 +1238,7 @@ async def index_code(
     # Auto-create collection if it doesn't exist (with correct dimensions)
     collection_exists = False
     try:
-        qdrant_client.get_collection(collection_name)
+        vector_store.get_collection(collection_name)
         collection_exists = True
         logger.info(f"Collection '{collection_name}' already exists")
     except Exception as e:
@@ -1262,7 +1251,7 @@ async def index_code(
     # Validate embedding dimensions match existing collection
     if collection_exists:
         try:
-            existing_info = qdrant_client.get_collection(collection_name)
+            existing_info = vector_store.get_collection(collection_name)
             existing_dims = _get_collection_dimensions(existing_info)
             preset_dims = preset['dimensions']
             if existing_dims and preset_dims != existing_dims:
@@ -1484,25 +1473,25 @@ async def check_indexing_progress(pid: int | None = None) -> str:
         # Get last 15 lines of log
         recent_logs = ''.join(log_lines[-15:]) if log_lines else "No logs yet"
 
-        # Get Qdrant collection stats
+        # Get collection stats
         collection_stats = "Unknown"
-        if qdrant_client:
+        if vector_store:
             try:
-                collection_info = qdrant_client.get_collection(collection_name)
+                collection_info = vector_store.get_collection(collection_name)
                 points_count = collection_info.points_count
 
-                # Get vector dimensions
-                vectors_config = collection_info.config.params.vectors
-                if isinstance(vectors_config, dict):
+                # Build vector dimensions string from named_vectors
+                if collection_info.named_vectors:
                     vector_parts = []
-                    for name, params in vectors_config.items():
-                        if hasattr(params, 'size'):
-                            vector_parts.append(f"{name}={params.size}d ({params.distance})")
-                        else:
-                            vector_parts.append(f"{name}=sparse")
+                    for name, dim in collection_info.named_vectors.items():
+                        vector_parts.append(f"{name}={dim}d")
+                    if collection_info.has_sparse:
+                        vector_parts.append("sparse")
                     vector_dims = ", ".join(vector_parts) if vector_parts else "unknown"
+                elif collection_info.dim:
+                    vector_dims = f"{collection_info.dim}d"
                 else:
-                    vector_dims = f"{vectors_config.size}d ({vectors_config.distance})" if vectors_config else "unknown"
+                    vector_dims = "unknown"
 
                 collection_stats = f"{points_count:,} chunks indexed ({vector_dims})"
             except Exception as e:
@@ -1556,10 +1545,10 @@ Log File: {log_file}
 async def list_collections() -> str:
     """List all Qdrant collections with their stats (number of chunks, vector dimensions)."""
     try:
-        if not qdrant_client:
+        if not vector_store:
             return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT."
 
-        collections = qdrant_client.get_collections().collections
+        collections = vector_store.list_collections()
 
         if not collections:
             return """No Collections Found
@@ -1578,22 +1567,21 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
 
         for collection in collections:
             try:
-                collection_info = qdrant_client.get_collection(collection.name)
+                collection_info = vector_store.get_collection(collection.name)
                 points_count = collection_info.points_count
 
-                # Handle both single vector and hybrid named vectors (dict)
-                vectors_config = collection_info.config.params.vectors
-                if isinstance(vectors_config, dict):
-                    # Hybrid collection with named vectors like {"dense": VectorParams, "sparse": SparseVectorParams}
+                # Build vector dimensions from named_vectors
+                if collection_info.named_vectors:
                     vector_parts = []
-                    for name, params in vectors_config.items():
-                        if hasattr(params, 'size'):
-                            vector_parts.append(f"{name}={params.size}d ({params.distance})")
-                        else:
-                            vector_parts.append(f"{name}=sparse")
-                    vector_size_str = ", ".join(vector_parts)
+                    for name, dim in collection_info.named_vectors.items():
+                        vector_parts.append(f"{name}={dim}d")
+                    if collection_info.has_sparse:
+                        vector_parts.append("sparse")
+                    vector_size_str = ", ".join(vector_parts) if vector_parts else "unknown"
+                elif collection_info.dim:
+                    vector_size_str = f"{collection_info.dim}d"
                 else:
-                    vector_size_str = f"{vectors_config.size}d ({vectors_config.distance})"
+                    vector_size_str = "unknown"
 
                 result.append(f"**{collection.name}**\n")
                 result.append(f"  - Chunks indexed: {points_count:,}\n")
@@ -1720,7 +1708,7 @@ async def clear_index(
 ) -> str:
     """Clear all indexed code from Qdrant vector database. Only use this when you are CERTAIN an index needs to be deleted."""
     try:
-        if not qdrant_client:
+        if not vector_store:
             return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT."
 
         # Check if user wants to delete ALL collections
@@ -1730,7 +1718,7 @@ async def clear_index(
         if not confirm:
             if delete_all:
                 # Get all collections
-                collections = qdrant_client.get_collections().collections
+                collections = vector_store.list_collections()
                 collection_list = "\n".join([f"  - {c.name}" for c in collections])
 
                 return f"""CONFIRMATION REQUIRED - DELETE ALL COLLECTIONS
@@ -1770,15 +1758,15 @@ clear_index(collection_name="{collection_name}", confirm=true)
 
         # Delete ALL collections
         if delete_all:
-            collections = qdrant_client.get_collections().collections
+            collections = vector_store.list_collections()
             total_deleted = 0
             deleted_names = []
 
             for collection in collections:
                 try:
-                    collection_info = qdrant_client.get_collection(collection.name)
+                    collection_info = vector_store.get_collection(collection.name)
                     points_count = collection_info.points_count
-                    qdrant_client.delete_collection(collection.name)
+                    vector_store.delete_collection(collection.name)
                     total_deleted += points_count
                     deleted_names.append(f"  - {collection.name} ({points_count:,} chunks)")
                     logger.info(f"Deleted collection '{collection.name}' with {points_count} chunks")
@@ -1804,11 +1792,11 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-a
 
         # Delete single collection
         try:
-            collection_info = qdrant_client.get_collection(collection_name)
+            collection_info = vector_store.get_collection(collection_name)
             points_count = collection_info.points_count
 
             # Delete the collection
-            qdrant_client.delete_collection(collection_name)
+            vector_store.delete_collection(collection_name)
 
             result = f"""Index Cleared Successfully
 
