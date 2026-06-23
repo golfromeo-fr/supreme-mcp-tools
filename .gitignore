@@ -212,3 +212,34 @@ __marimo__/
 .gitignore
 .kilocode/setup-script
 .vscode/settings.json
+
+# User environment / tool state (not project code)
+.claude/
+.codex
+.env~
+.kilo/
+.kilocode/
+.nicegui/
+startlauncher
+startlauncher~
+startsecret
+startui
+testlocalmcp
+testlocalmcp~
+opencode.json
+supreme-mcp-tools.code-workspace
+old/
+oldplans/
+proc_skill*
+test.txt
+BUG_REPORT.html
+CLAUDE.md
+SECURITY_AUDIT.md
+TODO.md
+graphify-out/
+docs/
+requirements.merged.txt
+setup_opencode_mcp.sh
+# Backup files
+*.bak
+*.orig

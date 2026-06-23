@@ -22,6 +22,11 @@ python launchmcp.py --dry-run webmcp         # preview without starting
 # UI
 python -m mcp_ui                             # NiceGUI management UI (port 8400)
 
+# Backend migration
+python -m tools.shared.migrate_store export --out backup.jsonl
+python -m tools.shared.migrate_store import --in backup.jsonl --backend turso+turso
+python -m tools.shared.migrate_store verify --left postgres+qdrant --right turso+turso
+
 # Tests
 python -m pytest                             # everything (~458 tests)
 python -m pytest tests/                      # project test suite only (~415)
@@ -40,10 +45,17 @@ tools/<name>/      # individual MCP tools (each is a self-contained server)
   <name>_fastmcp.py  # PRIMARY entry point — must export `app` from mcp.streamable_http_app()
   config.json        # tool config — MUST wrap api_key under "auth": {"api_key": "..."}
   support modules    # helpers imported by the primary (never scanned by discovery)
-tools/shared/      # cross-tool libraries (pg_store, pii_redactor, relevance_scorer,
-                   #   server_factory, artifact_store, cache, html_utils, memory_models, oauth_fix, utils)
+tools/shared/      # cross-tool libraries:
+                   #   store_models.py    — backend-neutral types (PointStruct, Filter, ...)
+                   #   sql_store.py       — SqlStore ABC + factory
+                   #   vector_store.py    — VectorStore ABC + factory
+                   #   store_factory.py   — config resolution
+                   #   hashing.py         — text_hash (pure function)
+                   #   pii_redactor, relevance_scorer, server_factory, artifact_store, cache, html_utils
+                   #   memory_models, oauth_fix, utils, migrate_store
+                   #   impls/             — concrete backends (postgres_sql, turso_sql, qdrant_vector, turso_vector, postgres_vector)
 config/            # ports.json (port ranges+assignments), launcher_config.json, monitoring_config.json
-plans/FLEXIBLE_EXTENSIBILITY_FRAMEWORK_V3/   # FEF V3 design doc
+plans/             # design docs (FEF V3, backend abstraction)
 tests/             # pytest suite (project tests)
 launcher/streamable_http/tests/  # streamable transport tests
 launcher/test_simplemcp_client.py
@@ -61,6 +73,33 @@ tests/fef_v3/      # FEF V3 test fixtures
 | 8400-8499 | UI (management_ui: 8400) |
 
 Port conflicts are detected via socket binding, not just config — a free config slot is not enough.
+
+### Backend abstraction (Phase 0–5)
+
+Tools use two ABCs for storage. Any SQL backend can pair with any Vector backend.
+
+| ABC | Module | Factory |
+|-----|--------|---------|
+| `SqlStore` | `tools/shared/sql_store.py` | `get_sql_store()` |
+| `VectorStore` | `tools/shared/vector_store.py` | `get_vector_store()` |
+
+Concrete impls in `tools/shared/impls/`:
+
+| Component | SQL | Vector |
+|-----------|-----|--------|
+| `PostgresSqlStore` | ✓ | — |
+| `TursoSqlStore` | ✓ (libSQL/FTS5) | — |
+| `QdrantVectorStore` | — | ✓ |
+| `TursoVectorStore` | — | ✓ (libSQL vector + FTS5 sidecar) |
+| `PostgresVectorStore` | — | ✓ (pgvector) |
+
+**Supported combos:** PG+Qdrant (default), Turso+Turso (zero containers), PG+Turso, Turso+Qdrant, Qdrant-only, PG+PG(pgvector), Turso+PG(pgvector).
+
+**Priority for backend selection:** `config.json` `storage` block > env vars (`POSTGRES_HOST`, `QDRANT_HOST`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`) > default (Qdrant + optional PG).
+
+**Migration tool:** `python -m tools.shared.migrate_store {export|import|pipe|verify}`. JSONL format with `_meta`/`_sql`/`_vec` keys. Filters `__collection_metadata__` on import (R2). Supports `--backup-before` (R12) and `--progress-every` (R9).
+
+**Documentation:** `tools/memorymcp/BACKENDS.md` covers the full architecture, config, and migration CLI.
 
 ## Key conventions
 
@@ -106,13 +145,13 @@ Tools register via `@mcp.tool()` decorators at import time. Submodules register 
 
 ### Side-effect imports
 
-`memory_core.py` and `pg_store.py` initialize external connections (Qdrant, PostgreSQL) at import time. Tests that don't need these should import from dependency-free modules like `text_utils.py` instead.
+`memory_core.py` and `ragmcp_fastmcp.py` initialize backend connections (via the ABC factories) at import time. Tests that don't need these should import from dependency-free modules like `text_utils.py` instead.
 
 ### memorymcp module structure
 
 The monolith was split into focused modules — all share one `FastMCP` instance from `memory_core.py`:
-- `memory_core.py` — config, clients, `FastMCP` instance, utility functions
-- `memory_tools.py` — CRUD tools (upsert, query, delete, etc.)
+- `memory_core.py` — config, backend clients, `FastMCP` instance, utility functions
+- `memory_tools.py` — CRUD tools (upsert, query, delete, etc.) — uses `vector_store` and `sql_store` from `memory_core`
 - `memory_graph.py` — graph tools (edges, export, visualization)
 - `memory_text.py` — text processing (textToGraph, textToSmartGraph)
 - `text_utils.py` — pure functions with no FastMCP/Qdrant deps (safe for test imports)
@@ -130,21 +169,23 @@ memorymcp ships repo-local policy files that push the LLM to call memory tools b
 The `getMemoryAutousePolicy()` and `getMemoryCheatsheet()` MCP tools read these files. The always-injected `getMemorySystemPrompt()` tool is patched at import time to prepend a pointer so the LLM discovers these tools on first session. If the files are unreadable, hard-coded inline fallbacks are returned.
 
 Harness/client skills (e.g. `~/.agents/skills/memorymcp-autouse/`) are managed by the user and the harness, not by this MCP server. They can reference the MCP tools but the server does not depend on them.
-
 To test: `python -m pytest tests/test_memory_autouse.py -v`
 
 ## Environment
 
 - `.env` at project root is loaded at startup by all tools (via `dotenv`)
 - Auth defaults: `MCP_UI_USERNAME`/`MCP_UI_PASSWORD` (default admin/admin)
-- `memorymcp` requires: `QDRANT_HOST`, `QDRANT_PORT` (defaults: qdrant:6333)
-- `memorymcp` optional: PostgreSQL via `DATABASE_URL` for metadata/dedup
+- `memorymcp` requires: `QDRANT_HOST`, `QDRANT_PORT` (defaults: qdrant:6333) OR `TURSO_DATABASE_URL`
+- `memorymcp` optional: `POSTGRES_HOST` (or `TURSO_DATABASE_URL`) for SQL metadata/dedup
+- `ragmcp` requires: `QDRANT_HOST` OR `TURSO_DATABASE_URL`
 - `ragmcp` embedding config in `tools/ragmcp/config.json` under `embedding`
+- All backends are auto-detected by priority chain: config.json > env vars > default
 
 ## Common pitfalls
 
 - Don't use `localhost` in server URLs — use `127.0.0.1` to avoid IPv6 `::1` resolution
-- `pg_store.py:search_text` passes `query` param twice (WHERE similarity + SELECT similarity) — intentional, don't "fix"
-- `ScoringWeights` constructor: `recency_half_life_days=0` and `max_usage=0` are valid (uses `is not None` checks, not truthiness)
+- `ScoredPoint.score` contract: ALWAYS similarity (higher = better). All impls must normalize; sort descending
+- `iter_all` MUST stream (no full materialization) — backends yield one record at a time (R1, R15)
 - The legacy `launchmcp.py` and the new `python -m launcher` have **different** flag sets. Use the legacy entry point when you need `--list-tools` / `--dry-run` / `--verbose`
 - The root `README.md` is partially stale (still describes the legacy `launchmcp.py` interface and lists some tools as "NOT WORKING" that are now functional) — trust `python -m launcher --help` and `python launchmcp.py --help` over the README
+- `tools/memorymcp/POSTGRESQL.md` has been removed (superseded by `BACKENDS.md` covering all 7 backend combos)

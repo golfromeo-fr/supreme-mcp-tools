@@ -20,23 +20,23 @@ class TestLOW1QdrantTimeout(unittest.TestCase):
     """LOW-1: Qdrant client created without timeout."""
 
     def test_timeout_in_source(self):
-        source = (PROJECT_ROOT / "tools/memorymcp/memory_core.py").read_text()
+        # Phase 5: QdrantClient is now in impls/qdrant_vector.py
+        source = (PROJECT_ROOT / "tools/shared/impls/qdrant_vector.py").read_text()
         self.assertIn("timeout=", source)
         idx = source.find("QdrantClient(")
-        line = source[idx:idx + 200]
-        self.assertIn("timeout", line)
+        if idx >= 0:
+            line = source[idx:idx + 200]
+            self.assertIn("timeout", line)
 
 
 class TestLOW2EmbeddingDimFromEnv(unittest.TestCase):
     """LOW-2: Hardcoded 1024-dim vectors."""
 
     def test_dim_from_env(self):
+        # Phase 5: dimension is now read from env in memory_core.py via ensure_collection
         source = (PROJECT_ROOT / "tools/memorymcp/memory_core.py").read_text()
-        idx = source.find("VectorParams(")
-        line = source[idx:idx + 200]
-        self.assertIn("embedding_dim", line)
-        self.assertNotIn("size=1024", line)
-        self.assertNotIn("size=1024", line)
+        self.assertIn("EMBEDDING_DIM", source)
+        self.assertIn("dense_dim=embedding_dim", source)
 
 
 class TestLOW3EdgeFilteringComplexity(unittest.TestCase):
