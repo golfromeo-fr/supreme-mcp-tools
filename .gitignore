@@ -216,10 +216,17 @@ __marimo__/
 # User environment / tool state (not project code)
 .claude/
 .codex
+.env
+.env.*
+!.env.example
+# Editor backups of .env and other env-like files
 .env~
+*.env~
+.env.bak
 .kilo/
 .kilocode/
 .nicegui/
+logs/
 startlauncher
 startlauncher~
 startsecret

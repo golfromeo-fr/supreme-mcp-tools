@@ -2,8 +2,8 @@
 TursoVectorStore — VectorStore implementation backed by Turso / libSQL.
 
 Each "collection" maps to a per-collection table in libSQL:
-  vec_{name} — stores dense VECTOR(dim) + payload JSON
-  vec_{name}_fts — FTS5 sidecar for sparse/lexical search (via FTS5 on text_content)
+  vec_{_s(name)} — stores dense VECTOR(dim) + payload JSON
+  vec_{_s(name)}_fts — FTS5 sidecar for sparse/lexical search (via FTS5 on text_content)
 
 Hybrid query: run query_dense + query_sparse, fuse with Python RRF.
 
@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 def _serialize_vector(vec: list[float]) -> str:
     """Serialize a vector for libSQL's VECTOR type (S2)."""
     return "[" + ",".join(repr(x) for x in vec) + "]"
+
+
+def _s(name: str) -> str:
+    """Sanitize collection name for use as SQL identifier (handles hyphens, dots)."""
+    return name.replace("-", "_").replace(".", "_").replace("/", "_")
 
 
 def _escape_fts5_query(query: str) -> str:
@@ -106,6 +111,31 @@ class TursoVectorStore:
     # Collection lifecycle
     # ------------------------------------------------------------------
 
+    def _ensure_map_table(self) -> None:
+        """Create the collection-name mapping table (sanitized -> original)."""
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS _vec_collection_map (
+                sanitized TEXT PRIMARY KEY,
+                original  TEXT NOT NULL
+            )
+        """)
+
+    def _store_name_mapping(self, name: str) -> None:
+        """Record the original collection name alongside the sanitized one."""
+        self._ensure_map_table()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO _vec_collection_map (sanitized, original) VALUES (?, ?)",
+            (_s(name), name),
+        )
+
+    def _lookup_original_name(self, sanitized: str) -> str:
+        """Reverse-lookup the original collection name from a sanitized table name."""
+        self._ensure_map_table()
+        row = self._conn.execute(
+            "SELECT original FROM _vec_collection_map WHERE sanitized = ?", (sanitized,)
+        ).fetchone()
+        return row[0] if row else sanitized
+
     def ensure_collection(
         self, name: str, *,
         dense_dim: int | None = None,
@@ -115,7 +145,7 @@ class TursoVectorStore:
         if dense_dim is not None:
             try:
                 self._conn.execute(f"""
-                    CREATE TABLE IF NOT EXISTS vec_{name} (
+                    CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
                         id          TEXT PRIMARY KEY,
                         embedding   VECTOR({dense_dim}),
                         payload     TEXT,
@@ -129,7 +159,7 @@ class TursoVectorStore:
                 if "already exists" not in err:
                     # Fallback without vector type
                     self._conn.execute(f"""
-                        CREATE TABLE IF NOT EXISTS vec_{name} (
+                        CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
                             id          TEXT PRIMARY KEY,
                             embedding   BLOB,
                             payload     TEXT,
@@ -139,19 +169,22 @@ class TursoVectorStore:
         else:
             # No dense — FTS5-only collection
             self._conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS vec_{name} (
+                CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
                     id          TEXT PRIMARY KEY,
                     payload     TEXT,
                     text_content TEXT
                 )
             """)
 
+        # Record the original -> sanitized mapping for list_collections
+        self._store_name_mapping(name)
+
         if sparse:
             try:
                 self._conn.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS vec_{name}_fts USING fts5(
+                    CREATE VIRTUAL TABLE IF NOT EXISTS vec_{_s(name)}_fts USING fts5(
                         text_content,
-                        content='vec_{name}',
+                        content='vec_{_s(name)}',
                         content_rowid='rowid',
                         tokenize='porter unicode61'
                     )
@@ -162,7 +195,7 @@ class TursoVectorStore:
         # HNSW index if supported
         if dense_dim is not None and self._has_hnsw:
             try:
-                self._conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{name}_hnsw ON vec_{name} USING hnsw(embedding)")
+                self._conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{_s(name)}_hnsw ON vec_{_s(name)} USING hnsw(embedding)")
             except Exception:
                 pass
 
@@ -175,7 +208,7 @@ class TursoVectorStore:
         fts_exists = False
         try:
             fts_check = self._conn.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name='vec_{collection}_fts'"
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='vec_{_s(collection)}_fts'"
             ).fetchone()
             fts_exists = bool(fts_check)
         except Exception:
@@ -194,7 +227,7 @@ class TursoVectorStore:
                         break
 
             self._conn.execute(f"""
-                INSERT INTO vec_{collection} (id, embedding, payload, text_content)
+                INSERT INTO vec_{_s(collection)} (id, embedding, payload, text_content)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     embedding = excluded.embedding,
@@ -206,11 +239,11 @@ class TursoVectorStore:
             # FTS5 sync (only if sidecar exists)
             if fts_exists and text_content:
                 fts_row = self._conn.execute(
-                    f"SELECT rowid FROM vec_{collection} WHERE id = ?", (str(p.id),)
+                    f"SELECT rowid FROM vec_{_s(collection)} WHERE id = ?", (str(p.id),)
                 ).fetchone()
                 if fts_row:
                     self._conn.execute(
-                        f"INSERT INTO vec_{collection}_fts(rowid, text_content) VALUES (?, ?)",
+                        f"INSERT INTO vec_{_s(collection)}_fts(rowid, text_content) VALUES (?, ?)",
                         (fts_row[0], text_content),
                     )
 
@@ -218,7 +251,7 @@ class TursoVectorStore:
         payload_str = json.dumps(payload)
         placeholders = ",".join("?" for _ in ids)
         self._conn.execute(
-            f"UPDATE vec_{collection} SET payload = ? WHERE id IN ({placeholders})",
+            f"UPDATE vec_{_s(collection)} SET payload = ? WHERE id IN ({placeholders})",
             (payload_str, *ids),
         )
 
@@ -228,20 +261,20 @@ class TursoVectorStore:
         if ids:
             placeholders = ",".join("?" for _ in ids)
             self._conn.execute(
-                f"DELETE FROM vec_{collection} WHERE id IN ({placeholders})",
+                f"DELETE FROM vec_{_s(collection)} WHERE id IN ({placeholders})",
                 tuple(ids),
             )
         elif filter:
             where, params = _filter_to_sql(filter, "payload")
             if where:
                 self._conn.execute(
-                    f"DELETE FROM vec_{collection} WHERE {where}",
+                    f"DELETE FROM vec_{_s(collection)} WHERE {where}",
                     tuple(params),
                 )
 
     def delete_collection(self, name: str) -> None:
-        self._conn.execute(f"DROP TABLE IF EXISTS vec_{name}")
-        self._conn.execute(f"DROP TABLE IF EXISTS vec_{name}_fts")
+        self._conn.execute(f"DROP TABLE IF EXISTS vec_{_s(name)}")
+        self._conn.execute(f"DROP TABLE IF EXISTS vec_{_s(name)}_fts")
 
     # ------------------------------------------------------------------
     # Reads
@@ -256,7 +289,7 @@ class TursoVectorStore:
         all_params = [vec_str, vec_str, limit] + filter_params
         sql = f"""
                 SELECT id, payload, vector_distance_cos(embedding, ?) AS d
-                FROM vec_{collection}
+                FROM vec_{_s(collection)}
                 {where_clause}
                 ORDER BY vector_distance_cos(embedding, ?)
                 LIMIT ?
@@ -286,10 +319,10 @@ class TursoVectorStore:
         params = [fts_query, limit] + params
         try:
             rows = self._conn.execute(f"""
-                SELECT v.id, v.payload, bm25(vec_{collection}_fts) AS s
-                FROM vec_{collection}_fts
-                JOIN vec_{collection} v ON v.rowid = vec_{collection}_fts.rowid
-                WHERE vec_{collection}_fts MATCH ?
+                SELECT v.id, v.payload, bm25(vec_{_s(collection)}_fts) AS s
+                FROM vec_{_s(collection)}_fts
+                JOIN vec_{_s(collection)} v ON v.rowid = vec_{_s(collection)}_fts.rowid
+                WHERE vec_{_s(collection)}_fts MATCH ?
                 {where_clause}
                 ORDER BY s
                 LIMIT ?
@@ -318,7 +351,7 @@ class TursoVectorStore:
         placeholders = ",".join("?" for _ in ids)
         cols = "id, payload" + (", embedding" if with_vectors else "")
         rows = self._conn.execute(
-            f"SELECT {cols} FROM vec_{collection} WHERE id IN ({placeholders})",
+            f"SELECT {cols} FROM vec_{_s(collection)} WHERE id IN ({placeholders})",
             tuple(ids),
         ).fetchall()
         results = []
@@ -345,7 +378,7 @@ class TursoVectorStore:
         params.append(limit)
         try:
             rows = self._conn.execute(
-                f"SELECT id, payload FROM vec_{collection} {where_clause} LIMIT ?",
+                f"SELECT id, payload FROM vec_{_s(collection)} {where_clause} LIMIT ?",
                 tuple(params),
             ).fetchall()
         except Exception as e:
@@ -361,7 +394,7 @@ class TursoVectorStore:
     def get_collection(self, name: str) -> CollectionInfo:
         try:
             row = self._conn.execute(
-                f"SELECT COUNT(*) FROM vec_{name}"
+                f"SELECT COUNT(*) FROM vec_{_s(name)}"
             ).fetchone()
             points_count = row[0] if row else 0
         except Exception:
@@ -371,7 +404,7 @@ class TursoVectorStore:
         dim = None
         try:
             row = self._conn.execute(
-                f"SELECT embedding FROM vec_{name} WHERE embedding IS NOT NULL LIMIT 1"
+                f"SELECT embedding FROM vec_{_s(name)} WHERE embedding IS NOT NULL LIMIT 1"
             ).fetchone()
             if row and row[0]:
                 # Parse "[0.1, 0.2, ...]" → count commas + 1
@@ -382,7 +415,7 @@ class TursoVectorStore:
         has_sparse = False
         try:
             fts_check = self._conn.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name='vec_{name}_fts'"
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='vec_{_s(name)}_fts'"
             ).fetchone()
             has_sparse = bool(fts_check)
         except Exception:
@@ -397,17 +430,25 @@ class TursoVectorStore:
         )
 
     def list_collections(self) -> list[str]:
+        """Return original collection names (reverse-mapped from sanitized table names)."""
+        self._ensure_map_table()
+        # Get sanitized names from sqlite_master, then look up originals
         rows = self._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'vec_%' AND name NOT LIKE '%_fts%'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'vec_%' "
+            "AND name NOT LIKE '%_fts%' AND name != '_vec_collection_map'"
         ).fetchall()
-        return [r[0][4:] for r in rows]  # strip "vec_" prefix
+        results = []
+        for r in rows:
+            sanitized = r[0][4:]  # strip "vec_" prefix
+            results.append(self._lookup_original_name(sanitized))
+        return results
 
     # ------------------------------------------------------------------
     # Migration (R1: default with_vectors=False)
     # ------------------------------------------------------------------
 
     def iter_all(self, collection: str, *, with_vectors: bool = False) -> Iterator[PointStruct]:
-        cursor = self._conn.execute(f"SELECT id, payload FROM vec_{collection}")
+        cursor = self._conn.execute(f"SELECT id, payload FROM vec_{_s(collection)}")
         while True:
             batch = cursor.fetchmany(100)
             if not batch:

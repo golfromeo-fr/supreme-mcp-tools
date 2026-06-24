@@ -127,7 +127,7 @@ def cmd_export(args):
                     "schema_version": SCHEMA_VERSION,
                 }}) + "\n")
 
-                for point in vector_store.iter_all(coll_name):
+                for point in vector_store.iter_all(coll_name, with_vectors=True):
                     # R2: skip __collection_metadata__ — it's in the header
                     if str(point.id) == "__collection_metadata__":
                         continue
