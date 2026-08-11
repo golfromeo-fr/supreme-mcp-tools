@@ -968,9 +968,12 @@ async def _do_sparse_search(query: str, limit: int, collection_name: str,
         indices=list(query_sparse_vec.keys()),
         values=list(query_sparse_vec.values()),
     )
+    # Pass the raw query text so lexical backends (Turso FTS5 / PG tsvector) can
+    # run a real MATCH. The integer sparse_vec is Qdrant-native only.
     results = vector_store.query_sparse(
         collection_name, sparse_vec,
         limit=limit, filter=search_filter,
+        query_text=query,
     )
 
     return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
@@ -1125,9 +1128,11 @@ async def _search_copilot(query: str, limit: int, collection_name: str,
             indices=list(query_sparse_vec.keys()),
             values=list(query_sparse_vec.values()),
         )
+        # Pass the derived keyword query so lexical backends run a real MATCH.
         results = vector_store.query_sparse(
             collection_name, sparse_vec,
             limit=limit,
+            query_text=search_query,
         )
 
         chunks = [hit.payload for hit in results]
@@ -1567,7 +1572,7 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
 
         for collection in collections:
             try:
-                collection_info = vector_store.get_collection(collection.name)
+                collection_info = vector_store.get_collection(collection)
                 points_count = collection_info.points_count
 
                 # Build vector dimensions from named_vectors
@@ -1583,12 +1588,12 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
                 else:
                     vector_size_str = "unknown"
 
-                result.append(f"**{collection.name}**\n")
+                result.append(f"**{collection}**\n")
                 result.append(f"  - Chunks indexed: {points_count:,}\n")
                 result.append(f"  - Vector dimensions: {vector_size_str}\n")
                 result.append("\n")
             except Exception as e:
-                result.append(f"**{collection.name}**\n")
+                result.append(f"**{collection}**\n")
                 result.append(f"  - Error: {str(e)}\n\n")
 
         result.append("-" * 80 + "\n")
@@ -1719,7 +1724,7 @@ async def clear_index(
             if delete_all:
                 # Get all collections
                 collections = vector_store.list_collections()
-                collection_list = "\n".join([f"  - {c.name}" for c in collections])
+                collection_list = "\n".join([f"  - {c}" for c in collections])
 
                 return f"""CONFIRMATION REQUIRED - DELETE ALL COLLECTIONS
 
@@ -1764,14 +1769,14 @@ clear_index(collection_name="{collection_name}", confirm=true)
 
             for collection in collections:
                 try:
-                    collection_info = vector_store.get_collection(collection.name)
+                    collection_info = vector_store.get_collection(collection)
                     points_count = collection_info.points_count
-                    vector_store.delete_collection(collection.name)
+                    vector_store.delete_collection(collection)
                     total_deleted += points_count
-                    deleted_names.append(f"  - {collection.name} ({points_count:,} chunks)")
-                    logger.info(f"Deleted collection '{collection.name}' with {points_count} chunks")
+                    deleted_names.append(f"  - {collection} ({points_count:,} chunks)")
+                    logger.info(f"Deleted collection '{collection}' with {points_count} chunks")
                 except Exception as e:
-                    deleted_names.append(f"  - {collection.name} (error: {str(e)})")
+                    deleted_names.append(f"  - {collection} (error: {str(e)})")
 
             deleted_list = "\n".join(deleted_names)
             result = f"""All Collections Cleared Successfully

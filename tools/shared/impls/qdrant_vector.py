@@ -268,7 +268,11 @@ class QdrantVectorStore:
         return [_from_qdrant_scored(p) for p in res.points]
 
     def query_sparse(self, collection: str, sparse: SparseVector, *,
-                     limit: int = 10, filter: Filter | None = None) -> list[ScoredPoint]:
+                     limit: int = 10, filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
+        # Qdrant matches via the native sparse vector index (integer term hashes
+        # shared between index and query within a process). ``query_text`` is
+        # accepted for Protocol parity but not used here.
         qv = qm.SparseVector(indices=sparse.indices, values=sparse.values)
         res = self._client.query_points(
             collection_name=collection,
@@ -282,7 +286,8 @@ class QdrantVectorStore:
 
     def query_hybrid(self, collection: str, dense: list[float],
                      sparse: SparseVector, *, limit: int = 10,
-                     filter: Filter | None = None) -> list[ScoredPoint]:
+                     filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
         qf = _to_qdrant_filter(filter)
 
         if _NATIVE_HYBRID:
@@ -305,7 +310,7 @@ class QdrantVectorStore:
             return [_from_qdrant_scored(p) for p in res.points]
         else:
             # S1 fallback: run both queries, fuse with Python RRF
-            dense_hits = self.query_dense(collection, dense, limit=limit * 2, filter=filter)
+            dense_hits = self.query_dense(collection, dense, limit=limit * 2, filter=filter, using="dense")
             sparse_hits = self.query_sparse(collection, sparse, limit=limit * 2, filter=filter)
             return _rrf_fuse(dense_hits, sparse_hits, limit=limit)
 

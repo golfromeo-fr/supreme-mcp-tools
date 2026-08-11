@@ -1,12 +1,16 @@
 # MCP Launcher Requirements
 
 # Core MCP framework
-fastmcp>=3.3.1
-mcp>=1.0.0
+# fastmcp 3.4+ floors starlette at >=1.0.1 (required by fastmcp-slim[server]).
+# Our custom DualHeaderVerifier + server_factory.py are verified against 1.x.
+fastmcp>=3.4.2
+mcp>=1.28.0
 
 # Web server
 uvicorn[standard]>=0.30.0
-starlette>=0.37.0
+# starlette>=1.0.1 is forced by fastmcp-slim[server]>=3.4. Pin the floor so a
+# fresh install doesn't accidentally land on the old 0.x line.
+starlette>=1.0.1
 fastapi>=0.104.0
 
 # HTTP client

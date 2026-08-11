@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Iterator, Iterable, Any
 
 from shared.store_models import (
@@ -25,8 +26,15 @@ from shared.store_models import (
     MatchValue, MatchText, MatchAny, MatchContains, Range,
     CollectionInfo, SparseVector,
 )  # noqa: F401  (MatchText exported for completeness)
+from shared.text_search_utils import escape_fts5_query as _escape_fts5_query
 
 logger = logging.getLogger(__name__)
+
+# Keys that are safe to interpolate into a JSON path ($.key) for json_set.
+# Anything outside [A-Za-z_$][A-Za-z0-9_$]* can't be a bare path member and falls
+# back to json_patch in set_payload. Only alphanumerics/underscore/dollar → no SQL
+# or path injection is possible when interpolating into the statement.
+_BAREWORD_KEY = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 
 
 def _serialize_vector(vec: list[float]) -> str:
@@ -37,12 +45,6 @@ def _serialize_vector(vec: list[float]) -> str:
 def _s(name: str) -> str:
     """Sanitize collection name for use as SQL identifier (handles hyphens, dots)."""
     return name.replace("-", "_").replace(".", "_").replace("/", "_")
-
-
-def _escape_fts5_query(query: str) -> str:
-    """Escape a user query for FTS5 MATCH (S3)."""
-    escaped = query.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _rrf_fuse(dense_hits: list[ScoredPoint], sparse_hits: list[ScoredPoint],
@@ -67,6 +69,12 @@ class TursoVectorStore:
     def __init__(self, url: str, auth_token: str | None = None):
         import libsql_experimental as libsql
 
+        # Concurrency: single shared connection is safe — libsql_experimental's
+        # C binding serializes statements via an internal mutex (stress-tested:
+        # 4 threads x 50 ops = 200/200 correct, no lock errors). autocommit=True
+        # keeps statements independent so threads don't block on implicit txns.
+        # No threading.Lock needed (would only reduce throughput); see the note
+        # in TursoSqlStore.__init__ for the full rationale.
         if auth_token:
             self._conn = libsql.connect(url, auth_token=auth_token)
         else:
@@ -216,7 +224,11 @@ class TursoVectorStore:
 
         for p in points:
             payload_str = json.dumps(p.payload or {})
-            text_content = (p.payload or {}).get("text", "")
+            # Index the searchable text. memorymcp payloads use "text"; ragmcp
+            # payloads use "codeChunk". Fall through so the FTS5 sidecar is
+            # populated for both tools.
+            pl = p.payload or {}
+            text_content = pl.get("text") or pl.get("codeChunk") or pl.get("content") or ""
             vec_str = ""
             if p.vector and isinstance(p.vector, list) and len(p.vector) > 0:
                 vec_str = _serialize_vector(p.vector)
@@ -248,12 +260,44 @@ class TursoVectorStore:
                     )
 
     def set_payload(self, collection: str, payload: dict, *, ids: list[str]) -> None:
-        payload_str = json.dumps(payload)
+        """Shallow top-level merge of ``payload`` into each point's payload.
+
+        Matches Qdrant's native ``set_payload`` and PG's jsonb ``||``: keys
+        present in ``payload`` overwrite the stored value at that top-level key
+        (object values REPLACE wholesale — they are NOT deep-merged), while keys
+        absent from ``payload`` are preserved. Callers like queryMemory rely on
+        this to update a few fields (e.g. ``{"usage_count": N}``) without
+        clobbering the rest.
+
+        Implemented as a single atomic UPDATE. For bareword-safe keys (all real
+        payload keys) we use ``json_set`` so each key's value is replaced in
+        place — this keeps the merge atomic, so two concurrent cross-key
+        ``set_payload`` calls on the same point can't lose a sibling key (a
+        Python read-modify-write would). Keys that are not bareword-safe cannot
+        be expressed as a JSON path and fall back to ``json_patch`` (atomic, but
+        deep-merging — identical to shallow for the flat payloads we store).
+        """
+        if not ids:
+            return
         placeholders = ",".join("?" for _ in ids)
-        self._conn.execute(
-            f"UPDATE vec_{_s(collection)} SET payload = ? WHERE id IN ({placeholders})",
-            (payload_str, *ids),
-        )
+
+        keys = list(payload.keys())
+        if keys and all(_BAREWORD_KEY.match(k) for k in keys):
+            expr = "payload"
+            set_params = []
+            for k in keys:
+                expr = f"json_set({expr}, '$.{k}', json(?))"
+                set_params.append(json.dumps(payload[k]))
+            self._conn.execute(
+                f"UPDATE vec_{_s(collection)} SET payload = {expr} WHERE id IN ({placeholders})",
+                tuple(set_params + ids),
+            )
+        else:
+            # Fallback for non-bareword keys: atomic deep-merge (== shallow for flat payloads)
+            self._conn.execute(
+                f"UPDATE vec_{_s(collection)} SET payload = json_patch(payload, ?) WHERE id IN ({placeholders})",
+                (json.dumps(payload), *ids),
+            )
 
     def delete(self, collection: str, *,
                ids: list[str] | None = None,
@@ -286,7 +330,7 @@ class TursoVectorStore:
         vec_str = _serialize_vector(vec)
         where, filter_params = _filter_to_sql(filter, "payload")
         where_clause = f"WHERE {where}" if where else ""
-        all_params = [vec_str, vec_str, limit] + filter_params
+        all_params = [vec_str] + filter_params + [vec_str, limit]
         sql = f"""
                 SELECT id, payload, vector_distance_cos(embedding, ?) AS d
                 FROM vec_{_s(collection)}
@@ -307,22 +351,37 @@ class TursoVectorStore:
         return results
 
     def query_sparse(self, collection: str, sparse: SparseVector, *,
-                     limit: int = 10, filter: Filter | None = None) -> list[ScoredPoint]:
-        # Build FTS5 query from the sparse vector (limited without vocabulary)
-        # In practice, callers should pass the original query text instead of the sparse vector.
-        # For now, build a simple OR query from sparse terms.
-        if not sparse.indices:
+                     limit: int = 10, filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
+        """Lexical search via the FTS5 sidecar.
+
+        Prefers ``query_text`` (a real FTS5 MATCH against indexed text) since the
+        integer ``sparse.indices`` are process-local hashes that cannot match
+        lexical tokens. Without ``query_text`` we fall back to the sparse terms,
+        which will typically match nothing here — callers should always pass
+        ``query_text`` when they have the raw query string.
+        """
+        fts_table = f"vec_{_s(collection)}_fts"
+        base_table = f"vec_{_s(collection)}"
+
+        # Build the FTS5 query string
+        if query_text:
+            fts_query = _escape_fts5_query(query_text)
+        elif sparse.indices:
+            # Fallback: integer hashes wrapped as phrases — rarely matches real tokens.
+            fts_query = " OR ".join(f'"{i}"' for i in sparse.indices[:10])
+        else:
             return []
-        fts_query = " OR ".join(f'"{i}"' for i in sparse.indices[:10])  # top 10 terms
-        where, params = _filter_to_sql(filter, "payload")
+
+        where, params = _filter_to_sql(filter, "v.payload")
         where_clause = f"AND {where}" if where else ""
-        params = [fts_query, limit] + params
+        params = [fts_query] + params + [limit]
         try:
             rows = self._conn.execute(f"""
-                SELECT v.id, v.payload, bm25(vec_{_s(collection)}_fts) AS s
-                FROM vec_{_s(collection)}_fts
-                JOIN vec_{_s(collection)} v ON v.rowid = vec_{_s(collection)}_fts.rowid
-                WHERE vec_{_s(collection)}_fts MATCH ?
+                SELECT v.id, v.payload, bm25({fts_table}) AS s
+                FROM {fts_table}
+                JOIN {base_table} v ON v.rowid = {fts_table}.rowid
+                WHERE {fts_table} MATCH ?
                 {where_clause}
                 ORDER BY s
                 LIMIT ?
@@ -333,17 +392,30 @@ class TursoVectorStore:
         results = []
         for row in rows:
             raw_bm25 = row[2]
-            # S4: bm25 returns NEGATIVE scores (lower = better match). Negate.
-            assert raw_bm25 <= 0, f"bm25 should be <= 0, got {raw_bm25}"
+            # S4: bm25 returns NEGATIVE scores (lower = better match). Negate so
+            # ScoredPoint.score is similarity (higher = better). A future libSQL
+            # build returning positive bm25 would invert ranking — warn rather
+            # than assert so we still return results.
+            if raw_bm25 > 0:
+                logger.warning(
+                    "bm25 returned positive score (%s); expected <= 0 — ranking may be inverted",
+                    raw_bm25,
+                )
+                score = raw_bm25
+            else:
+                score = -raw_bm25
             payload = json.loads(row[1]) if row[1] else {}
-            results.append(ScoredPoint(id=str(row[0]), score=-raw_bm25, payload=payload))
+            results.append(ScoredPoint(id=str(row[0]), score=score, payload=payload))
         return results
 
     def query_hybrid(self, collection: str, dense: list[float],
                      sparse: SparseVector, *, limit: int = 10,
-                     filter: Filter | None = None) -> list[ScoredPoint]:
+                     filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
         dense_hits = self.query_dense(collection, dense, limit=limit * 2, filter=filter)
-        sparse_hits = self.query_sparse(collection, sparse, limit=limit * 2, filter=filter)
+        sparse_hits = self.query_sparse(
+            collection, sparse, limit=limit * 2, filter=filter, query_text=query_text,
+        )
         return _rrf_fuse(dense_hits, sparse_hits, limit=limit)
 
     def retrieve(self, collection: str, ids: list[str], *,
@@ -371,6 +443,12 @@ class TursoVectorStore:
                with_payload: bool = True,
                filter: Filter | None = None,
     ) -> tuple[list[PointStruct], Any]:
+        """Paginated scan via rowid cursor.
+
+        Returns ``next_offset`` = max rowid of this batch (or None when exhausted),
+        so callers looping on offset retrieve every point. Returning None here
+        (the old behaviour) silently truncated collections larger than ``limit``.
+        """
         where, params = _filter_to_sql(filter, "payload")
         where_clause = f"WHERE {where}" if where else ""
         if offset is not None:
@@ -378,7 +456,7 @@ class TursoVectorStore:
         params.append(limit)
         try:
             rows = self._conn.execute(
-                f"SELECT id, payload FROM vec_{_s(collection)} {where_clause} LIMIT ?",
+                f"SELECT rowid, id, payload FROM vec_{_s(collection)} {where_clause} ORDER BY rowid LIMIT ?",
                 tuple(params),
             ).fetchall()
         except Exception as e:
@@ -387,9 +465,13 @@ class TursoVectorStore:
         results = []
         max_rowid = 0
         for row in rows:
-            payload = json.loads(row[1]) if with_payload and row[1] else None
-            results.append(PointStruct(id=str(row[0]), vector=[], payload=payload))
-        return results, None  # No native cursor pagination in libSQL
+            if row[0] > max_rowid:
+                max_rowid = row[0]
+            payload = json.loads(row[2]) if with_payload and row[2] else None
+            results.append(PointStruct(id=str(row[1]), vector=[], payload=payload))
+        # Signal more pages iff we filled the batch
+        next_offset = max_rowid if (results and len(results) >= limit) else None
+        return results, next_offset
 
     def get_collection(self, name: str) -> CollectionInfo:
         try:
@@ -448,14 +530,22 @@ class TursoVectorStore:
     # ------------------------------------------------------------------
 
     def iter_all(self, collection: str, *, with_vectors: bool = False) -> Iterator[PointStruct]:
-        cursor = self._conn.execute(f"SELECT id, payload FROM vec_{_s(collection)}")
+        cols = "id, payload" + (", embedding" if with_vectors else "")
+        cursor = self._conn.execute(f"SELECT {cols} FROM vec_{_s(collection)}")
         while True:
             batch = cursor.fetchmany(100)
             if not batch:
                 break
             for row in batch:
                 payload = json.loads(row[1]) if row[1] else {}
-                yield PointStruct(id=str(row[0]), vector=[], payload=payload)
+                vec: list[float] = []
+                if with_vectors and len(row) > 2 and row[2]:
+                    # Parse "[0.1,0.2,...]" → list[float]
+                    try:
+                        vec = [float(x) for x in row[2].strip("[]").split(",")]
+                    except Exception:
+                        pass
+                yield PointStruct(id=str(row[0]), vector=vec, payload=payload)
 
     def bulk_upsert(self, collection: str, points: Iterable[PointStruct]) -> int:
         count = 0

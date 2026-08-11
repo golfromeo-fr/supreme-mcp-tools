@@ -11,9 +11,13 @@ Uses in-memory libSQL — no network, no containers.
 """
 import json
 import os
+import sys
 import tempfile
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 try:
     import libsql_experimental  # noqa: F401

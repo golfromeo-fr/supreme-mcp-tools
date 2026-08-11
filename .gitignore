@@ -250,3 +250,9 @@ setup_opencode_mcp.sh
 # Backup files
 *.bak
 *.orig
+
+# Local scratch notes — bug reports about external tools and unrelated drafts.
+# Kept locally; not part of the project.
+/opencode-*.md
+/zcode-*.md
+/misc/

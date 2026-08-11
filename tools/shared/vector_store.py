@@ -41,7 +41,17 @@ class VectorStore(Protocol):
 
     # writes
     def upsert(self, collection: str, points: list[PointStruct]) -> None: ...
-    def set_payload(self, collection: str, payload: dict, *, ids: list[str]) -> None: ...
+    def set_payload(self, collection: str, payload: dict, *, ids: list[str]) -> None:
+        """
+        Merge ``payload`` into the existing payload of the given points.
+
+        CONTRACT: this is a *merge*, not a replace — keys present in ``payload``
+        overwrite/add to the stored payload; keys absent from ``payload`` are
+        preserved. This matches Qdrant's ``set_payload`` semantics. Callers rely
+        on this to update a few fields (e.g. ``{"usage_count": N}``) without
+        clobbering the rest.
+        """
+        ...
     def delete(self, collection: str, *,
                ids: list[str] | None = None,
                filter: Filter | None = None) -> None: ...
@@ -52,10 +62,23 @@ class VectorStore(Protocol):
                     limit: int = 10, filter: Filter | None = None,
                     using: str | None = None) -> list[ScoredPoint]: ...
     def query_sparse(self, collection: str, sparse: SparseVector, *,
-                     limit: int = 10, filter: Filter | None = None) -> list[ScoredPoint]: ...
+                     limit: int = 10, filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
+        """
+        Lexical (BM25-style) search.
+
+        ``query_text`` is the preferred way to drive lexical search on backends
+        that build a text index (FTS5 / tsvector): when provided, backends run a
+        real ``MATCH`` / ``to_tsquery`` on the raw text. The ``sparse`` vector
+        (integer term hashes) is Qdrant-native only and will not match a lexical
+        index; backends without a native sparse index should rely on
+        ``query_text`` when the caller has it.
+        """
+        ...
     def query_hybrid(self, collection: str, dense: list[float],
                      sparse: SparseVector, *, limit: int = 10,
-                     filter: Filter | None = None) -> list[ScoredPoint]: ...
+                     filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]: ...
 
     def retrieve(self, collection: str, ids: list[str], *,
                  with_payload: bool = True, with_vectors: bool = False) -> list[PointStruct]: ...
@@ -98,10 +121,10 @@ class NullVectorStore:
     def query_dense(self, collection, vec, *, limit=10, filter=None, using=None):
         return []
 
-    def query_sparse(self, collection, sparse, *, limit=10, filter=None):
+    def query_sparse(self, collection, sparse, *, limit=10, filter=None, query_text=None):
         return []
 
-    def query_hybrid(self, collection, dense, sparse, *, limit=10, filter=None):
+    def query_hybrid(self, collection, dense, sparse, *, limit=10, filter=None, query_text=None):
         return []
 
     def retrieve(self, collection, ids, *, with_payload=True, with_vectors=False):

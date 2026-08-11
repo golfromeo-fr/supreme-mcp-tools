@@ -42,13 +42,16 @@ class PostgresVectorStore:
                 raise RuntimeError(f"PostgresVectorStore requires PG 12+ (have {ver['v']})")
 
     def _schema_sql(self, name: str, dim: int) -> str:
+        # tsvector is built from the first non-null text payload key. memorymcp
+        # uses "text", ragmcp uses "codeChunk" — coalesce both so lexical search
+        # works for either tool without a re-index.
         return f"""
             CREATE TABLE IF NOT EXISTS vec_{name} (
                 id          TEXT PRIMARY KEY,
                 embedding   vector({dim}),
                 payload     JSONB,
                 search_vector tsvector GENERATED ALWAYS AS (
-                    to_tsvector('english', coalesce(payload->>'text', ''))
+                    to_tsvector('english', coalesce(payload->>'text', payload->>'codeChunk', payload->>'content', ''))
                 ) STORED,
                 created_at  TIMESTAMPTZ DEFAULT NOW()
             );
@@ -69,14 +72,15 @@ class PostgresVectorStore:
         distance: str = "Cosine",
     ) -> None:
         if dense_dim is None:
-            # Sparse-only: use tsvector for full-text, no dense vector
+            # Sparse-only: use tsvector for full-text, no dense vector.
+            # Coalesce text/codeChunk/content so both memorymcp and ragmcp index.
             with self._pool.connection() as conn:
                 conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS vec_{name} (
                         id TEXT PRIMARY KEY,
                         payload JSONB,
                         search_vector tsvector GENERATED ALWAYS AS (
-                            to_tsvector('english', coalesce(payload->>'text', ''))
+                            to_tsvector('english', coalesce(payload->>'text', payload->>'codeChunk', payload->>'content', ''))
                         ) STORED
                     );
                     CREATE INDEX IF NOT EXISTS idx_{name}_search
@@ -106,10 +110,17 @@ class PostgresVectorStore:
                 """, (str(p.id), vec_str, payload_json))
 
     def set_payload(self, collection: str, payload: dict, *, ids: list[str]) -> None:
+        """Merge new payload keys into existing payloads (matches Qdrant semantics).
+
+        jsonb `||` merges top-level keys: keys in `payload` overwrite/add to the
+        stored payload; keys absent from `payload` are preserved. Callers like
+        queryMemory pass partial payloads (e.g. {"usage_count": N}) expecting
+        the rest of the payload to survive.
+        """
         payload_json = json.dumps(payload)
         with self._pool.connection() as conn:
             conn.execute(
-                f"UPDATE vec_{collection} SET payload = %s::jsonb WHERE id = ANY(%s)",
+                f"UPDATE vec_{collection} SET payload = payload || %s::jsonb WHERE id = ANY(%s)",
                 (payload_json, ids),
             )
 
@@ -162,18 +173,24 @@ class PostgresVectorStore:
         return results
 
     def query_sparse(self, collection: str, sparse: SparseVector, *,
-                     limit: int = 10, filter: Filter | None = None) -> list[ScoredPoint]:
-        # Convert sparse vector indices to a tsquery
-        # Without a vocabulary, we can't reconstruct terms. Use a basic query.
-        terms = " | ".join(f"x{i}" for i in sparse.indices[:10])
+                     limit: int = 10, filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
+        """Lexical search via the tsvector index.
+
+        Prefers ``query_text`` (run through ``websearch_to_tsquery`` so callers
+        can pass a plain phrase) since integer ``sparse.indices`` are process-local
+        hashes that cannot be turned back into terms. Without ``query_text`` we
+        fall back to synthetic terms which typically match nothing.
+        """
+        tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
-        params = [terms, terms, limit] + params
+        params = [tsquery_term, tsquery_term, limit] + params
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
-                SELECT id, payload, ts_rank(search_vector, to_tsquery(%s)) AS score
+                SELECT id, payload, ts_rank(search_vector, {tsquery_sql}) AS score
                 FROM vec_{collection}
-                WHERE search_vector @@ to_tsquery(%s)
+                WHERE search_vector @@ {tsquery_sql}
                 {where_clause}
                 ORDER BY score DESC
                 LIMIT %s
@@ -186,19 +203,20 @@ class PostgresVectorStore:
 
     def query_hybrid(self, collection: str, dense: list[float],
                      sparse: SparseVector, *, limit: int = 10,
-                     filter: Filter | None = None) -> list[ScoredPoint]:
+                     filter: Filter | None = None,
+                     query_text: str | None = None) -> list[ScoredPoint]:
         vec_str = _serialize_vector(dense)
-        terms = " | ".join(f"x{i}" for i in sparse.indices[:10])
+        tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
-        params = [vec_str, vec_str, terms, terms, limit] + params
+        params = [vec_str, vec_str, tsquery_term, tsquery_term, limit] + params
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload,
                     (1 - (embedding <=> %s::vector)) * 0.5 +
-                    ts_rank(search_vector, to_tsquery(%s)) * 0.5 AS combined
+                    ts_rank(search_vector, {tsquery_sql}) * 0.5 AS combined
                 FROM vec_{collection}
-                WHERE search_vector @@ to_tsquery(%s)
+                WHERE search_vector @@ {tsquery_sql}
                 {where_clause}
                 ORDER BY combined DESC
                 LIMIT %s
@@ -326,6 +344,21 @@ def _serialize_vector(vec: list[float] | dict[str, list[float]]) -> str:
         if isinstance(v, list):
             return "[" + ",".join(str(x) for x in v) + "]"
     return "[]"
+
+
+def _build_tsquery(query_text: str | None, sparse: SparseVector) -> tuple[str, str]:
+    """Build a tsquery term + the SQL function that parses it.
+
+    Returns ``(term, sql_expr)`` where ``sql_expr`` references the bound ``term``.
+    Prefers ``websearch_to_tsquery`` on the raw ``query_text`` (plain-phrase
+    friendly); falls back to synthetic ``xN`` terms from the integer sparse
+    indices, which will rarely match real text.
+    """
+    if query_text:
+        return query_text, "websearch_to_tsquery('english', %s)"
+    # Fallback: synthetic terms from integer hashes (best-effort, usually empty)
+    terms = " | ".join(f"x{i}" for i in (sparse.indices or [])[:10]) or "xnone"
+    return terms, "to_tsquery('english', %s)"
 
 
 def _filter_to_sql(f: Filter | None) -> tuple[str, list]:

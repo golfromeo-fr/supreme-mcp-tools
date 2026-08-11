@@ -27,7 +27,7 @@ from launcher import (
 )
 from launcher.management_server import ManagementServer
 from launcher.service_registry import ServiceRegistry
-from launcher.config_types import DEFAULT_HOST
+from launcher.config_types import DEFAULT_HOST, make_file_handler
 
 # Import monitoring modules
 from monitoring.config import load_monitoring_config, MonitoringConfig
@@ -101,15 +101,12 @@ def setup_logging(config: Config, verbose: bool = False) -> None:
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
     
-    # File handler with rotation
-    if log_file:
-        log_path = Path(log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_path,
-            maxBytes=10 * 1024 * 1024,  # 10MB
-            backupCount=5
-        )
+    # File handler with rotation (time-based, config-driven).
+    # make_file_handler builds a TimedRotatingFileHandler so logs roll over on
+    # a calendar schedule (default monthly) rather than only on size. This
+    # prevents launcher.log growing unbounded over months/years.
+    file_handler = make_file_handler(config.logging_config)
+    if file_handler is not None:
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
     

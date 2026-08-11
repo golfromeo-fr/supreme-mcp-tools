@@ -228,15 +228,24 @@ Always run `verify` after migration to confirm data parity.
 
 - Full-text search via FTS5 (token-based, NOT fuzzy — typos won't match)
 - Same dedup logic as PG (`text_hash + memory_type`)
-- JSON1 for tags with `json_each()` containment
+- JSON1 for tags with `json_each()` containment; payload merges via `json_set`
+  (shallow top-level replace — matches Qdrant/PG; `json_patch` deep-merge only as
+  a fallback for non-bareword keys, which no stored payload uses)
 - Vector search via `vector_distance_cos()` (cosine distance)
 - HNSW index for ANN if libSQL version supports it (falls back to brute-force)
+- Sparse/hybrid search works via the FTS5 sidecar when the caller passes
+  `query_text` (the raw query string) — the integer `SparseVector.indices`
+  path is Qdrant-only and will not match here
+- Single shared connection is thread-safe (libsql's C binding serializes
+  statements internally); `autocommit=True` keeps statements independent
 - Local file mode (`file:path.db`) — zero-network, zero-containers
 - `file::memory:` for tests — in-memory, no disk
 
 ### Qdrant
 
-- Native sparse vectors for hybrid search
+- Native sparse vectors for hybrid search (integer term-hash vectors matched
+  via dot-product; relies on a per-process vocabulary shared between index
+  and query time)
 - HNSW for dense ANN
 - Payload filters for metadata filtering
 - Named vectors for multi-model collections
@@ -244,8 +253,32 @@ Always run `verify` after migration to confirm data parity.
 ### pgvector
 
 - HNSW index via `USING hnsw (embedding vector_cosine_ops)`
-- `tsvector` generated column for BM25-like sparse search
+- `tsvector` generated column for BM25-like sparse search (built from the
+  first non-null of `payload.text` / `payload.codeChunk` / `payload.content`)
+- Sparse/hybrid search works via `websearch_to_tsquery` when the caller passes
+  `query_text`; the integer `SparseVector.indices` path is Qdrant-only
+- `payload || new::jsonb` for payload merges (matches Qdrant's merge semantics)
 - Requires PostgreSQL 12+ (for `GENERATED ALWAYS AS ... STORED`)
+
+## Conventions
+
+### `set_payload` is a merge
+
+All `VectorStore` impls treat `set_payload` as a **merge**, not a replace:
+keys in the argument overwrite/add to the stored payload; keys absent from the
+argument are preserved. This matches Qdrant's native semantics and lets callers
+update a few fields (e.g. `{"usage_count": N}`) without clobbering the rest.
+Turso uses `json_patch`, PG uses `||` on jsonb. A cross-backend contract test
+(`tests/test_backend_contracts.py`) guards this.
+
+### Sparse search: `query_text` vs integer `SparseVector`
+
+The neutral `SparseVector(indices, values)` carries integer term hashes that
+only Qdrant can match (its native sparse index). Turso and PG build lexical
+indexes (FTS5 / tsvector) over the payload text, so to search them you must
+pass `query_text=<raw query>` to `query_sparse` / `query_hybrid`; the backends
+then run a real `MATCH` / `websearch_to_tsquery`. memorymcp is dense-only and
+unaffected.
 
 ## Dependencies
 

@@ -49,13 +49,37 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(debug: bool = False) -> None:
-    """Configure logging."""
+    """Configure logging — console + rotating file handler.
+
+    The file handler is built from config/launcher_config.json logging block
+    (default: logs/launcher.log, rotated monthly). This keeps the new
+    `python -m launcher` entry point consistent with the legacy launchmcp.py,
+    which already used the same make_file_handler helper.
+    """
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+    fmt = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    # Rotating file handler from config (monthly rotation by default).
+    try:
+        from launcher.config import Config
+        from launcher.config_types import make_file_handler
+        cfg = Config.load().logging_config
+        fh = make_file_handler(cfg)
+        if fh is not None:
+            fh.setFormatter(fmt)
+            root.addHandler(fh)
+    except Exception as e:
+        # Logging setup must never crash startup.
+        logging.getLogger(__name__).warning(f"Could not configure file logging: {e}")
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:

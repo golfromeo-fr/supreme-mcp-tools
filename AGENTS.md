@@ -125,6 +125,18 @@ All tools support both SSE and streamable-http via FastMCP. Controlled centrally
 
 The launcher sets `MCP_TRANSPORT` env var before importing tool modules. Each `_fastmcp.py` reads it at import time to select `mcp.sse_app()` or `mcp.streamable_http_app()`. Per-tool override: set `MCP_TRANSPORT` in the tool's `.env` — this takes precedence over the launcher's setting since the tool reads the env var directly.
 
+### Session management (streamable-http only)
+
+Sessions live in-process (`StreamableHTTPSessionManager._server_instances`); a launcher restart invalidates every client session. Two controls, wired in `tools/shared/server_factory.py:get_transport_app`:
+
+| Control | Effect | Default |
+|---|---|---|
+| `POST /admin/flush-sessions` | Terminate all in-memory sessions. Stale client `Mcp-Session-Id` values then get HTTP 404 and the client re-initializes. Auth: same tool API key as `/mcp` (`Authorization: Bearer <key>` or `X-API-Key`). | enabled |
+| `MCP_SESSION_IDLE_TIMEOUT` (secs) | Idle-session TTL — stale sessions self-evict instead of accumulating. `0`/unset disables. | 1800 |
+| `MCP_DISABLE_FLUSH_ENDPOINT` | Suppress the flush route (TTL still applies). | unset |
+
+Flush a single tool after a restart: `curl -X POST -H "Authorization: Bearer <key>" http://127.0.0.1:<port>/admin/flush-sessions` → `{"flushed": N}`. Tests: `tests/test_session_flush.py`.
+
 ### config.json auth structure
 
 The `api_key` MUST be nested under `"auth"` — `load_auth_config()` reads `config.get("auth", {}).get("api_key")`:

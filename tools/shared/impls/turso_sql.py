@@ -15,17 +15,9 @@ from typing import Iterator, Iterable
 from datetime import datetime, timezone
 
 from shared.hashing import text_hash
+from shared.text_search_utils import escape_fts5_query as _escape_fts5_query
 
 logger = logging.getLogger(__name__)
-
-
-def _escape_fts5_query(query: str) -> str:
-    """
-    Escape a user query for FTS5 MATCH — wraps in double quotes (S3).
-    Internal double quotes are doubled per FTS5 escaping rules.
-    """
-    escaped = query.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _exec_statements(conn, sql: str) -> None:
@@ -67,7 +59,16 @@ class TursoSqlStore:
     def __init__(self, url: str, auth_token: str | None = None):
         import libsql_experimental as libsql
 
-        # libsql.connect doesn't accept None for auth_token — only pass it if non-empty.
+        # Concurrency: a single connection is shared across all requests. This is
+        # safe because libsql_experimental's C binding serializes statements via
+        # an internal mutex (verified: 4 threads x 50 interleaved INSERT/SELECT
+        # ops on one connection produced 200/200 correct rows, no "database is
+        # locked"). autocommit=True keeps each statement its own transaction so
+        # one thread's implicit transaction can't block another. Unlike oraclemcp
+        # we therefore do NOT add a threading.Lock here — it would only reduce
+        # throughput without improving correctness. If a future build drops the
+        # internal mutex, switch to a small Python connection pool (libsql
+        # supports multiple connect()s to the same URL).
         if auth_token:
             self._conn = libsql.connect(url, auth_token=auth_token)
         else:
@@ -82,6 +83,11 @@ class TursoSqlStore:
         Run the DDL. libsql_experimental doesn't reliably create triggers via
         executescript — so we split statements and create tables only.
         FTS5 sync is handled manually in upsert_memory/delete_memory (no triggers).
+
+        The canonical schema lives in ``turso_sql_schema.sql`` next to this module;
+        ``_INLINE_SCHEMA`` below is a last-resort fallback for environments where
+        the .sql file is not packaged (e.g. frozen/imported standalone). Keep the
+        two in sync — a test in tests/test_turso_stores.py asserts parity.
         """
         schema_path = os.path.join(os.path.dirname(__file__), "turso_sql_schema.sql")
         if os.path.exists(schema_path):
@@ -238,11 +244,29 @@ class TursoSqlStore:
             return None
 
     def delete_memory(self, memory_id: str) -> bool:
-        """Delete a memory by ID."""
+        """Delete a memory by ID, keeping the FTS5 index in sync.
+
+        libsql doesn't reliably support the sync triggers in the schema, so the
+        FTS5 'delete' command is issued explicitly before the base row goes away.
+        Without this the FTS index accumulates orphan rows for deleted memories.
+        """
         if not self.is_available:
             return False
 
         try:
+            row = self._conn.execute(
+                "SELECT rowid, text FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            # Remove from FTS5 first (needs the row's text for the content table)
+            try:
+                self._conn.execute(
+                    "INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', ?, ?)",
+                    (row[0], row[1]),
+                )
+            except Exception as e:
+                logger.debug(f"FTS5 delete-side sync skipped: {e}")
             result = self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             return result.rowcount > 0
         except Exception as e:

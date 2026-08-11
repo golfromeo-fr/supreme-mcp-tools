@@ -9,6 +9,7 @@ Each dataclass validates on construction and raises ConfigError on invalid value
 from dataclasses import dataclass, field
 from typing import Any
 import logging
+import logging.handlers
 
 from .errors import ConfigError
 
@@ -28,17 +29,43 @@ class LoggingConfig:
     Logging subsystem configuration.
 
     Immutable - modify by creating a new instance.
+
+    Rotation: logs rotate on a time interval (default 30 days, keeping 6
+    backups) AND when the active file exceeds ``max_bytes`` (10 MB by default).
+    Set ``rotation_when`` to one of 'S' (seconds), 'M' (minutes),
+    'H' (hours), 'D' (days), 'W0'-'W6' (weekday), or 'midnight'. Set
+    ``rotation_interval`` accordingly. The size cap is a secondary guard so a
+    log flood within one rotation interval still rolls over (it does not change
+    the file naming — size-triggered rollovers reuse the date suffix and are
+    pruned by ``rotation_backup_count``). Set ``file`` to None to disable the
+    file handler; set ``max_bytes`` to 0 to disable the size guard.
     """
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     file: str | None = None
     component_log_levels: dict[str, str] = field(default_factory=dict)
+    # Time-based rotation (primary)
+    rotation_when: str = "D"          # D = days; also S/M/H/W0..W6/midnight
+    rotation_interval: int = 30       # rotate every N units (30 days default)
+    rotation_backup_count: int = 6    # keep N rotated files (6 months at 30d)
+    # Size-based rotation (secondary guard)
+    max_bytes: int = 10 * 1024 * 1024  # 10 MB — rollover early if a flood hits
 
     VALID_LEVELS = ("debug", "info", "warning", "error", "critical")
+    VALID_WHEN = ("S", "M", "H", "D", "MIDNIGHT", "W0", "W1", "W2", "W3", "W4", "W5", "W6")
 
     def __post_init__(self):
         if self.level.lower() not in self.VALID_LEVELS:
             raise ConfigError(f"Invalid log level: {self.level}")
+        if self.rotation_when.upper() not in self.VALID_WHEN:
+            raise ConfigError(
+                f"Invalid rotation_when: {self.rotation_when}. "
+                f"Must be one of {self.VALID_WHEN}"
+            )
+        if self.rotation_interval <= 0:
+            raise ConfigError(f"rotation_interval must be positive, got {self.rotation_interval}")
+        if self.rotation_backup_count < 0:
+            raise ConfigError(f"rotation_backup_count must be >= 0, got {self.rotation_backup_count}")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "LoggingConfig":
@@ -48,6 +75,12 @@ class LoggingConfig:
             format=data.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
             file=data.get("file"),
             component_log_levels=data.get("componentLogLevels", {}),
+            rotation_when=data.get("rotationWhen", data.get("rotation_when", "D")),
+            rotation_interval=data.get("rotationInterval", data.get("rotation_interval", 30)),
+            rotation_backup_count=data.get(
+                "rotationBackupCount", data.get("rotation_backup_count", 6)
+            ),
+            max_bytes=data.get("maxBytes", data.get("max_bytes", 10 * 1024 * 1024)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,7 +90,71 @@ class LoggingConfig:
             "format": self.format,
             "file": self.file,
             "componentLogLevels": self.component_log_levels,
+            "rotationWhen": self.rotation_when,
+            "rotationInterval": self.rotation_interval,
+            "rotationBackupCount": self.rotation_backup_count,
+            "maxBytes": self.max_bytes,
         }
+
+
+class _SizeAwareTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """TimedRotatingFileHandler that ALSO rolls over on size.
+
+    The stdlib offers time-OR-size rotation, never both. A persistent launcher
+    can log a flood inside one rotation interval (e.g. a month), so we layer a
+    size check on top of the calendar schedule: ``shouldRollover`` returns true
+    when either the next-scheduled time has passed OR the active file is at/over
+    ``max_bytes``. ``doRollover`` is inherited unchanged (date-stamped naming +
+    ``backupCount`` pruning), so total disk stays bounded by ``backupCount``
+    rotated files plus one active file.
+
+    ``max_bytes == 0`` disables the size guard (matching ``RotatingFileHandler``).
+    """
+
+    def __init__(self, filename, max_bytes: int = 0, **kwargs):
+        super().__init__(filename, **kwargs)
+        self.max_bytes = max_bytes
+
+    def shouldRollover(self, record):
+        # 1) calendar schedule (also opens the stream on first use)
+        if super().shouldRollover(record):
+            return True
+        # 2) size cap — after super() returned False, self.stream is open
+        if self.max_bytes > 0 and self.stream is not None:
+            try:
+                return self.stream.tell() >= self.max_bytes
+            except Exception:
+                # Never let rotation logic raise into the logging call site.
+                return False
+        return False
+
+
+def make_file_handler(cfg: "LoggingConfig") -> logging.Handler | None:
+    """Build a rotating file handler from a LoggingConfig.
+
+    Returns a :class:`_SizeAwareTimedRotatingFileHandler` so logs roll over on a
+    calendar schedule (default monthly) AND on the ``max_bytes`` size cap — both
+    conditions trigger a rollover, and rotated files are pruned to
+    ``rotation_backup_count``. Returns None if ``cfg.file`` is unset. Both
+    launcher entry points (launchmcp.py legacy and launcher/__main__.py new) use
+    this so they share identical rotation behaviour.
+    """
+    if not cfg.file:
+        return None
+    from pathlib import Path
+
+    log_path = Path(cfg.file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = _SizeAwareTimedRotatingFileHandler(
+        log_path,
+        when=cfg.rotation_when,
+        interval=cfg.rotation_interval,
+        backupCount=cfg.rotation_backup_count,
+        max_bytes=cfg.max_bytes,
+        encoding="utf-8",
+        utc=False,
+    )
+    return handler
 
 
 @dataclass(frozen=True)

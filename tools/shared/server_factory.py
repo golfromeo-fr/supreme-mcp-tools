@@ -194,6 +194,15 @@ def get_transport_app(mcp, transport: str | None = None):
     - fastmcp ≥3.3: mcp.http_app(transport=...)
     - mcp.server.fastmcp (legacy): mcp.streamable_http_app() / mcp.sse_app()
 
+    For the streamable-http transport, also wires:
+    - ``POST /admin/flush-sessions`` — terminate all in-memory sessions so stale
+      clients get HTTP 404 and re-initialize. Reuses the app-wide auth (same
+      tool API key). Enabled unless ``MCP_DISABLE_FLUSH_ENDPOINT`` is set.
+    - A session idle TTL (``MCP_SESSION_IDLE_TIMEOUT`` seconds, default 1800) so
+      stale sessions self-evict instead of accumulating until process restart.
+      FastMCP's ``http_app()`` doesn't expose this kwarg, so it is set on the
+      session manager right after the lifespan creates it.
+
     Args:
         mcp: FastMCP server instance
         transport: "streamable-http" (default), "sse"
@@ -206,16 +215,144 @@ def get_transport_app(mcp, transport: str | None = None):
 
     if hasattr(mcp, "http_app"):
         # fastmcp ≥3.3 — unified http_app with transport param
-        return mcp.http_app(transport="sse" if transport == "sse" else "http")
+        app = mcp.http_app(transport="sse" if transport == "sse" else "http")
+        if transport == "streamable-http":
+            _wire_session_management(app)
+        return app
     elif hasattr(mcp, "streamable_http_app"):
         # legacy mcp.server.fastmcp — separate methods
         if transport == "sse":
             return mcp.sse_app()
-        return mcp.streamable_http_app()
+        app = mcp.streamable_http_app()
+        _wire_session_management(app)
+        return app
     else:
         raise RuntimeError(
             f"FastMCP server has neither http_app nor streamable_http_app: {type(mcp)}"
         )
+
+
+def _wire_session_management(app) -> None:
+    """Attach the flush-sessions admin route and the session idle TTL.
+
+    The session manager is created inside FastMCP's lifespan, so the idle TTL
+    is applied by wrapping that lifespan to run after the manager exists.
+
+    The flush route authenticates via the app-wide AuthenticationMiddleware
+    (DualHeaderAuthBackend) — the same tool API key that protects /mcp.
+    """
+    if os.environ.get("MCP_DISABLE_FLUSH_ENDPOINT"):
+        _apply_session_idle_timeout_via_lifespan(app)
+        return
+
+    try:
+        from starlette.routing import Route
+        from starlette.responses import JSONResponse
+    except ImportError:
+        _apply_session_idle_timeout_via_lifespan(app)
+        return
+
+    async def flush_sessions(request):
+        # Auth is enforced by app-wide AuthenticationMiddleware; require an
+        # authenticated user (same tool API key that protects /mcp).
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return JSONResponse(
+                {"error": "unauthorized"}, status_code=401,
+                headers={"www-authenticate": 'Bearer error="invalid_token"'},
+            )
+        # Find the /mcp route's endpoint — it holds the session_manager singleton.
+        sm = _get_session_manager(app)
+        if sm is None:
+            return JSONResponse({"error": "session manager not initialized"}, status_code=503)
+        count = 0
+        # terminate() closes per-request streams and marks the transport _terminated;
+        # the manager only auto-pops on idle-timeout/crash, so clear explicitly.
+        for transport in list(getattr(sm, "_server_instances", {}).values()):
+            try:
+                await transport.terminate()
+            except Exception:
+                pass
+            count += 1
+        getattr(sm, "_server_instances", {}).clear()
+        return JSONResponse({"flushed": count})
+
+    routes = list(app.router.routes)
+    routes.append(Route("/admin/flush-sessions", flush_sessions, methods=["POST"]))
+    app.router.routes = routes
+
+    _apply_session_idle_timeout_via_lifespan(app)
+
+
+def _get_session_manager(app):
+    """Return the StreamableHTTPSessionManager serving /mcp, or None.
+
+    The /mcp route's endpoint is wrapped by auth middleware (RequireAuthMiddleware),
+    so walk the ``.app`` chain inward to find the StreamableHTTPASGIApp singleton
+    whose ``session_manager`` is populated by the lifespan. The manager only
+    exists after startup (it is created inside the lifespan).
+    """
+    try:
+        from fastmcp.server.http import StreamableHTTPASGIApp
+    except ImportError:
+        return None
+    for r in getattr(app.router, "routes", []):
+        if getattr(r, "path", None) != "/mcp":
+            continue
+        node = getattr(r, "endpoint", None)
+        for _ in range(10):  # bound the walk in case of cycles
+            if isinstance(node, StreamableHTTPASGIApp):
+                return getattr(node, "session_manager", None)
+            inner = getattr(node, "app", None)
+            if inner is None or inner is node:
+                break
+            node = inner
+    return None
+
+
+def _apply_session_idle_timeout_via_lifespan(app) -> None:
+    """Set session_idle_timeout on the session manager once the lifespan creates it.
+
+    FastMCP's http_app() does not expose session_idle_timeout, and the manager is
+    instantiated inside the lifespan — so wrap the lifespan context factory to
+    set the attribute after the original startup runs. The reaper reads this
+    attribute live, so the value takes effect for new sessions immediately.
+    """
+    raw_timeout = os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")
+    try:
+        idle_timeout = float(raw_timeout)
+        if idle_timeout <= 0:
+            idle_timeout = None
+    except (TypeError, ValueError):
+        idle_timeout = None
+    if idle_timeout is None:
+        return
+
+    router = getattr(app, "router", None)
+    original_lifespan = getattr(router, "lifespan_context", None) if router else None
+    if original_lifespan is None:
+        return
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan_with_ttl(scoped_app):
+        # Original lifespan creates + runs the session manager; once it has
+        # yielded (startup complete), the manager exists and we can patch it.
+        async with original_lifespan(scoped_app):
+            sm = _get_session_manager(app)
+            if sm is not None and getattr(sm, "session_idle_timeout", None) is None:
+                try:
+                    sm.session_idle_timeout = idle_timeout
+                except Exception:
+                    pass
+            yield
+
+    # Starlette's Router uses lifespan_context at startup.
+    try:
+        router.lifespan_context = lifespan_with_ttl
+    except Exception:
+        pass
 
 
 def _resolve_api_key(name: str, fallback: str | None) -> str:
