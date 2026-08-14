@@ -35,15 +35,12 @@ class ToolMetadata:
 class ToolDiscovery:
     """Discover and load MCP tools from directories."""
     
-    # Required exports for SSE transport
-    REQUIRED_EXPORTS_SSE = ["server", "app", "sse_transport"]
-    # Required exports for Streamable HTTP transport (just app needed)
+    # Required exports for the streamable HTTP transport (just app needed)
     REQUIRED_EXPORTS_STREAMABLE = ["app"]
     
     # Default patterns to exclude from tool discovery
     # These files are supplementary modules, not standalone MCP tools
     DEFAULT_EXCLUDE_PATTERNS = [
-        "_sse",         # SSE transport variants (legacy)
         "_streamable",   # Obsoleted by _fastmcp variants
         "migrate_",     # Migration scripts
         "copilot_context_injector",  # Helper module, not a tool
@@ -240,7 +237,7 @@ class ToolDiscovery:
     def _validate_tool(self, module: Any) -> None:
         """
         Validate that a module is a valid MCP tool.
-        Supports both SSE and Streamable HTTP transport types.
+        Supports FastAPI and FastMCP (Starlette) tool shapes.
         
         Args:
             module: Module to validate
@@ -281,48 +278,11 @@ class ToolDiscovery:
         if fastmcp_valid:
             return
 
-        # Check for SSE transport (needs server, app, sse_transport)
-        missing_exports = []
-        exports = {}
-        
-        for export_name in self.REQUIRED_EXPORTS_SSE:
-            if not hasattr(module, export_name):
-                missing_exports.append(export_name)
-            else:
-                exports[export_name] = getattr(module, export_name)
-        
-        if missing_exports:
-            raise ValidationError(
-                "Module is missing required exports",
-                missing_exports=missing_exports
-            )
-        
-        # Validate export types
-        try:
-            from mcp.server.lowlevel import Server
-            from starlette.applications import Starlette
-            from mcp.server.sse import SseServerTransport
-            
-            if not isinstance(exports["server"], Server):
-                raise ValidationError(
-                    f"'server' must be an instance of mcp.server.lowlevel.Server, "
-                    f"got {type(exports['server']).__name__}"
-                )
-            
-            if not isinstance(exports["app"], Starlette):
-                raise ValidationError(
-                    f"'app' must be an instance of starlette.applications.Starlette, "
-                    f"got {type(exports['app']).__name__}"
-                )
-            
-            if not isinstance(exports["sse_transport"], SseServerTransport):
-                raise ValidationError(
-                    f"'sse_transport' must be an instance of mcp.server.sse.SseServerTransport, "
-                    f"got {type(exports['sse_transport']).__name__}"
-                )
-        
-        except ImportError as e:
-            raise ValidationError(f"Failed to import MCP/Starlette types: {e}")
+        # No supported tool shape (SSE-style exports were removed 2026-08, Phase -1)
+        raise ValidationError(
+            "Module is missing required exports (need FastAPI 'app' or FastMCP 'app' + 'mcp')",
+            missing_exports=["app"],
+        )
     
     def _extract_metadata(self, module: Any, file_path: Path) -> ToolMetadata:
         """
@@ -354,13 +314,10 @@ class ToolDiscovery:
         # Extract dependencies from requirements.txt if available
         dependencies = self._extract_dependencies(file_path.parent)
         
-        # Extract exports - try both SSE and Streamable HTTP
+        # Extract exports
         exports = {}
-        for export_name in self.REQUIRED_EXPORTS_SSE:
-            if hasattr(module, export_name):
-                exports[export_name] = getattr(module, export_name)
         for export_name in self.REQUIRED_EXPORTS_STREAMABLE:
-            if hasattr(module, export_name) and export_name not in exports:
+            if hasattr(module, export_name):
                 exports[export_name] = getattr(module, export_name)
         
         # Store module reference for launcher to call setup_extensions()

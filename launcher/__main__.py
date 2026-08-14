@@ -165,9 +165,9 @@ Examples:
     parser.add_argument(
         "--transport",
         type=str,
-        choices=["streamable-http", "sse"],
+        choices=["streamable-http"],
         default=None,
-        help="Transport protocol for all tools (default: streamable-http)"
+        help="Transport protocol for all tools (streamable-http only; SSE was removed)"
     )
     
     return parser.parse_args(args)

@@ -188,13 +188,12 @@ def create_fastmcp_server(
 
 
 def get_transport_app(mcp, transport: str | None = None):
-    """Get the ASGI app with the correct transport.
+    """Get the ASGI app for the streamable-http transport.
 
-    Handles FastMCP version differences:
-    - fastmcp ≥3.3: mcp.http_app(transport=...)
-    - mcp.server.fastmcp (legacy): mcp.streamable_http_app() / mcp.sse_app()
+    SSE support was removed (2026-08, plans/mcp-2026-07-28-stateless-upgrade.md
+    Phase -1): ``MCP_TRANSPORT=sse`` raises instead of silently switching.
 
-    For the streamable-http transport, also wires:
+    Also wires session management on the returned app:
     - ``POST /admin/flush-sessions`` — terminate all in-memory sessions so stale
       clients get HTTP 404 and re-initialize. Reuses the app-wide auth (same
       tool API key). Enabled unless ``MCP_DISABLE_FLUSH_ENDPOINT`` is set.
@@ -205,31 +204,29 @@ def get_transport_app(mcp, transport: str | None = None):
 
     Args:
         mcp: FastMCP server instance
-        transport: "streamable-http" (default), "sse"
+        transport: optional override; only "streamable-http" (or "http") is
+            accepted — anything else, notably "sse", raises.
 
     Returns:
         Starlette ASGI application
     """
     transport = (transport or os.environ.get("MCP_TRANSPORT", "streamable-http")).lower()
-    transport = "sse" if transport == "sse" else "streamable-http"
-
-    if hasattr(mcp, "http_app"):
-        # fastmcp ≥3.3 — unified http_app with transport param
-        app = mcp.http_app(transport="sse" if transport == "sse" else "http")
-        if transport == "streamable-http":
-            _wire_session_management(app)
-        return app
-    elif hasattr(mcp, "streamable_http_app"):
-        # legacy mcp.server.fastmcp — separate methods
-        if transport == "sse":
-            return mcp.sse_app()
-        app = mcp.streamable_http_app()
-        _wire_session_management(app)
-        return app
-    else:
-        raise RuntimeError(
-            f"FastMCP server has neither http_app nor streamable_http_app: {type(mcp)}"
+    if transport == "sse":
+        raise ValueError(
+            "SSE transport was removed (plans/mcp-2026-07-28-stateless-upgrade.md, "
+            "Phase -1). Unset MCP_TRANSPORT or set it to 'streamable-http'."
         )
+    if transport not in ("streamable-http", "http"):
+        raise ValueError(
+            f"Unsupported MCP_TRANSPORT {transport!r}: only 'streamable-http' is supported"
+        )
+
+    if not hasattr(mcp, "http_app"):
+        raise RuntimeError(f"FastMCP server has no http_app method: {type(mcp)}")
+
+    app = mcp.http_app(transport="http")
+    _wire_session_management(app)
+    return app
 
 
 def _wire_session_management(app) -> None:

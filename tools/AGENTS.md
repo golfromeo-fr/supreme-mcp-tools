@@ -7,8 +7,6 @@ Each MCP tool lives in `tools/<name>/` and must follow this structure:
 ```
 tools/<name>/
 ├── <name>_fastmcp.py   # PRIMARY — FastMCP-based server (required)
-├── <name>_sse.py       # LEGACY — SSE transport (auto-excluded)
-├── <name>_streamable.py # LEGACY — Streamable HTTP (auto-excluded)
 ├── requirements.txt    # Python dependencies
 ├── config.json         # Tool-specific config
 └── support modules     # Helpers only imported by the primary server
@@ -18,17 +16,17 @@ tools/<name>/
 
 The launcher (`launcher/tool_discovery.py`) scans `tools/<name>/` using **non-recursive glob** — only top-level `.py` files in each tool directory. Subdirectories are never scanned.
 
-A valid MCP tool module must export **one of**:
+A valid MCP tool module must export:
 
 | Transport | Required exports |
 |-----------|-----------------|
-| **FastMCP** (preferred) | `app` — result of `mcp.streamable_http_app()` |
-| **SSE** (legacy) | `server`, `app`, `sse_transport` |
+| **FastMCP** | `app` — result of `get_transport_app(mcp)` |
+
+(SSE-style modules exporting `server`/`sse_transport` were removed 2026-08.)
 
 ### Files that are NOT tools
 
 These patterns are auto-excluded from discovery:
-- `*_sse.py` — legacy SSE variants
 - `*_streamable.py` — legacy streamable variants
 - `copilot_context_injector.py` — helper module
 - `migrate_*` — migration scripts

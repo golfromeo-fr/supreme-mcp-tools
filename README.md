@@ -251,31 +251,18 @@ options:
 
 ## MCP Tool Requirements
 
-For a Python module to be recognized as a valid MCP tool, it must export the following objects:
+For a Python module to be recognized as a valid MCP tool, it must export an `app` object — either a
+FastAPI app or (the standard path) a Starlette app built via the shared server factory:
 
-1. `server`: An instance of `mcp.server.lowlevel.Server`
-2. `app`: An instance of `starlette.applications.Starlette`
-3. `sse_transport`: An instance of `mcp.server.sse.SseServerTransport`
-
-Example:
 ```python
-from mcp.server.lowlevel import Server
-from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.routing import Route, Mount
+from tools.shared.server_factory import create_fastmcp_server, get_transport_app
 
-# Create MCP server
-server = Server("my_tool")
-
-# Create SSE transport
-sse_transport = SseServerTransport("/messages/")
-
-# Create Starlette app
-app = Starlette(routes=[
-    Route("/sse", endpoint=handle_sse),
-    Mount("/messages/", app=sse_transport.handle_post_message),
-])
+mcp = create_fastmcp_server("my_tool")   # registers @mcp.tool() functions
+app = get_transport_app(mcp)             # streamable HTTP at /mcp
 ```
+
+SSE-style modules (exporting `server`/`sse_transport`) are no longer supported — the SSE transport
+was removed in August 2026; all tools serve streamable HTTP.
 
 ## Available MCP Tools
 
@@ -427,7 +414,7 @@ If you see a port conflict error:
 
 If a tool is not discovered:
 1. Verify the tool directory is in `toolDirectories`
-2. Check that the tool exports the required objects (server, app, sse_transport)
+2. Check that the tool exports an `app` object (see MCP Tool Requirements above)
 3. Use `--list-tools` to see all discovered tools
 
 ### Import Errors
@@ -471,8 +458,8 @@ Running multiple MCP tools in a single process provides significant memory savin
 
 To add a new MCP tool:
 
-1. Create your tool following the MCP tool pattern
-2. Export `server`, `app`, and `sse_transport` objects
+1. Create your tool following the MCP tool pattern (see MCP Tool Requirements above)
+2. Export an `app` built via `create_fastmcp_server()` + `get_transport_app()`
 3. Place the tool file in a configured directory
 4. Run `python launchmcp.py --list-tools` to verify discovery
 5. Launch with `python launchmcp.py your_tool_name`

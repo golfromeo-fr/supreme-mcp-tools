@@ -28,9 +28,9 @@ Ensure your MCP tools are running with FEF V3 enabled:
 ./launchmcp.py simplemcp ragmcp webmcp
 
 # Or start individual tools
-python tools/webmcp/webmcp_sse.py &
-python tools/simplemcp/simplemcp_sse.py &
-python tools/ragmcp/ragmcp_sse.py &
+python tools/webmcp/webmcp_fastmcp.py &
+python tools/simplemcp/simplemcp_fastmcp.py &
+python tools/ragmcp/ragmcp_fastmcp.py &
 ```
 
 ### 3. Verify Management Servers

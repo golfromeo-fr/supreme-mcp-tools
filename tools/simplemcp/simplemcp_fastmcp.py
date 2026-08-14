@@ -402,14 +402,9 @@ __all__ = ["app", "setup_extensions", "mcp"]
 if __name__ == "__main__":
     import uvicorn
 
-    transport = os.environ.get("MCP_TRANSPORT", "streamable-http").lower()
-    logger.info(f"Starting {TOOL_NAME} FastMCP server (transport: {transport})")
+    logger.info(f"Starting {TOOL_NAME} FastMCP server (transport: streamable-http)")
     logger.info(f"  MCP port: {MCP_PORT}")
-    if transport == "sse":
-        logger.info(f"  SSE endpoint: http://localhost:{MCP_PORT}/sse")
-        logger.info(f"  Messages: http://localhost:{MCP_PORT}/messages")
-    else:
-        logger.info(f"  Streamable HTTP: http://localhost:{MCP_PORT}/mcp")
+    logger.info(f"  Streamable HTTP: http://localhost:{MCP_PORT}/mcp")
     if FEF_V3_AVAILABLE:
         logger.info(f"  FEF V3 mgmt: http://localhost:{MGMT_PORT}")
 

@@ -8,7 +8,6 @@ pip install -r requirements.txt
 # Primary entry point (new style)
 python -m launcher --tools webmcp,simplemcp   # start specific tools
 python -m launcher --management-port 8200    # start with mgmt API
-python -m launcher --transport sse           # override transport
 python -m launcher --no-management           # skip central mgmt server
 python -m launcher --debug                   # DEBUG logging
 
@@ -28,8 +27,8 @@ python -m tools.shared.migrate_store import --in backup.jsonl --backend turso+tu
 python -m tools.shared.migrate_store verify --left postgres+qdrant --right turso+turso
 
 # Tests
-python -m pytest                             # everything (~458 tests)
-python -m pytest tests/                      # project test suite only (~415)
+python -m pytest                             # everything (~538 tests)
+python -m pytest tests/                      # project test suite only (~531)
 python -m pytest tests/test_memory_text.py -v
 ```
 
@@ -42,7 +41,7 @@ Unified launcher runs multiple MCP tools in one Python process. Each tool is a F
 ```
 launcher/          # orchestration: discovery, port mgmt, server lifecycle, FEF V3
 tools/<name>/      # individual MCP tools (each is a self-contained server)
-  <name>_fastmcp.py  # PRIMARY entry point — must export `app` from mcp.streamable_http_app()
+  <name>_fastmcp.py  # PRIMARY entry point — must export `app` from get_transport_app(mcp)
   config.json        # tool config — MUST wrap api_key under "auth": {"api_key": "..."}
   support modules    # helpers imported by the primary (never scanned by discovery)
 tools/shared/      # cross-tool libraries:
@@ -57,7 +56,6 @@ tools/shared/      # cross-tool libraries:
 config/            # ports.json (port ranges+assignments), launcher_config.json, monitoring_config.json
 plans/             # design docs (FEF V3, backend abstraction)
 tests/             # pytest suite (project tests)
-launcher/streamable_http/tests/  # streamable transport tests
 launcher/test_simplemcp_client.py
 tests/fef_v3/      # FEF V3 test fixtures
 ```
@@ -107,25 +105,20 @@ Concrete impls in `tools/shared/impls/`:
 
 - Non-recursive glob on `tools/<name>/` — only top-level `.py` files
 - Filename `<name>_fastmcp.py` is canonical; `_fastmcp` suffix is stripped to derive tool name
-- Auto-excluded: `*_sse.py`, `*_streamable.py`, `migrate_*`, `copilot_context_injector`, `test_*`, `__init__.py`
+- Auto-excluded: `*_streamable.py`, `migrate_*`, `copilot_context_injector`, `test_*`, `__init__.py`
 - When both `_fastmcp.py` and bare `.py` exist, `_fastmcp` wins
 - The launcher auto-detects container dirs (no `*_fastmcp.py`) vs tool dirs and descends one level
 - See `tools/AGENTS.md` for the full tool-directory convention
 
-### Transport switching
+### Transport
 
-All tools support both SSE and streamable-http via FastMCP. Controlled centrally by the launcher:
+All tools serve **streamable HTTP only** (`/mcp`). SSE was removed 2026-08
+(`plans/mcp-2026-07-28-stateless-upgrade.md`, Phase -1) — `MCP_TRANSPORT=sse` raises a clear
+`ValueError` at tool startup instead of silently switching. The launcher sets `MCP_TRANSPORT`
+(default `streamable-http`) before importing tool modules; `tools/shared/server_factory.py:get_transport_app`
+is the single place that reads it.
 
-| Method | Priority | Example |
-|--------|----------|---------|
-| `--transport` CLI flag | Highest | `python -m launcher --transport sse` |
-| `MCP_TRANSPORT` env var | Medium | `MCP_TRANSPORT=sse python -m launcher` |
-| `launcher_config.json` `"transport"` | Lowest | `{"transport": "sse"}` |
-| Default | — | `streamable-http` |
-
-The launcher sets `MCP_TRANSPORT` env var before importing tool modules. Each `_fastmcp.py` reads it at import time to select `mcp.sse_app()` or `mcp.streamable_http_app()`. Per-tool override: set `MCP_TRANSPORT` in the tool's `.env` — this takes precedence over the launcher's setting since the tool reads the env var directly.
-
-### Session management (streamable-http only)
+### Session management
 
 Sessions live in-process (`StreamableHTTPSessionManager._server_instances`); a launcher restart invalidates every client session. Two controls, wired in `tools/shared/server_factory.py:get_transport_app`:
 
@@ -153,7 +146,7 @@ A bare top-level `"api_key"` is invisible to the auth system. `tools/<name>/conf
 
 ### FastMCP tool registration
 
-Tools register via `@mcp.tool()` decorators at import time. Submodules register their tools as a side effect of being imported. The entry point (`<name>_fastmcp.py`) imports submodules, then calls `mcp.streamable_http_app()`.
+Tools register via `@mcp.tool()` decorators at import time. Submodules register their tools as a side effect of being imported. The entry point (`<name>_fastmcp.py`) imports submodules, then calls `get_transport_app(mcp)`.
 
 ### Side-effect imports
 

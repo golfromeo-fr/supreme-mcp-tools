@@ -183,16 +183,5 @@ class TestLOW15DeadCode(unittest.TestCase):
         self.assertIn("return", source)
 
 
-class TestLOW16DebugTrue(unittest.TestCase):
-    """LOW-16: debug=True in production Starlette app."""
-
-    def test_debug_is_false(self):
-        source = (PROJECT_ROOT / "tools/convertermcp/convertermcp.py").read_text()
-        idx = source.find("Starlette(")
-        section = source[idx:idx + 200]
-        self.assertIn("debug=False", section)
-        self.assertNotIn("debug=True", section)
-
-
 if __name__ == "__main__":
     unittest.main()

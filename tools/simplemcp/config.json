@@ -3,16 +3,9 @@
   "version": "1.0.0",
   "description": "Simple MCP server for testing and demonstration with basic tools",
   "transports": {
-    "sse": {
-      "enabled": true,
-      "file": "simplemcp_sse.py",
-      "port": 8002,
-      "endpoint": "/sse",
-      "messages_path": "/messages/"
-    },
     "streamable-http": {
       "enabled": true,
-      "file": "simplemcp_streamable.py",
+      "file": "simplemcp_fastmcp.py",
       "port": 8002,
       "endpoint": "/mcp",
       "framing_format": "newline-delimited",

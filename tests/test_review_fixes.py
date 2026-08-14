@@ -69,40 +69,36 @@ class TestPortLeakFix:
 
 
 class TestWebmcpTransportSwitching:
-    """Test that _fastmcp.py supports SSE transport switching via MCP_TRANSPORT env var."""
+    """Test that _fastmcp.py builds its app via get_transport_app (streamable HTTP only)."""
 
     def test_fastmcp_app_export_exists(self):
-        """webmcp_fastmcp.py must export app with transport switching."""
+        """webmcp_fastmcp.py must export app built via get_transport_app."""
         content = Path("tools/webmcp/webmcp_fastmcp.py").read_text()
-        # get_transport_app() is the canonical wrapper that selects mcp.sse_app() or mcp.streamable_http_app()
-        assert "get_transport_app" in content or "mcp.sse_app()" in content
-        assert "MCP_TRANSPORT" in content
+        assert "get_transport_app" in content
 
 
 class TestTransportSwitchingAllTools:
-    """Non-regression: every _fastmcp.py must support transport switching."""
+    """Non-regression: every _fastmcp.py must build its app via get_transport_app."""
 
     TOOLS = ["simplemcp", "webmcp", "oraclemcp", "convertermcp", "ragmcp", "memorymcp"]
 
     @pytest.mark.parametrize("tool", TOOLS)
-    def test_fastmcp_has_transport_switching(self, tool):
-        """Each _fastmcp.py must read MCP_TRANSPORT and support both app types."""
+    def test_fastmcp_app_via_factory(self, tool):
+        """Each _fastmcp.py must build its app via get_transport_app (streamable HTTP)."""
         fpath = Path(f"tools/{tool}/{tool}_fastmcp.py")
         if not fpath.exists():
             pytest.skip(f"{tool} has no _fastmcp.py")
         content = fpath.read_text()
-        assert "MCP_TRANSPORT" in content, f"{tool} must read MCP_TRANSPORT env var"
-        # Transport is selected via get_transport_app(mcp) which internally calls mcp.sse_app() or mcp.streamable_http_app()
-        assert "get_transport_app" in content or "sse_app" in content, f"{tool} must support SSE via get_transport_app(mcp)"
+        assert "get_transport_app" in content, f"{tool} must build its app via get_transport_app(mcp)"
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_streamable_http_default(self, tool):
-        """Default transport must be streamable-http when MCP_TRANSPORT is unset."""
+        """streamable-http must be the only/default transport in each _fastmcp.py."""
         fpath = Path(f"tools/{tool}/{tool}_fastmcp.py")
         if not fpath.exists():
             pytest.skip(f"{tool} has no _fastmcp.py")
         content = fpath.read_text()
-        assert "streamable-http" in content, f"{tool} must default to streamable-http"
+        assert "streamable-http" in content, f"{tool} must use streamable-http"
 
     def test_legacy_files_removed(self):
         """No _sse.py or _streamable.py files should exist for tools with _fastmcp.py."""
@@ -113,11 +109,11 @@ class TestTransportSwitchingAllTools:
             assert not streamable.exists(), f"Legacy {streamable} should be deleted (replaced by _fastmcp.py)"
 
     def test_launcher_has_transport_flag(self):
-        """Launcher must accept --transport CLI flag."""
+        """Launcher must accept --transport CLI flag (streamable-http only; SSE removed)."""
         content = Path("launchmcp.py").read_text()
         assert "--transport" in content
         assert "streamable-http" in content
-        assert "sse" in content
+        assert '"sse"' not in content, "SSE transport was removed (Phase -1); --transport must not offer it"
 
     def test_launcher_sets_env_var(self):
         """Launcher must set MCP_TRANSPORT env var before importing tools."""
