@@ -265,6 +265,10 @@ Current implementation depends on three unstable surfaces:
 1. **Mechanical port (preferred).** Keep `DualHeaderVerifier` / `DualHeaderAuthBackend` / `_AuthenticatedUser`;
    fix any moved imports (likely the `mcp.server.auth.middleware.*` paths). Lowest effort, preserves the
    exact OAuth-removal guarantee that `test_auth_c1_oauth_removal.py` enforces.
+   *(Verdict 2026-08-21 simplification: drop `DualHeaderAuthBackend`/`_AuthenticatedUser` — the default
+   `BearerAuthBackend` + `verify_token` + an outermost X-API-Key→Authorization normalizer delivers
+   dual-header; 4.0 gates on Authorization-header presence. And re-verify TokenVerifier's OAuth route
+   advertising (`auth.get_routes()`) stays empty — `test_auth_c1_oauth_removal.py` is the guard.)*
 2. **Port onto whatever new hook the verdict surfaces** (e.g. a `http_app(middleware=[...])` kwarg,
    a 4.0 auth-provider class, or a lifespan-wrap pattern). The dual-header logic itself (read both
    headers, `hmac.compare_digest` against the token map, return `AccessToken`) is

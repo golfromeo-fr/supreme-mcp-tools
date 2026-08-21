@@ -42,6 +42,35 @@
 - `mcp.types` re-export works (`mcp.types.JSONRPCError` imports); `LATEST_PROTOCOL_VERSION == "2026-07-28"`.
 - Beta status 2026-08-21: b3 still latest; no b4/stable. Weekly re-check stands.
 
+## Key snippets (the port's load-bearing code)
+
+The X-API-Key → Authorization normalizer (outermost wrapper — live-validated end-to-end):
+
+```python
+def api_key_fallback(app):
+    async def wrapped(scope, receive, send):
+        if scope["type"] == "http":
+            headers = scope.get("headers") or []
+            if not any(k.lower() == b"authorization" for k, _ in headers):
+                key = next((v for k, v in headers if k.lower() == b"x-api-key"), None)
+                if key:
+                    scope["headers"] = list(headers) + [(b"authorization", b"Bearer " + key)]
+        await app(scope, receive, send)
+    return wrapped
+
+app = api_key_fallback(mcp.http_app(transport="http", session_idle_timeout=...))
+```
+
+Flush-relevant runtime facts (live manager `vars()`): `_server_instances: dict[session_id →
+StreamableHTTPServerTransport]` + `_session_owners: dict` + `session_idle_timeout` attr; entries
+expose `async def terminate()` (mcp/server/streamable_http.py:807). Reach path:
+`/mcp` route → `RequireAuthMiddleware` → `.app` → `StreamableHTTPASGIApp.session_manager`.
+
+**Risk caveat (per plan risk register):** `_server_instances` is a *private* instance attribute —
+it moved from class-source-visible (3.x) to runtime-only (4.0b3) already. If stable 4.0 moves it
+again, the fallback is the idle-TTL (native kwarg) + process restart; re-run this check when stable
+ships (the verdict's Q6 must be re-verified, not assumed).
+
 ## Spike artifacts
 
 Throwaway venv `/tmp/fmcp4` (delete freely); scripts `spike.py`, `spike_final.py` (auth pattern),
