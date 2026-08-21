@@ -287,7 +287,7 @@ Run these in this exact order. Each step's exit criteria gate the next.
 | Step | Output | Gate before next |
 |---|---|---|
 | -1. **Phase -1 SSE cleanup** on `chore/remove-sse` — can start immediately, independent of the spike. | SSE + dead transports gone on 3.4.x. | Full `python -m pytest` green on FastMCP 3.4.x. |
-| 0. **Phase 0 spike** in `/tmp/fmcp4` | `plans/mcp-2026-07-28-phase0-verdict.md` | Verdict file exists and answers Q1–Q9. |
+| 0. **Phase 0 spike** in `/tmp/fmcp4` — **✅ DONE 2026-08-21: all Q1–Q9 answered YES (Q9 with the normalizer pattern); see `plans/mcp-2026-07-28-phase0-verdict.md`.** | `plans/mcp-2026-07-28-phase0-verdict.md` | Verdict file exists and answers Q1–Q9. |
 | 1. **Draft `tests/test_era_negotiation.py`** using the verdict's concrete symbols (no best-guess code; legacy client knob per Q8). | New test file. | Draft compiles against real 4.0 symbols only. |
 | 2. **Apply Phase 1 deps** to `requirements.txt` and `tools/memorymcp/requirements.txt`, then run `python requirements_manager.py merge`. | Updated pins. | `pip install -r requirements.txt` succeeds in a fresh venv. |
 | 3. **Port `server_factory.py`** per Phase 2 + Phase 3 (REWORK) + Phase 4 using the spike verdict to pick the wiring. | File compiles; import succeeds. | — |
@@ -543,6 +543,12 @@ Nothing material changes for operators, but call these out in the release notes:
 ---
 
 ### Open questions (resolve in Phase 0 spike)
+
+> **✅ RESOLVED 2026-08-21 — see `plans/mcp-2026-07-28-phase0-verdict.md`.** Headlines: all YES; native
+> `session_idle_timeout` kwarg; `_server_instances`/`terminate()` survive at runtime; legacy knob is
+> `Client(..., mode="legacy")`; dual-header needs an X-API-Key→Authorization normalizer middleware
+> (4.0 gates on Authorization-header presence) after which the custom auth backend is deletable;
+> fastapi is no longer a FastMCP 4 dependency (httpx2 replaces httpx on the client side).
 
 1. Does FastMCP 4 `TokenVerifier.get_middleware()` still allow a custom Starlette `AuthenticationBackend`?
 2. Do `mcp.server.auth.middleware.auth_context.AuthContextMiddleware` and
