@@ -121,10 +121,11 @@ class TestTransportSwitchingAllTools:
         assert 'os.environ["MCP_TRANSPORT"]' in content
 
     def test_main_has_transport_flag(self):
-        """launcher/__main__.py must accept --transport CLI flag."""
+        """launcher/__main__.py must accept --transport CLI flag (streamable-http only)."""
         content = Path("launcher/__main__.py").read_text()
         assert "--transport" in content
         assert "MCP_TRANSPORT" in content
+        assert '"sse"' not in content, "SSE transport was removed (Phase -1); --transport must not offer it"
 
 
 class TestConfigGodObjectComment:

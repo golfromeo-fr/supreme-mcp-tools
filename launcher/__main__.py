@@ -188,6 +188,11 @@ class Launcher:
         
         # Set transport protocol before tool modules are imported
         transport = args.transport or os.environ.get("MCP_TRANSPORT", "streamable-http")
+        if transport != "streamable-http":
+            raise ValueError(
+                f"Unsupported transport {transport!r}: only 'streamable-http' is supported "
+                "(SSE was removed 2026-08)"
+            )
         os.environ["MCP_TRANSPORT"] = transport
         logger.info(f"Transport protocol: {transport}")
         

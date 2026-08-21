@@ -9,7 +9,7 @@
     "/path/to/tools/convertermcp",
     "/path/to/tools/ragmcp"
   ],
-  "_comment3": "List of directories to search for MCP tools. Each directory should contain a Python file that exports server, app, and sse_transport objects.",
+  "_comment3": "List of directories to search for MCP tools. Each directory should contain a *_fastmcp.py entry point that exports an `app` (FastMCP/Starlette).",
 
   "fefV3": {
     "_comment7c": "Flexible Extensibility Framework V3 configuration",

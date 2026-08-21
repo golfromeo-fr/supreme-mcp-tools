@@ -53,7 +53,7 @@ The server configuration is stored in `config.json`:
 
 - **port**: Server port (default: 8003)
 - **host**: Server host (default: 0.0.0.0)
-- **transport**: Transport type - "streamable-http" (recommended) or "sse"
+- **transport**: Transport type - "streamable-http" (only option; SSE removed 2026-08)
 - **endpoint**: Streamable HTTP endpoint path (default: /mcp)
 - **framing_format**: Message framing format - "newline-delimited" or "length-prefixed"
 - **request_timeout**: Request timeout in seconds (default: 60.0)
@@ -64,23 +64,11 @@ The server configuration is stored in `config.json`:
 
 ### Starting the Server
 
-#### Streamable HTTP (Recommended)
-
-Run the Streamable HTTP version:
 ```bash
-python convertermcp_streamable.py
+python convertermcp_fastmcp.py
 ```
 
 The server will start on `http://0.0.0.0:8003` with the MCP endpoint at `/mcp`
-
-#### SSE (Legacy)
-
-Run the SSE version:
-```bash
-python convertermcp.py
-```
-
-The server will start on `http://0.0.0.0:8003` with the SSE endpoint at `/sse`
 
 ### VSCode Integration
 
@@ -238,48 +226,11 @@ Streamable HTTP transport offers several advantages over SSE:
    }
    ```
 
-3. **Switch Server Implementation**:
-   
-   Stop the SSE version:
+3. **Use the current server implementation**:
    ```bash
-   # If running convertermcp.py, stop it with Ctrl+C
+   python convertermcp_fastmcp.py
    ```
-   
-   Start the Streamable HTTP version:
-   ```bash
-   python convertermcp_streamable.py
-   ```
-
-### Rollback Instructions
-
-If you need to rollback to SSE:
-
-1. **Revert VSCode Configuration**:
-   ```json
-   {
-     "mcpServers": {
-       "convertermcp": {
-         "type": "sse",
-         "url": "http://localhost:8003/sse",
-         "headers": {
-           "Content-Type": "application/json"
-         }
-       }
-     }
-   }
-   ```
-
-2. **Switch Back to SSE Server**:
-   ```bash
-   python convertermcp.py
-   ```
-
-### Compatibility Notes
-
-- Both implementations share the same tool interfaces
-- All tool parameters remain unchanged
-- The original `convertermcp.py` (SSE version) is preserved for backward compatibility
-- You can run both versions simultaneously on different ports if needed
+   (SSE and streamable variants were removed 2026-08 — `convertermcp_fastmcp.py` is the only entry point.)
 
 ## Security Considerations
 
@@ -315,7 +266,7 @@ Ensure the file path is within the allowed roots directory. By default, only fil
 
 ### Connection refused when using Streamable HTTP
 
-- Ensure you're running `convertermcp_streamable.py` instead of `convertermcp.py`
+- Ensure you're running `convertermcp_fastmcp.py`
 - Check that the server is running on the expected port (default: 8003)
 - Verify the endpoint path is `/mcp` for Streamable HTTP
 
@@ -334,7 +285,7 @@ This tool is part of the MCP Tools project.
 
 To add new document conversion tools:
 
-1. Add the tool handler function to `convertermcp.py`
+1. Add the tool handler function to `convertermcp_fastmcp.py`
 2. Register the tool in the `list_tools()` function
 3. Add the tool to the handler mapping in `tool_router()`
 4. Update this README with the new tool documentation

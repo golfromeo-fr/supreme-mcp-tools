@@ -237,16 +237,14 @@ The SSE version uses:
 - **Uvicorn**: ASGI server to run the application
 - **httpx**: Async HTTP client for web requests
 
-### Streamable HTTP Transport (Recommended)
+### Streamable HTTP Transport
 
-The Streamable HTTP version uses:
-- **StreamableHttpTransportBase**: Base class for Streamable HTTP transport (from `launcher.streamable_http.streamable_http_base`)
+The server (single transport — SSE was removed 2026-08) uses:
+- **FastMCP**: server framework (`tools/shared/server_factory.py`)
 - **FastAPI**: Modern ASGI web framework for HTTP handling
 - **Uvicorn**: ASGI server to run the application
 - **httpx**: Async HTTP client for web requests
-- **JSON-RPC 2.0**: Proper JSON-RPC framing with newline-delimited format
-
-Both transports share the same tool implementations, ensuring consistent behavior across both versions.
+- **JSON-RPC 2.0**: Proper JSON-RPC framing over streamable HTTP at `/mcp`
 
 ## Migration from SSE to Streamable HTTP
 

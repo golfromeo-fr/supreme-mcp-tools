@@ -57,8 +57,6 @@ If you're currently using the SSE transport, migrating to Streamable HTTP is str
 
 3. **No code changes required**: All tool functionality remains the same.
 
-See [`migrate_to_streamable_http.sh`](migrate_to_streamable_http.sh) for a helper script.
-
 ## Features
 
 ### 7 Available Tools

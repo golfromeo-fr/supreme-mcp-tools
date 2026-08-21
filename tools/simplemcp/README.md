@@ -381,13 +381,12 @@ If VSCode cannot connect to the server:
 
 ### Import Error: Cannot import StreamableHttpTransportBase
 
-If you get an import error when running the Streamable HTTP server:
+If you get an import error when running the server:
 - Ensure you're running from the supreme-mcp-tools directory:
   ```bash
   cd supreme-mcp-tools
-  python tools/simplemcp/simplemcp_streamable.py
+  python tools/simplemcp/simplemcp_fastmcp.py
   ```
-- Verify the launcher/streamable_http module exists
 - Check that the launcher directory has an `__init__.py` file
 
 ## License

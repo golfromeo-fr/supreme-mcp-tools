@@ -44,9 +44,8 @@ $ python launchmcp.py simplemcp
 2026-02-24 02:05:29,013 - root - INFO - ============================================================
 2026-02-24 02:05:29,013 - root - INFO - Searching only in directories for requested tools: ['path/to/supreme-mcp-tools/tools/simplemcp']
 2026-02-24 02:05:29,013 - launcher.tool_discovery - INFO - Searching for MCP tools in: path/to/supreme-mcp-tools/tools/simplemcp
-2026-02-24 02:05:29,591 - launcher.streamable_http.streamable_http_base - INFO - StreamableHttpTransport initialized for 'simplemcp'
-2026-02-24 02:05:29,591 - simplemcp_streamable - INFO - SimpleMCP8 Streamable HTTP transport initialized
-2026-02-24 02:05:29,592 - launcher.tool_discovery - INFO - Discovered tool: simplemcp from path/to/supreme-mcp-tools/tools/simplemcp/simplemcp_streamable.py
+2026-02-24 02:05:29,591 - simplemcp - INFO - Starting simplemcp FastMCP server (transport: streamable-http)
+2026-02-24 02:05:29,592 - launcher.tool_discovery - INFO - Discovered tool: simplemcp from path/to/supreme-mcp-tools/tools/simplemcp/simplemcp_fastmcp.py
 2026-02-24 02:05:29,592 - root - INFO - Discovered 1 MCP tools: ['simplemcp']
 2026-02-24 02:05:29,592 - launcher.port_manager - INFO - Allocated port 8002 for tool simplemcp
 2026-02-24 02:05:29,592 - root - INFO - Allocated ports: {'simplemcp': 8002}

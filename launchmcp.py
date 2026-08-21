@@ -656,6 +656,11 @@ async def main() -> int:
     
     # Set transport protocol for all tools (must be set before tool modules are imported)
     transport = args.transport or config.config.get("transport", "streamable-http")
+    if transport != "streamable-http":
+        raise ValueError(
+            f"Unsupported transport {transport!r}: only 'streamable-http' is supported "
+            "(SSE was removed 2026-08)"
+        )
     os.environ["MCP_TRANSPORT"] = transport
     logging.info(f"Transport protocol: {transport}")
 
