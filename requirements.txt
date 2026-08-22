@@ -1,17 +1,21 @@
 # MCP Launcher Requirements
 
 # Core MCP framework
-# fastmcp 3.4+ floors starlette at >=1.0.1 (required by fastmcp-slim[server]).
-# Our custom DualHeaderVerifier + server_factory.py are verified against 1.x.
-fastmcp>=3.4.2
-mcp>=1.28.0
+# fastmcp 4 (2026-07-28 protocol era) — BETA PIN while porting on feature/fastmcp-4;
+# merge to main only after stable 4.0.0 ships (plans/mcp-2026-07-28-stateless-upgrade.md, Rollout).
+# fastmcp 4 pulls mcp 2.x + starlette 1.x + pydantic 2.14b transitively and no longer
+# depends on fastapi (fastapi below stays for the launcher's FastAPI-tool validation).
+fastmcp==4.0.0b3
+mcp==2.0.0
 
 # Web server
 uvicorn[standard]>=0.30.0
-# starlette>=1.0.1 is forced by fastmcp-slim[server]>=3.4. Pin the floor so a
+# starlette>=1.0.1 is forced by fastmcp-slim[server]. Pin the floor so a
 # fresh install doesn't accidentally land on the old 0.x line.
 starlette>=1.0.1
-fastapi>=0.104.0
+# fastapi is OUR direct dep (launcher validation tier), not fastmcp's anymore.
+# Floor 0.133 = first line that tolerates starlette>=1.0.
+fastapi>=0.133.0
 
 # HTTP client
 httpx>=0.27.0
@@ -24,7 +28,8 @@ aiohttp>=3.9.0
 websockets>=12.0
 
 # Configuration
-pydantic>=2.5.0
+# pydantic 2.12 is fastmcp 4's floor; 2.14 line arrives transitively while it is still beta
+pydantic>=2.12.0
 pydantic-settings>=2.1.0
 python-dotenv>=1.0.0
 
