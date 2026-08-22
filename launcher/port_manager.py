@@ -14,6 +14,7 @@ Port Types:
 
 import logging
 import socket
+import time
 from typing import Any
 
 from .errors import PortConflictError
@@ -21,6 +22,12 @@ from .config_types import DEFAULT_HOST
 
 
 logger = logging.getLogger(__name__)
+
+# A busy manual port right after a restart is usually the previous launcher
+# instance still shutting down (~10s to release 4 servers). Retry briefly
+# instead of failing the tool for the whole run.
+PORT_BUSY_RETRY_SECS = 20.0
+PORT_BUSY_RETRY_INTERVAL = 1.5
 
 
 class PortType:
@@ -261,14 +268,24 @@ class PortManager:
         if port is None and self.mode == "manual":
             if name in manual_ports:
                 manual_port = manual_ports[name]
-                if self._is_port_available(manual_port, port_type):
-                    port = manual_port
-                else:
-                    raise PortConflictError(
-                        f"Manual port {manual_port} for {name} is not available",
-                        port=manual_port,
-                        tool_name=name
+                if not self._is_port_available(manual_port, port_type):
+                    logger.warning(
+                        f"Manual port {manual_port} for {name} is busy — retrying for up to "
+                        f"{PORT_BUSY_RETRY_SECS:.0f}s (previous launcher still shutting down?)"
                     )
+                    deadline = time.monotonic() + PORT_BUSY_RETRY_SECS
+                    while time.monotonic() < deadline:
+                        time.sleep(PORT_BUSY_RETRY_INTERVAL)
+                        if self._is_port_available(manual_port, port_type):
+                            break
+                    else:
+                        raise PortConflictError(
+                            f"Manual port {manual_port} for {name} is still not available "
+                            f"after {PORT_BUSY_RETRY_SECS:.0f}s",
+                            port=manual_port,
+                            tool_name=name
+                        )
+                port = manual_port
             else:
                 logger.debug(f"No manual port configured for {name} in {port_type} type, using auto allocation")
         
