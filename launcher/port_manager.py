@@ -30,6 +30,28 @@ PORT_BUSY_RETRY_SECS = 20.0
 PORT_BUSY_RETRY_INTERVAL = 1.5
 
 
+def management_endpoint_occupied(mgmt_port: int | None = None) -> bool:
+    """True if something listens on the central management port — a launcher
+    instance is probably already running. Pre-flight check so a second launcher
+    fails fast with guidance instead of fighting (and losing) over tool ports.
+    """
+    if mgmt_port is None:
+        import json
+        from pathlib import Path
+        try:
+            cfg = json.loads(
+                (Path(__file__).resolve().parent.parent / "config" / "ports.json").read_text()
+            )
+            mgmt_port = int(cfg["assignments"]["system"]["central_management"])
+        except Exception:
+            mgmt_port = 8200
+    try:
+        with socket.create_connection(("127.0.0.1", int(mgmt_port)), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
 class PortType:
     """Port type constants for categorizing port allocations."""
     MCP = "mcp"              # MCP tool endpoints
@@ -228,6 +250,36 @@ class PortManager:
         
         return errors
     
+    def get_manual_port(self, name: str, port_type: str = PortType.MCP) -> int | None:
+        """Return the configured manual port for a service, if any."""
+        return self._get_manual_ports_for_type(port_type).get(name)
+
+    def wait_for_busy_ports(
+        self,
+        ports: dict[str, int],
+        port_type: str = PortType.MCP,
+        timeout: float = PORT_BUSY_RETRY_SECS,
+    ) -> set[str]:
+        """Wait for busy ports to free, polling the whole set in parallel.
+
+        One shared window for all ports instead of a serial per-port wait
+        (4 tools x 20s serial = 80s worst case; parallel = 20s max).
+        Returns the names whose ports are still busy when the window closes.
+        """
+        busy = {n for n, p in ports.items() if not self._is_port_available(p, port_type)}
+        if not busy:
+            return set()
+        listing = ", ".join(f"{n}({ports[n]})" for n in sorted(busy))
+        logger.warning(
+            f"Busy ports: {listing} — waiting up to {timeout:.0f}s (all in parallel; "
+            f"previous launcher still shutting down?)"
+        )
+        deadline = time.monotonic() + timeout
+        while busy and time.monotonic() < deadline:
+            time.sleep(PORT_BUSY_RETRY_INTERVAL)
+            busy = {n for n in busy if not self._is_port_available(ports[n], port_type)}
+        return busy
+
     def allocate_port(
         self,
         name: str,

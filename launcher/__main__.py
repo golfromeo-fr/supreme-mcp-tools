@@ -195,6 +195,15 @@ class Launcher:
             )
         os.environ["MCP_TRANSPORT"] = transport
         logger.info(f"Transport protocol: {transport}")
+
+        # Fail fast if another launcher instance is already running
+        from launcher.port_manager import management_endpoint_occupied
+        if management_endpoint_occupied():
+            raise RuntimeError(
+                "Another launcher instance appears to be already running "
+                "(management API port 8200 is responding). Stop it first: "
+                "pkill -INT -f launchmcp.py — wait for shutdown — then start again."
+            )
         
         # Load configuration
         if args.config:
@@ -278,8 +287,15 @@ class Launcher:
             tools = {name: meta for name, meta in tools.items() if name in tool_names}
             logger.info(f"Filtered to {len(tools)} tools: {list(tools.keys())}")
         
-        # Start tools
+        # Start tools — wait out busy manual ports together first (restart race):
+        # one parallel window for all tools instead of a serial wait per tool.
+        manual_map = {name: self.port_manager.get_manual_port(name) for name in tools}
+        still_busy = self.port_manager.wait_for_busy_ports(
+            {n: p for n, p in manual_map.items() if p is not None})
         for tool_name, tool_metadata in tools.items():
+            if tool_name in still_busy:
+                logger.error(f"Skipping {tool_name}: manual port still busy after retry window")
+                continue
             try:
                 # Allocate ports
                 mcp_port = self.port_manager.allocate_port(tool_name, port_type=PortType.MCP)

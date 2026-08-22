@@ -276,11 +276,23 @@ async def start_servers(
     Returns:
         List of successfully started tools
     """
+    # Wait out busy manual ports together (restart race): one parallel 20s
+    # window for all tools instead of 20s per tool.
+    manual_map = {t.name: port_manager.get_manual_port(t.name) for t in tools}
+    still_busy = port_manager.wait_for_busy_ports(
+        {n: p for n, p in manual_map.items() if p is not None})
+    for name in sorted(still_busy):
+        logging.error(f"Port allocation failed for {name}: manual port still busy after retry window")
+    if still_busy and not config.error_handling_config.continue_on_error:
+        raise LauncherError(f"Ports still busy after retry window: {sorted(still_busy)}")
+
     # Allocate ports for all tools
     ports = {}
     allocated_tools = []  # Track tools that got ports for cleanup
-    
+
     for tool in tools:
+        if tool.name in still_busy:
+            continue
         try:
             port = port_manager.allocate_port(tool.name)
             ports[tool.name] = port
@@ -672,6 +684,17 @@ async def main() -> int:
         os.environ["MCP_HEALTH_CHECK_INTERVAL"] = str(args.health_check_interval)
         logging.info(f"Health check interval: {args.health_check_interval}s")
     
+    # Fail fast if another launcher instance is already running
+    from launcher.port_manager import management_endpoint_occupied
+    if management_endpoint_occupied():
+        logging.error(
+            "Another launcher instance appears to be already running (management API "
+            "port 8200 is responding). Stop it first: pkill -INT -f launchmcp.py — "
+            "wait for 'MCP Launcher stopped' — then start again. A live launcher "
+            "holds all tool ports; retrying cannot win."
+        )
+        return 1
+
     logging.info("=" * 60)
     logging.info("MCP Launcher Starting")
     logging.info("=" * 60)
