@@ -2,6 +2,35 @@
 
 A powerful MCP (Model Context Protocol) server that provides web search and URL fetch capabilities. Supports both SSE (Server-Sent Events) and Streamable HTTP transports for maximum compatibility.
 
+## Search provider candidates — cheaper/free (dig in later)
+
+Status quo: `BRAVE_SEARCH_API_KEY` + `SERPAPI_API_KEY` are already configured in `.env`
+(`brave_search_api`, `google_search_api` are live). `brave_search_web` is the only
+keyless fallback (HTML scraping — brittle; excluded from live sweeps since 2026-08-23).
+
+Candidates worth an account, cheapest-first:
+
+| Provider | Why | Price ballpark |
+|---|---|---|
+| **Tavily** | Built for LLM agents: clean JSON + content extraction, relevance-tuned | free ~1k calls/mo |
+| **Serper.dev** | Same Google SERP data as SerpAPI at a fraction of the price | 2.5k free, then ~$0.3–1.0 /1k |
+| **Exa** | Semantic/neural search (finds by meaning, not keywords) | free tier (~$10 credits/mo) |
+| **Kagi** | Highest result quality, no SEO spam | paid only (~$25/10k) |
+| Perplexity Sonar | search + synthesized answers (links not primary) | usage-based |
+
+Notes:
+- SerpAPI (current `google_search_api`) is the most expensive per call here;
+  Serper.dev returns comparable Google data far cheaper — first swap candidate.
+- Bing Web Search API was retired by Microsoft in 2025 — don't bother.
+- DuckDuckGo has no official API; wrapper libraries exist but they're scraping,
+  i.e. the same fragility class as `brave_search_web`.
+
+Wiring recipe when a key exists (~30 lines): add `<PROVIDER>_SEARCH_API_KEY` to
+`.env` + `config.json` `environment_variables`; add a tool function in
+`webmcp_fastmcp.py` following the `brave_search_api` pattern; register it in
+`config.json` `tools` + the mcp-live-tool-test skill expectations; restart launcher.
+Candidate for the same change: remove `brave_search_web`.
+
 ## Features
 
 - **brave_search_web**: Enhanced web search using Brave Search with language support and metadata (web scraping)
