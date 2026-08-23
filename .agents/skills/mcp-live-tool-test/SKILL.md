@@ -89,6 +89,26 @@ a note if none are safe.
 Fixing the decode handling in `webmcp_fastmcp.py` flips both: re-add
 `brave_search_web` and expect `fetch_url` green.
 
+## Companion scripts (run these instead of retyping probes)
+
+Both run against a launcher you started, using the fastmcp >=4 client in the
+active interpreter; ports/keys resolve from repo config automatically.
+
+- **`scripts/sweep_all.py`** — full safe-function sweep of every running
+  server (`--only simplemcp,webmcp` to narrow). Encodes the expectations
+  table above: brave_search_web excluded, fetch_url asserted and reported as
+  KNOWN-DEFECT while the gzip bug exists. Exit code = unexpected failures,
+  so it is scriptable.
+- **`scripts/probe_eras.py [server] [--wire]`** — simulates a NEWEST-era MCP
+  client (fastmcp default mode) plus a legacy control on one server;
+  `--wire` additionally shows raw HTTP behavior (Mcp-Session-Id issuance,
+  stateless vs stateful transport).
+
+```bash
+python .agents/skills/mcp-live-tool-test/scripts/sweep_all.py
+python .agents/skills/mcp-live-tool-test/scripts/probe_eras.py simplemcp --wire
+```
+
 ## Complementary HTTP checks (only when explicitly wanted)
 
 Native calls cannot express these; use a short inline `python` + `httpx`
