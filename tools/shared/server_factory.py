@@ -1,13 +1,17 @@
 """
-FastMCP 3.x Server Factory — supreme-mcp-tools
-==============================================
+FastMCP Server Factory — supreme-mcp-tools
+==========================================
 Centralized factory for all MCP tool servers.
 
-Key design decisions for FastMCP 3.x (≥3.3):
+Key design decisions (FastMCP 4 port, 2026-08-23):
 - Uses DualHeaderVerifier (TokenVerifier subclass) — no OAuth endpoints
   advertised, no /.well-known/oauth-* routes, no WWW-Authenticate 401.
-- Custom DualHeaderAuthBackend accepts BOTH X-API-Key (VS Code Copilot) and
-  Authorization: Bearer (standard OAuth clients).
+- Dual-header support (X-API-Key for VS Code Copilot, Authorization: Bearer
+  for standard clients) comes from the outermost api_key_fallback ASGI
+  middleware: it copies X-API-Key into Authorization: Bearer when the latter
+  is absent, so FastMCP's default BearerAuthBackend + verify_token()
+  authenticates both header styles (Phase 0 verdict Q9,
+  plans/mcp-2026-07-28-phase0-verdict.md).
 - Factory pattern: one call creates server, adds tools, and configures auth.
 - No dependencies on launcher modules — runs standalone.
 
@@ -22,6 +26,7 @@ Usage in each *_fastmcp.py:
 
 from __future__ import annotations
 
+import inspect
 import os
 import hmac
 import secrets as _secrets
@@ -37,75 +42,49 @@ DEFAULT_HOST = "0.0.0.0"
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-# ── FastMCP 3.x auth imports ──────────────────────────────────────────────
-from starlette.authentication import AuthCredentials, AuthenticationBackend
-from starlette.requests import HTTPConnection
-from starlette.middleware import Middleware
-from starlette.middleware.authentication import AuthenticationMiddleware
-
+# ── FastMCP auth imports ──────────────────────────────────────────────────
 from fastmcp.server.auth import TokenVerifier, AccessToken
-from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
-from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
 
-class _AuthenticatedUser(AuthenticatedUser):
-    """AuthenticatedUser subclass for DualHeaderAuthBackend.
+class ApiKeyFallbackMiddleware:
+    """Pure-ASGI middleware enabling dual-header auth (verdict Q9).
 
-    Extends the MCP SDK's AuthenticatedUser so that RequireAuthMiddleware's
-    isinstance(user, AuthenticatedUser) check passes for X-API-Key auth too.
+    Copies X-API-Key into Authorization: Bearer <key> when no Authorization
+    header is present, so requests that only carry the Copilot-style header
+    pass FastMCP's RequireAuthMiddleware RFC 6750 presence check and are
+    validated by the same verify_token() as Bearer clients. When both
+    headers are sent, the existing Authorization header wins.
+
+    Registered via app.add_middleware() so it runs outside the router —
+    ahead of FastMCP's per-route auth — on every route including
+    /admin/flush-sessions.
     """
 
-    def __init__(self, auth_info) -> None:
-        super().__init__(auth_info)
+    def __init__(self, app):
+        self.app = app
 
-
-class DualHeaderAuthBackend(AuthenticationBackend):
-    """
-    Starlette AuthenticationBackend that accepts both X-API-Key and Bearer token.
-
-    VS Code Copilot sends X-API-Key header.
-    Other clients send Authorization: Bearer token.
-    Both are validated via the TokenVerifier's verify_token().
-    """
-
-    def __init__(self, token_verifier: TokenVerifier) -> None:
-        self.token_verifier = token_verifier
-
-    async def authenticate(
-        self, conn: HTTPConnection
-    ) -> tuple[AuthCredentials, _AuthenticatedUser] | None:
-        # Primary: X-API-Key header (VS Code Copilot)
-        api_key = conn.headers.get("x-api-key")
-        if api_key:
-            auth_info = await self.token_verifier.verify_token(api_key)
-            if auth_info:
-                return (
-                    AuthCredentials(auth_info.scopes),
-                    _AuthenticatedUser(auth_info),
-                )
-
-        # Fallback: Authorization: Bearer <token>
-        auth_header = conn.headers.get("authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header[7:]
-            auth_info = await self.token_verifier.verify_token(token)
-            if auth_info:
-                return (
-                    AuthCredentials(auth_info.scopes),
-                    _AuthenticatedUser(auth_info),
-                )
-
-        return None
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = scope.get("headers") or []
+            if not any(k.lower() == b"authorization" for k, _ in headers):
+                key = next((v for k, v in headers if k.lower() == b"x-api-key"), None)
+                if key:
+                    scope["headers"] = list(headers) + [
+                        (b"authorization", b"Bearer " + key)
+                    ]
+        await self.app(scope, receive, send)
 
 
 class DualHeaderVerifier(TokenVerifier):
     """
-    FastMCP 3.x TokenVerifier that accepts both X-API-Key and Bearer headers.
+    FastMCP TokenVerifier that backs dual-header authentication.
 
     Replaces the old StaticTokenVerifier (removed in FastMCP 3.x).
     verify_token() checks a static token dict — no remote validation, no OAuth.
-    get_middleware() installs DualHeaderAuthBackend instead of the default
-    Bearer-only backend, enabling dual-header authentication.
+    The default BearerAuthBackend wiring calls verify_token(); the outermost
+    api_key_fallback middleware normalizes X-API-Key into Bearer form first,
+    so both header styles land here. No get_middleware() override — 4.x gates
+    on Authorization-header presence, which the normalizer satisfies.
     """
 
     def __init__(self, tokens: dict[str, dict[str, Any]]) -> None:
@@ -133,15 +112,6 @@ class DualHeaderVerifier(TokenVerifier):
             scopes=info.get("scopes", []),
             claims=info,
         )
-
-    def get_middleware(self) -> list[Middleware]:
-        """Return middleware using DualHeaderAuthBackend (not default Bearer-only)."""
-        return [
-            Middleware(
-                AuthenticationMiddleware, backend=DualHeaderAuthBackend(self)
-            ),
-            Middleware(AuthContextMiddleware),
-        ]
 
 
 # ── Factory function ──────────────────────────────────────────────────────
@@ -199,8 +169,8 @@ def get_transport_app(mcp, transport: str | None = None):
       tool API key). Enabled unless ``MCP_DISABLE_FLUSH_ENDPOINT`` is set.
     - A session idle TTL (``MCP_SESSION_IDLE_TIMEOUT`` seconds, default 1800) so
       stale sessions self-evict instead of accumulating until process restart.
-      FastMCP's ``http_app()`` doesn't expose this kwarg, so it is set on the
-      session manager right after the lifespan creates it.
+      Passed natively via ``http_app(session_idle_timeout=...)`` on FastMCP ≥4;
+      applied via a lifespan wrap on FastMCP 3.x (see _build_http_app).
 
     Args:
         mcp: FastMCP server instance
@@ -224,29 +194,63 @@ def get_transport_app(mcp, transport: str | None = None):
     if not hasattr(mcp, "http_app"):
         raise RuntimeError(f"FastMCP server has no http_app method: {type(mcp)}")
 
-    app = mcp.http_app(transport="http")
+    app = _build_http_app(mcp)
+    # User middleware runs outside the router, so the normalizer executes
+    # before FastMCP's per-route RequireAuthMiddleware on every route.
+    app.add_middleware(ApiKeyFallbackMiddleware)
     _wire_session_management(app)
     return app
 
 
+def _build_http_app(mcp):
+    """Build the streamable-http ASGI app with the session idle TTL applied.
+
+    MCP_SESSION_IDLE_TIMEOUT (default 1800s; <=0 disables) keeps stale sessions
+    self-evicting instead of accumulating until process restart.
+
+    FastMCP ≥4 exposes a native ``session_idle_timeout`` kwarg on ``http_app()``
+    (Phase 0 verdict Q4), so the value is passed at construction there. On
+    FastMCP 3.x, which lacks the kwarg, fall back to setting the attribute on
+    the manager via the lifespan wrap. That fallback is temporary scaffolding:
+    it goes away when the runtime environment upgrades to FastMCP 4.
+    """
+    raw_timeout = os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")
+    try:
+        idle_timeout = float(raw_timeout)
+        if idle_timeout <= 0:
+            idle_timeout = None
+    except (TypeError, ValueError):
+        idle_timeout = None
+
+    has_native_kwarg = (
+        idle_timeout is not None
+        and "session_idle_timeout" in inspect.signature(mcp.http_app).parameters
+    )
+    if has_native_kwarg:
+        return mcp.http_app(transport="http", session_idle_timeout=idle_timeout)
+
+    app = mcp.http_app(transport="http")
+    if idle_timeout is not None:
+        _apply_session_idle_timeout_via_lifespan(app)
+    return app
+
+
 def _wire_session_management(app) -> None:
-    """Attach the flush-sessions admin route and the session idle TTL.
+    """Attach the flush-sessions admin route.
 
-    The session manager is created inside FastMCP's lifespan, so the idle TTL
-    is applied by wrapping that lifespan to run after the manager exists.
+    The session idle TTL is applied at app construction (see _build_http_app).
 
-    The flush route authenticates via the app-wide AuthenticationMiddleware
-    (DualHeaderAuthBackend) — the same tool API key that protects /mcp.
+    The flush route authenticates via the app-wide auth stack (default
+    BearerAuthBackend + DualHeaderVerifier, with ApiKeyFallbackMiddleware
+    normalizing X-API-Key) — the same tool API key that protects /mcp.
     """
     if os.environ.get("MCP_DISABLE_FLUSH_ENDPOINT"):
-        _apply_session_idle_timeout_via_lifespan(app)
         return
 
     try:
         from starlette.routing import Route
         from starlette.responses import JSONResponse
     except ImportError:
-        _apply_session_idle_timeout_via_lifespan(app)
         return
 
     async def flush_sessions(request):
@@ -277,8 +281,6 @@ def _wire_session_management(app) -> None:
     routes = list(app.router.routes)
     routes.append(Route("/admin/flush-sessions", flush_sessions, methods=["POST"]))
     app.router.routes = routes
-
-    _apply_session_idle_timeout_via_lifespan(app)
 
 
 def _get_session_manager(app):

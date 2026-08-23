@@ -141,90 +141,17 @@ class TestDualHeaderVerifierUnit(unittest.TestCase):
         self.assertIn("mcp", result.scopes)
 
 
-class TestDualHeaderAuthBackendUnit(unittest.TestCase):
-    """Unit tests for DualHeaderAuthBackend.authenticate."""
-
-    def setUp(self):
-        from tools.shared.server_factory import (
-            DualHeaderVerifier,
-            DualHeaderAuthBackend,
-        )
-        self.verifier = DualHeaderVerifier(
-            tokens={"my-secret": {"client_id": "c1", "scopes": ["mcp"]}},
-        )
-        self.backend = DualHeaderAuthBackend(self.verifier)
-
-    def _make_connection(self, headers=None):
-        """Create a mock HTTPConnection with given headers."""
-        from unittest.mock import MagicMock
-        conn = MagicMock()
-        conn.headers = headers or {}
-        return conn
-
-    def test_x_api_key_header_accepted(self):
-        conn = self._make_connection({"x-api-key": "my-secret"})
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(self.backend.authenticate(conn))
-        finally:
-            loop.close()
-        self.assertIsNotNone(result)
-        _, user = result
-        self.assertEqual(user.access_token.token, "my-secret")
-
-    def test_bearer_header_accepted(self):
-        conn = self._make_connection({"authorization": "Bearer my-secret"})
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(self.backend.authenticate(conn))
-        finally:
-            loop.close()
-        self.assertIsNotNone(result)
-
-    def test_invalid_x_api_key_rejected(self):
-        conn = self._make_connection({"x-api-key": "wrong-key"})
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(self.backend.authenticate(conn))
-        finally:
-            loop.close()
-        self.assertIsNone(result)
-
-    def test_invalid_bearer_rejected(self):
-        conn = self._make_connection({"authorization": "Bearer wrong-key"})
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(self.backend.authenticate(conn))
-        finally:
-            loop.close()
-        self.assertIsNone(result)
-
-    def test_no_auth_returns_none(self):
-        conn = self._make_connection({})
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(self.backend.authenticate(conn))
-        finally:
-            loop.close()
-        self.assertIsNone(result)
-
-    def test_case_insensitive_bearer(self):
-        conn = self._make_connection({"authorization": "bearer my-secret"})
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(self.backend.authenticate(conn))
-        finally:
-            loop.close()
-        self.assertIsNotNone(result)
-
-
 class TestFastMCPAuthHTTP(unittest.TestCase):
     """HTTP-level tests: FastMCP server with DualHeaderVerifier protects /mcp."""
 
     @classmethod
     def setUpClass(cls):
         mcp = _make_test_server("test-secret-key-999")
-        app = mcp.http_app(transport="http")
+        # Build via the production factory so the app includes the
+        # api_key_fallback dual-header normalizer (server_factory Phase 2).
+        from tools.shared.server_factory import get_transport_app
+
+        app = get_transport_app(mcp)
         cls.handle = _ServerHandle(app, port=0)
         cls.handle.start()
         cls.api_key = "test-secret-key-999"
