@@ -64,14 +64,30 @@ native sweeps are done, and warn that it kills the harness's own sessions.
 | `mcp__simplemcp__square` | `{"value": 7}` | yes → 49 |
 | `mcp__simplemcp__greet` | `{"name": "smoke", "greeting": "Howdy"}` | yes → "Howdy, smoke!" |
 | `mcp__simplemcp__get_secret` | `{}` | returns the SIMPLEMCP_SECRET fixture |
-| webmcp `brave_search_web` / `brave_search_api` | `{"query": "...", "count": 3}` | 429 = upstream rate limit, not a defect |
+| webmcp `brave_search_api` | `{"query": "...", "count": 3}` | 429 = upstream rate limit, not a defect |
 | webmcp `google_search_api` | `{"query": "..."}` | no |
 | webmcp `post_url` | `https://httpbin.org/post` + small JSON body | echoed payload |
-| webmcp `fetch_url` | `{"url": "https://example.com"}` | no |
+| webmcp `fetch_url` | `{"url": "https://example.com"}` | assert: status 200 AND body contains "Example Domain" AND no U+FFFD replacement chars |
 
 For functions not listed: read the input schema from the session's tool
 definition or the tool's `config.json`, pick minimal safe args, and skip with
 a note if none are safe.
+
+### Known webmcp defect (as of 2026-08-23)
+
+`webmcp` stores origin response bodies verbatim without honoring
+`Content-Encoding`, so gzip-compressed answers surface as mojibake/binary:
+
+- **Exclude `brave_search_web` from sweeps** — its scraped HTML comes back
+  compressed garbage intermittently (reproduced on FastMCP 3.4.2 and
+  4.0.0b3). Re-add after the decode fix lands.
+- The `fetch_url` assertions above are the regression probe for the same
+  root cause: they currently FAIL (example.com arrives as ~318 raw bytes).
+  A failure there means the known bug still exists — do not report it as a
+  FastMCP-version or transport regression.
+
+Fixing the decode handling in `webmcp_fastmcp.py` flips both: re-add
+`brave_search_web` and expect `fetch_url` green.
 
 ## Complementary HTTP checks (only when explicitly wanted)
 
