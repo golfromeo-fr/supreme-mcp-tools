@@ -695,6 +695,14 @@ re-exported as `mcp.types` (existing imports keep working); legacy-era client kn
 `Client(..., mode="legacy")`. The guide is silent on `TokenVerifier`/`get_middleware()` and session
 internals — Q1–Q7/Q9 remain genuine spike questions.
 
+**Status refresh (PyPI, 2026-08-23):** fastmcp — stable still 3.4.7; b3 still the latest pre-release
+(no b4, no stable). Trigger #1 remains unmet; step 9 stays gated. mcp — 2.0.0 unchanged. Same day,
+the port was validated live: launcher running under a complete b3 venv served all six tools on
+8000–8005; auth matrix on simplemcp:8002 passed all four cells including X-API-Key-only (Q9 fix);
+fastmcp Clients verified BOTH eras against the live server (modern `2026-07-28`, legacy
+`2025-11-25`, square(7)→49 each). Remaining for step 9: re-run the Q6 check + this suite when
+stable ships, then merge.
+
 **Dead-code claim re-verified:** `utils.py` delete ranges are exact — line 10 (`from fastmcp import
 FastMCP`), 32-173 (`FastMCPBase`), 176-187 (logging helpers); keep `_is_internal_ip` /
 `_check_ipv4_mapped` / `is_internal_url` (used by webmcp, convertermcp_fastmcp, and tests). The
