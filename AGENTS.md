@@ -188,6 +188,7 @@ To test: `python -m pytest tests/test_memory_autouse.py -v`
 
 ## Common pitfalls
 
+- ZCode "Session not found" (-32600) on native tool calls = stale client transport after a server restart; reconnect does NOT fix it — restart the ZCode session. Full checklist: `zcode-mcp-recovery-playbook.md`. Never call `/admin/flush-sessions` while testing through ZCode (kills its sessions too)
 - Don't use `localhost` in server URLs — use `127.0.0.1` to avoid IPv6 `::1` resolution
 - `ScoredPoint.score` contract: ALWAYS similarity (higher = better). All impls must normalize; sort descending
 - `iter_all` MUST stream (no full materialization) — backends yield one record at a time (R1, R15)
