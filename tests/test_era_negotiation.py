@@ -132,7 +132,15 @@ def _call_echo_and_version(url, **client_kwargs):
             text = result.content[0].text if getattr(result, "content", None) else None
             return text, client.protocol_version
 
-    return asyncio.run(_run())
+    # Local event loop, never asyncio.run(): asyncio.run() leaves
+    # set_event_loop(None) behind, which makes legacy get_event_loop()
+    # helpers in later test files raise under Python 3.13 (prior art:
+    # tests/test_memory_autouse.py::_run).
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 
 class TestEraNegotiation:

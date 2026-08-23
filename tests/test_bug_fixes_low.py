@@ -97,7 +97,13 @@ class TestLOW7S3DeleteMissing(unittest.TestCase):
         from tools.shared.artifact_store import ArtifactStore
         store = ArtifactStore(local_fallback=True, local_dir="/tmp/test_artifacts_del")
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(store.delete("nonexistent_key"))
+        # Local loop — get_event_loop() is unavailable after pytest-asyncio
+        # tests clear the main thread's current loop (Python 3.13).
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(store.delete("nonexistent_key"))
+        finally:
+            loop.close()
         self.assertFalse(result)
 
 

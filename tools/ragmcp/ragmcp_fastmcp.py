@@ -214,7 +214,9 @@ logger.info("="*80)
 # FEF V3 Integration
 # ============================================================================
 
-sys.path.insert(0, (Path(__file__).parent / ".." / "..").resolve())
+_repo_root = str((Path(__file__).parent / ".." / "..").resolve())
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 try:
     from tools.fef_integration import (

@@ -21,7 +21,15 @@ from text_utils import strip_llm_artifacts, extract_verified_names
 
 
 def _run_async(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Local loop, never get_event_loop(): earlier test files (e.g.
+    # pytest-asyncio tests) may leave no current loop in the main thread,
+    # which makes get_event_loop() raise under Python 3.13. Same pattern as
+    # tests/test_memory_autouse.py::_run.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _text_to_graph(**kwargs):
