@@ -791,6 +791,17 @@ async def search_code_sparse(
                         mode="sparse", file_type=file_type, function_name=function_name)
 
 
+def _no_sparse_index_error(collection_name: str) -> str:
+    """Loud failure for sparse/hybrid queries on collections with no sparse index.
+
+    Dense-only collections (e.g. migrated before the Turso FTS5 sidecar
+    existed) used to answer sparse queries with silent zero hits.
+    """
+    return (f"Error: Collection '{collection_name}' has no sparse index on this "
+            f"backend. Rebuild it with: python -m tools.shared.migrate_store "
+            f"repair-sparse --collection {collection_name}")
+
+
 @with_metrics("search")
 @mcp.tool()
 async def search(
@@ -842,6 +853,9 @@ async def search(
             mode = "dense"
         else:
             return f"Error: Collection '{collection_name}' has no vectors configured."
+
+    if mode in ("sparse", "hybrid") and not has_sparse:
+        return _no_sparse_index_error(collection_name)
 
     # Handle copilot format - route to copilot handler if requested
     if copilot_format:
@@ -1108,6 +1122,12 @@ async def _search_copilot(query: str, limit: int, collection_name: str,
 
     if not SPARSE_VECTORS_AVAILABLE:
         return "Error: Sparse vector search required for copilot context. Missing sparse_vector_gen.py module."
+
+    try:
+        if not vector_store.get_collection(collection_name).has_sparse:
+            return _no_sparse_index_error(collection_name)
+    except Exception as e:
+        return f"Error: Collection '{collection_name}' not found: {e}"
 
     try:
         injector = get_injector(max_context_lines=max_lines)

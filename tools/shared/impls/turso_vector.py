@@ -561,6 +561,47 @@ class TursoVectorStore:
             count += len(batch)
         return count
 
+    def rebuild_sparse(self, collection: str) -> dict:
+        """Ensure the FTS5 sidecar exists and (re)build it from stored text.
+
+        Recovers collections whose ``text_content`` was never populated or
+        whose sidecar was never created (e.g. imported dense-only before
+        sparse support): text is re-extracted from the payload with the same
+        key priority upsert uses, then the external-content FTS index is
+        rebuilt from the content table. Idempotent.
+
+        Returns {"points": total rows, "text_backfilled": rows recovered,
+        "fts_rows": rows in the rebuilt index}.
+        """
+        base = f"vec_{_s(collection)}"
+        fts = f"{base}_fts"
+
+        empty_before = self._conn.execute(
+            f"SELECT COUNT(*) FROM {base} WHERE text_content IS NULL OR text_content = ''"
+        ).fetchone()[0]
+
+        self._conn.execute(f"""
+            UPDATE {base} SET text_content = COALESCE(
+                NULLIF(json_extract(payload, '$.text'), ''),
+                NULLIF(json_extract(payload, '$.codeChunk'), ''),
+                NULLIF(json_extract(payload, '$.content'), ''),
+                text_content)
+            WHERE text_content IS NULL OR text_content = ''
+        """)
+
+        # ensure_collection no-ops on the existing base table, creates the
+        # missing sidecar, and records the name mapping
+        info = self.get_collection(collection)
+        self.ensure_collection(collection, dense_dim=info.named_vectors.get("") or None,
+                               sparse=True)
+
+        # Canonical external-content rebuild — regenerates the whole index
+        self._conn.execute(f"INSERT INTO {fts}({fts}) VALUES ('rebuild')")
+
+        points = self._conn.execute(f"SELECT COUNT(*) FROM {base}").fetchone()[0]
+        fts_rows = self._conn.execute(f"SELECT COUNT(*) FROM {fts}").fetchone()[0]
+        return {"points": points, "text_backfilled": empty_before, "fts_rows": fts_rows}
+
 
 # ---------------------------------------------------------------------------
 # Filter translation helper

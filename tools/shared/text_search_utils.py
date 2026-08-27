@@ -9,12 +9,17 @@ from __future__ import annotations
 
 def escape_fts5_query(query: str) -> str:
     """
-    Escape a user query for an FTS5 MATCH expression.
+    Escape a user query for an FTS5 MATCH expression as OR-joined terms.
 
-    Wraps the whole query in double quotes (so it is treated as a phrase and
-    operators/punctuation are not interpreted), and doubles any internal double
-    quotes per the FTS5 escaping rule. This also prevents MATCH injection from
-    untrusted query text.
+    Each whitespace-separated term becomes a double-quoted FTS5 phrase with
+    internal quotes doubled per the FTS5 escaping rule, joined with OR —
+    BM25-style recall: rows matching ANY term are returned and bm25() ranks
+    them. (Wrapping the whole string as one phrase silently returned zero
+    hits whenever the words were not adjacent in the text, which broke every
+    multi-term lexical search.) Quoting every term keeps operators and
+    punctuation inert, preventing MATCH injection from untrusted query text.
     """
-    escaped = query.replace('"', '""')
-    return f'"{escaped}"'
+    terms = [t.replace('"', '""') for t in query.split() if t]
+    if not terms:
+        return '""'
+    return " OR ".join(f'"{t}"' for t in terms)

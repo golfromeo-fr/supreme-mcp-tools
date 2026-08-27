@@ -344,8 +344,11 @@ def test_inline_schema_matches_sql_file():
 
 def test_escape_fts5_query():
     from shared.text_search_utils import escape_fts5_query
-    # Wraps in quotes and doubles internal quotes (FTS5 escaping rule)
+    # Each term is quoted with internal quotes doubled (FTS5 escaping rule),
+    # terms joined with OR — BM25 recall, not whole-string phrase
     assert escape_fts5_query("hello") == '"hello"'
-    assert escape_fts5_query('say "hi"') == '"say ""hi"""'
-    # Operator chars are neutralized by the quoting (no injection)
-    assert escape_fts5_query("a OR b") == '"a OR b"'
+    assert escape_fts5_query('say "hi"') == '"say" OR """hi"""'
+    # Operator words are inert quoted terms, not FTS5 operators (no injection)
+    assert escape_fts5_query("a OR b") == '"a" OR "OR" OR "b"'
+    assert escape_fts5_query("") == '""'
+    assert escape_fts5_query("   ") == '""'

@@ -42,7 +42,7 @@ class TestLOW15DeadCodeRemoved(unittest.TestCase):
                            f"Expected minimal dead code (<=2 lines), found {len(code_lines)}")
 
     def test_search_code_sparse_no_dead_code_after_return(self):
-        """search_code_sparse: after return, only decorator or next function should follow."""
+        """search_code_sparse: after return, only a decorator or next function should follow."""
         source = (PROJECT_ROOT / "tools/ragmcp/ragmcp_fastmcp.py").read_text()
 
         func_start = source.find("async def search_code_sparse(")
@@ -53,8 +53,11 @@ class TestLOW15DeadCodeRemoved(unittest.TestCase):
         self.assertGreater(return_stmt, 0)
 
         after_return = rest[return_stmt + 30:]
-        next_def = after_return.find("\n\n@with_metrics")
-        code_after_return = after_return[:next_def] if next_def > 0 else after_return
+        # stop at the next top-level definition (decorated or bare — a plain
+        # helper like _no_sparse_index_error legitimately follows here)
+        candidates = [after_return.find(p) for p in ("\n\n@", "\n\ndef ", "\n\nasync def ")]
+        next_def = min(c for c in candidates if c > 0)
+        code_after_return = after_return[:next_def]
         code_lines = [l for l in code_after_return.split("\n") if l.strip() and not l.strip().startswith("#")]
 
         self.assertLessEqual(len(code_lines), 2,

@@ -29,6 +29,22 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Make "python -m tools.shared.migrate_store" work from the repo root:
+# the shared.* imports below need tools/ on sys.path.
+_TOOLS_DIR = str(Path(__file__).resolve().parent.parent)
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+
+# Repo convention: tools load .env at startup; the standalone CLI must too,
+# or backend resolution sees no TURSO_*/QDRANT_*/POSTGRES_* configuration.
+_ENV_FILE = Path(_TOOLS_DIR).parent / ".env"
+if _ENV_FILE.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_ENV_FILE, override=False)
+    except ImportError:
+        pass
+
 SCHEMA_VERSION = 1
 _PROGRESS_INTERVAL = 1000  # default progress report interval
 
@@ -302,6 +318,38 @@ def cmd_pipe(args):
         os.unlink(tmp_path)
 
 
+def cmd_repair_sparse(args):
+    """Rebuild sparse (FTS5) sidecars for Turso vector collections.
+
+    Collections imported before the sidecar existed have empty text_content
+    and no *_fts table, so sparse/hybrid queries silently return zero hits.
+    Text is recovered from each point's payload — no re-indexing needed.
+    """
+    sql_store, vector_store = _resolve_backend(args.backend)
+    if vector_store is None:
+        logger.error("No vector backend configured")
+        sys.exit(1)
+    if not hasattr(vector_store, "rebuild_sparse"):
+        logger.error(
+            "repair-sparse supports the turso vector backend only "
+            "(qdrant builds sparse vectors at index time)"
+        )
+        sys.exit(1)
+
+    names = args.collection if args.collection else vector_store.list_collections()
+    if not names:
+        logger.info("No collections found — nothing to repair")
+        return
+
+    for name in names:
+        stats = vector_store.rebuild_sparse(name)
+        logger.info(
+            f"repaired '{name}': {stats['points']} points, "
+            f"{stats['text_backfilled']} text rows backfilled, "
+            f"{stats['fts_rows']} rows in the FTS index"
+        )
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -346,6 +394,19 @@ def main():
     p_verify.add_argument("--left", required=True, help='e.g. "postgres+qdrant"')
     p_verify.add_argument("--right", required=True, help='e.g. "turso+turso"')
 
+    p_repair = sub.add_parser(
+        "repair-sparse",
+        help="Rebuild sparse (FTS5) sidecars + backfill text (turso vector backend)",
+    )
+    p_repair.add_argument(
+        "--backend", default=None,
+        help='Backend combo, e.g. "turso+turso" (default: current config)',
+    )
+    p_repair.add_argument(
+        "--collection", action="append",
+        help="Collection to repair (repeatable; default: all)",
+    )
+
     args = parser.parse_args()
 
     level = logging.DEBUG if args.debug else logging.INFO
@@ -368,6 +429,8 @@ def main():
         cmd_verify(args)
     elif args.command == "pipe":
         cmd_pipe(args)
+    elif args.command == "repair-sparse":
+        cmd_repair_sparse(args)
     else:
         parser.print_help()
         sys.exit(1)
