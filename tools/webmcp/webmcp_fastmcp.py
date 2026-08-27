@@ -248,7 +248,6 @@ async def brave_search_web(query: str, count: int = 10, timeout: float = 30.0, l
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Accept-Language": f"{language},en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
             "DNT": "1",
             "Upgrade-Insecure-Requests": "1",
@@ -355,7 +354,7 @@ async def brave_search_api(query: str, count: int = 10, timeout: float = 30.0, l
     try:
         import json
         base_url = "https://api.search.brave.com/res/v1/web/search"
-        headers = {"Accept": "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": BRAVE_SEARCH_API_KEY}
+        headers = {"Accept": "application/json", "X-Subscription-Token": BRAVE_SEARCH_API_KEY}
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             if use_post:
@@ -781,11 +780,14 @@ async def fetch_url(url: str, timeout: float = 30.0, max_length: int = 50000, st
         else:
             webmcp_metrics["cache_misses"] = webmcp_metrics.get("cache_misses", 0) + 1
 
+    # No manual Accept-Encoding anywhere: httpx advertises only codecs it can
+    # decode (gzip/deflate, plus br/zstd when those packages are installed).
+    # A hand-set "br" without the brotli package made servers answer with
+    # brotli and httpx returned the raw compressed bytes as text.
     default_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
         "DNT": "1",
         "Upgrade-Insecure-Requests": "1",
         "Sec-Fetch-Dest": "document",
