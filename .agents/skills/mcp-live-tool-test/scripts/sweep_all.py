@@ -10,13 +10,19 @@ Usage:
     python .agents/skills/mcp-live-tool-test/scripts/sweep_all.py --only simplemcp,webmcp
 
 Requires: fastmcp >= 4 installed in the interpreter (env_python has 4.0.0b3)
-and the launcher running. Exit code = number of unexpected failures; the
-known webmcp fetch_url defect is reported as KNOWN-DEFECT and tolerated
-until the Content-Encoding fix lands.
+and the launcher running.
+
+Exit codes:
+    0  every swept function behaved (KNOWN-DEFECT / UPSTREAM rows are allowed
+       and tallied, never silent)
+    1  at least one unexpected failure
+    2  nothing was swept (no server reachable, or --only matched nothing) --
+       a no-op must never read as all-clear
 """
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -25,7 +31,8 @@ from fastmcp.client.auth import BearerAuth
 
 ROOT = Path(__file__).resolve().parents[4]
 
-# brave_search_web EXCLUDED — known gzip-decode defect (SKILL.md).
+# brave_search_web EXCLUDED — known gzip-decode defect (SKILL.md);
+# fetch_url doubles as its regression probe via classify().
 # convertermcp not swept — its only tool needs a docx fixture.
 CALLS = {
     "oraclemcp": [
@@ -54,12 +61,39 @@ CALLS = {
     ],
 }
 
-UPSTREAM_HINTS = ("429", "Oracle", "ora-", "USERID", "refused", "Connection")
+# Errors matching these are the server's *dependencies* failing (search quota,
+# Oracle not configured, DB down) — not defects in this repo's code. They are
+# still printed per-row and tallied; anything unmatched shows as FAIL, which
+# is the safe direction (false alarm beats hidden failure).
+UPSTREAM_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bHTTP 429\b",
+        r"\b429\b.*rate",
+        r"\bORA-\d{5}\b",
+        r"\bUSERID\b required",
+        r"oracle.*(not configured|credentials)",
+        r"connection refused",
+        r"errno 111",
+    )
+]
+
+
+def is_upstream(msg: str) -> bool:
+    return any(p.search(msg) for p in UPSTREAM_PATTERNS)
 
 
 def brief(text, n=100):
     t = " ".join(str(text).split())
     return t[:n] + ("…" if len(t) > n else "")
+
+
+def port_open(port: float) -> bool:
+    import socket
+
+    with socket.socket() as sk:
+        sk.settimeout(0.5)
+        return sk.connect_ex(("127.0.0.1", int(port))) == 0
 
 
 def classify(server, fn, out):
@@ -72,7 +106,7 @@ def classify(server, fn, out):
 
 
 async def sweep(server, port):
-    cfg = json.load(open(ROOT / f"tools/{server}/config.json"))
+    cfg = json.loads((ROOT / f"tools/{server}/config.json").read_text())
     key = cfg["auth"]["api_key"]
     url = f"http://127.0.0.1:{port}/mcp"
     rows, tools_n, proto, err = [], None, None, None
@@ -80,36 +114,67 @@ async def sweep(server, port):
         async with Client(url, auth=BearerAuth(key)) as c:
             tools_n = len(await c.list_tools())
             proto = c.protocol_version
-            for fn, args in CALLS.get(server, []):
+            for fn, args in CALLS[server]:
                 try:
                     res = await c.call_tool(fn, args)
                     out = res.content[0].text if getattr(res, "content", None) else ""
-                    status = classify(server, fn, out)
+                    # Seatbelt: call_tool raises on tool errors by default
+                    # (raise_on_error=True), but don't let a non-raising
+                    # error result ever read as PASS.
+                    if getattr(res, "is_error", False):
+                        status = "FAIL"
+                        if not out:
+                            out = "(error result, empty content)"
+                    else:
+                        status = classify(server, fn, out)
                 except Exception as e:
                     msg = f"{type(e).__name__}: {e}"
-                    out, status = msg, ("UPSTREAM" if any(h in msg for h in UPSTREAM_HINTS) else "FAIL")
+                    out = msg
+                    status = "UPSTREAM" if is_upstream(msg) else "FAIL"
                 rows.append((fn, json.dumps(args), status, brief(out)))
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
     return tools_n, proto, rows, err
 
 
-async def main():
-    import socket
+async def main() -> int:
+    argv = sys.argv[1:]
+    unknown_flags = [a for a in argv if a.startswith("-") and a != "--only"]
+    if unknown_flags:
+        print(f"error: unknown flag(s) {unknown_flags} (supported: --only a,b)", file=sys.stderr)
+        return 2
+    if "--only" in argv:
+        idx = argv.index("--only")
+        if idx + 1 >= len(argv):
+            print("error: --only needs a comma-separated list", file=sys.stderr)
+            return 2
+        only = argv[idx + 1].split(",")
+    else:
+        only = None
 
-    only = sys.argv[sys.argv.index("--only") + 1].split(",") if "--only" in sys.argv else None
-    ports = json.load(open(ROOT / "config/ports.json"))["assignments"]["mcp"]
+    try:
+        ports = json.loads((ROOT / "config/ports.json").read_text())["assignments"]["mcp"]
+    except (OSError, ValueError, KeyError) as e:
+        print(f"error: cannot read repo config (run from a repo checkout where "
+              f".agents/skills/mcp-live-tool-test lives in place): {e}", file=sys.stderr)
+        return 2
+
+    running = {s for s, p in ports.items() if port_open(p)}
     servers = [s for s in ports if s in CALLS and (not only or s in only)]
-    unexpected = 0
+    unswept_running = sorted(running - set(servers))
+    if unswept_running:
+        print(f"note: running but NOT swept (add to CALLS or pass --only): "
+              f"{', '.join(unswept_running)}")
+
+    reachable, unexpected, upstream_n, known_defect_n = 0, 0, 0, 0
     for server in servers:
-        port = ports[server]
-        with socket.socket() as sk:
-            sk.settimeout(0.5)
-            if sk.connect_ex(("127.0.0.1", port)) != 0:
-                print(f"\n=== {server} :{port} ===\n  not running — skipped")
-                continue
+        port = int(ports[server])
+        print(f"\n=== {server} :{port} ===")
+        if server not in running:
+            print("  not running — skipped")
+            continue
         n, proto, rows, err = await sweep(server, port)
-        print(f"\n=== {server} :{ports[server]} ===")
+        reachable += 1
         if err:
             print(f"CONNECT FAIL: {err}")
             unexpected += 1
@@ -119,9 +184,19 @@ async def main():
             print(f"  [{status:>12}] {fn}{args} -> {detail}")
             if status == "FAIL":
                 unexpected += 1
-    print(f"\nunexpected failures: {unexpected} (KNOWN-DEFECT/UPSTREAM rows excluded)")
-    sys.exit(1 if unexpected else 0)
+            elif status == "UPSTREAM":
+                upstream_n += 1
+            elif status == "KNOWN-DEFECT":
+                known_defect_n += 1
+
+    if reachable == 0:
+        print("\nNOTHING WAS SWEPT — no target server reachable."
+              + (f" (--only {only} matched nothing running)" if only else ""))
+        return 2
+    print(f"\nswept {reachable} server(s): {unexpected} unexpected failure(s), "
+          f"{upstream_n} upstream-tolerated, {known_defect_n} known-defect")
+    return 1 if unexpected else 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
