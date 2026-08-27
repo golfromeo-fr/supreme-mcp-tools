@@ -17,7 +17,8 @@ Usage:
 
 Requires fastmcp >= 4 in the interpreter and the launcher running.
 
-Exit codes: 0 both eras OK; 1 an era probe failed; 2 bad usage/config.
+Exit codes: 0 both eras OK; 1 an era probe failed (incl. a round-trip that
+returns an error result); 2 bad usage/config.
 """
 
 import asyncio
@@ -53,8 +54,11 @@ async def era_probe(url, key, mode, server):
             if tool:
                 res = await c.call_tool(tool, args)
                 out = res.content[0].text if getattr(res, "content", None) else "?"
-                err = " ERROR-FLAG" if getattr(res, "is_error", False) else ""
-                called = f" | {tool} -> {' '.join(str(out).split())[:45]!r}{err}"
+                if getattr(res, "is_error", False):
+                    print(f"[{label}] FAILED (error result): "
+                          f"{' '.join(str(out).split())[:90]!r}")
+                    return False
+                called = f" | {tool} -> {' '.join(str(out).split())[:45]!r}"
             print(f"[{label}] tools={n} proto={c.protocol_version}{called}")
             return True
     except Exception as e:

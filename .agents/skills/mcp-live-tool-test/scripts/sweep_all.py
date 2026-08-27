@@ -68,12 +68,11 @@ CALLS = {
 UPSTREAM_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in (
-        r"\bHTTP 429\b",
-        r"\b429\b.*rate",
+        r"\b429\b",
         r"\bORA-\d{5}\b",
-        r"\bUSERID\b required",
+        r"\bUSERID\b",
         r"oracle.*(not configured|credentials)",
-        r"connection refused",
+        r"connection (refused|reset|timed out|closed)",
         r"errno 111",
     )
 ]
@@ -120,11 +119,12 @@ async def sweep(server, port):
                     out = res.content[0].text if getattr(res, "content", None) else ""
                     # Seatbelt: call_tool raises on tool errors by default
                     # (raise_on_error=True), but don't let a non-raising
-                    # error result ever read as PASS.
+                    # error result ever read as PASS; it gets the same
+                    # upstream tolerance as the exception path below.
                     if getattr(res, "is_error", False):
-                        status = "FAIL"
                         if not out:
                             out = "(error result, empty content)"
+                        status = "UPSTREAM" if is_upstream(out) else "FAIL"
                     else:
                         status = classify(server, fn, out)
                 except Exception as e:
