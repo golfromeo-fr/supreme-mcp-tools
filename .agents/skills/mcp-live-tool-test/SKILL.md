@@ -73,21 +73,16 @@ For functions not listed: read the input schema from the session's tool
 definition or the tool's `config.json`, pick minimal safe args, and skip with
 a note if none are safe.
 
-### Known webmcp defect (as of 2026-08-23)
+### webmcp notes (updated 2026-08-27)
 
-`webmcp` stores origin response bodies verbatim without honoring
-`Content-Encoding`, so gzip-compressed answers surface as mojibake/binary:
-
-- **Exclude `brave_search_web` from sweeps** — its scraped HTML comes back
-  compressed garbage intermittently (reproduced on FastMCP 3.4.2 and
-  4.0.0b3). Re-add after the decode fix lands.
-- The `fetch_url` assertions above are the regression probe for the same
-  root cause: they currently FAIL (example.com arrives as ~318 raw bytes).
-  A failure there means the known bug still exists — do not report it as a
-  FastMCP-version or transport regression.
-
-Fixing the decode handling in `webmcp_fastmcp.py` flips both: re-add
-`brave_search_web` and expect `fetch_url` green.
+- **`brave_search_web` is NOT TESTED — user directive (2026-08-27).** The
+  function is not meant to be used but cannot be hidden server-side, so it is
+  removed from all testing: never call it in sweeps, do not re-add it.
+- The Content-Encoding decode bug (manual `Accept-Encoding: ..., br` sent
+  without the brotli package installed → raw compressed bytes as text) was
+  FIXED 2026-08-27 by letting httpx set `Accept-Encoding` itself. The
+  `fetch_url` assertions above are its regression probe: a mojibake failure
+  there is now an unexpected regression, not a known defect.
 
 ## Companion scripts (run these instead of retyping probes)
 
@@ -96,9 +91,9 @@ active interpreter; ports/keys resolve from repo config automatically.
 
 - **`scripts/sweep_all.py`** — full safe-function sweep of every running
   server (`--only simplemcp,webmcp` to narrow). Encodes the expectations
-  table above: brave_search_web excluded, fetch_url asserted and reported as
-  KNOWN-DEFECT while the gzip bug exists. Exit code = unexpected failures,
-  so it is scriptable.
+  table above: brave_search_web never called (user directive), fetch_url
+  asserted for clean decode. Exit code = unexpected failures, so it is
+  scriptable.
 - **`scripts/probe_eras.py [server] [--wire]`** — simulates a NEWEST-era MCP
   client (fastmcp default mode) plus a legacy control on one server;
   `--wire` additionally shows raw HTTP behavior (Mcp-Session-Id issuance,

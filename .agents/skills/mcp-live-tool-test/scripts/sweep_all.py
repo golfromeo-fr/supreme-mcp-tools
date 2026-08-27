@@ -13,8 +13,8 @@ Requires: fastmcp >= 4 installed in the interpreter (env_python has 4.0.0b3)
 and the launcher running.
 
 Exit codes:
-    0  every swept function behaved (KNOWN-DEFECT / UPSTREAM rows are allowed
-       and tallied, never silent)
+    0  every swept function behaved (UPSTREAM rows are allowed and tallied,
+       never silent)
     1  at least one unexpected failure
     2  nothing was swept (no server reachable, or --only matched nothing) --
        a no-op must never read as all-clear
@@ -31,8 +31,9 @@ from fastmcp.client.auth import BearerAuth
 
 ROOT = Path(__file__).resolve().parents[4]
 
-# brave_search_web EXCLUDED — known gzip-decode defect (SKILL.md);
-# fetch_url doubles as its regression probe via classify().
+# brave_search_web NOT SWEPT — user directive 2026-08-27: the function is not
+# meant to be used (it can't be hidden server-side); never call it in sweeps.
+# fetch_url asserts clean decode via classify() (decode bug fixed 2026-08-27).
 # convertermcp not swept — its only tool needs a docx fixture.
 CALLS = {
     "oraclemcp": [
@@ -96,11 +97,12 @@ def port_open(port: float) -> bool:
 
 
 def classify(server, fn, out):
-    """fetch_url doubles as the regression probe for the gzip-decode bug."""
+    """fetch_url doubles as the Content-Encoding regression probe (bug fixed
+    2026-08-27): mojibake or missing body text means the decode bug is back."""
     if server == "webmcp" and fn == "fetch_url":
         if "Example Domain" in out and "\ufffd" not in out:
             return "PASS"
-        return "KNOWN-DEFECT"
+        return "FAIL"
     return "PASS"
 
 
@@ -166,7 +168,7 @@ async def main() -> int:
         print(f"note: running but NOT swept (add to CALLS or pass --only): "
               f"{', '.join(unswept_running)}")
 
-    reachable, unexpected, upstream_n, known_defect_n = 0, 0, 0, 0
+    reachable, unexpected, upstream_n = 0, 0, 0
     for server in servers:
         port = int(ports[server])
         print(f"\n=== {server} :{port} ===")
@@ -186,15 +188,13 @@ async def main() -> int:
                 unexpected += 1
             elif status == "UPSTREAM":
                 upstream_n += 1
-            elif status == "KNOWN-DEFECT":
-                known_defect_n += 1
 
     if reachable == 0:
         print("\nNOTHING WAS SWEPT — no target server reachable."
               + (f" (--only {only} matched nothing running)" if only else ""))
         return 2
     print(f"\nswept {reachable} server(s): {unexpected} unexpected failure(s), "
-          f"{upstream_n} upstream-tolerated, {known_defect_n} known-defect")
+          f"{upstream_n} upstream-tolerated")
     return 1 if unexpected else 0
 
 
