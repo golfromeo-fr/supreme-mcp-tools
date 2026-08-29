@@ -378,7 +378,7 @@ async def main_page() -> None:
     async def rebuild_content():
         content_container.clear()
         with content_container:
-            await _render_content_area(state)
+            await _render_content_area(state, handlers)
 
     def schedule_content_rebuild() -> None:
         """Content rebuild is async (env/auth fetches); schedule from sync handlers."""
@@ -529,6 +529,14 @@ async def main_page() -> None:
         except Exception as e:
             show_error(f"Failed to update auth key: {e}")
 
+    handlers = {
+        "on_query": on_query,
+        "on_execute": on_execute,
+        "on_env_update": on_env_update,
+        "on_env_delete": on_env_delete,
+        "on_auth_update": on_auth_update,
+    }
+
     async def poll_status() -> None:
         """Periodic status poll: updates badges in place, never rebuilds panels."""
         state = get_state()
@@ -593,8 +601,14 @@ async def main_page() -> None:
     ui.timer(POLL_INTERVAL_SECONDS, poll_status)
 
 
-async def _render_content_area(state) -> None:
-    """Render the detail area for the selected tool: tabs or empty state."""
+async def _render_content_area(state, handlers: dict) -> None:
+    """Render the detail area for the selected tool: tabs or empty state.
+
+    ``handlers`` carries the page-level callbacks (on_query, on_execute,
+    on_env_update, on_env_delete, on_auth_update) — these live as closures in
+    main_page and must be passed down; referencing them directly here raises
+    NameError at render time.
+    """
     if state.selected_tool is None:
         render_empty_state()
         return
@@ -610,11 +624,11 @@ async def _render_content_area(state) -> None:
         with ui.tab_panel("overview"):
             await _render_overview_tab(state, detail)
         with ui.tab_panel("extensions"):
-            _render_extensions_tab(state, detail)
+            _render_extensions_tab(state, detail, handlers)
         with ui.tab_panel("env"):
-            await _render_env_tab(state, detail)
+            await _render_env_tab(state, detail, handlers)
         with ui.tab_panel("auth"):
-            await _render_auth_tab(state, detail)
+            await _render_auth_tab(state, detail, handlers)
 
 
 async def _render_overview_tab(state, detail) -> None:
@@ -629,7 +643,7 @@ async def _render_overview_tab(state, detail) -> None:
     ToolOverview(tool=detail)
 
 
-def _render_extensions_tab(state, detail) -> None:
+def _render_extensions_tab(state, detail, handlers: dict) -> None:
     """Extensions tab: data sources and actions, one expansion level each."""
     if detail is None:
         if state.loading_detail:
@@ -657,15 +671,15 @@ def _render_extensions_tab(state, detail) -> None:
 
     with ui.column().classes("w-full gap-3"):
         if data_sources:
-            DataSourcesBox(extensions=data_sources, on_query=on_query)
+            DataSourcesBox(extensions=data_sources, on_query=handlers.get("on_query"))
         if actions:
-            ActionsBox(extensions=actions, on_execute=on_execute)
+            ActionsBox(extensions=actions, on_execute=handlers.get("on_execute"))
         if other:
             ui.label(f"{len(other)} non-interactive extension(s) "
                      f"(event/stream) not shown here.").classes("text-caption text-grey")
 
 
-async def _render_env_tab(state, detail) -> None:
+async def _render_env_tab(state, detail, handlers: dict) -> None:
     """Env Vars tab: always fetch fresh values at render time."""
     if detail is None:
         ui.label("Select a tool to see its environment variables.").classes("text-grey")
@@ -682,12 +696,12 @@ async def _render_env_tab(state, detail) -> None:
     EnvVarEditor(
         tool_name=detail.name,
         variables=env_variables,
-        on_update=on_env_update,
-        on_delete=on_env_delete,
+        on_update=handlers.get("on_env_update"),
+        on_delete=handlers.get("on_env_delete"),
     )
 
 
-async def _render_auth_tab(state, detail) -> None:
+async def _render_auth_tab(state, detail, handlers: dict) -> None:
     """Auth tab: fetch current auth config at render time."""
     if detail is None:
         ui.label("Select a tool to see its authorization settings.").classes("text-grey")
@@ -704,7 +718,7 @@ async def _render_auth_tab(state, detail) -> None:
         tool_name=detail.name,
         is_set=tool_auth.get("is_set", False),
         value_masked=tool_auth.get("value_masked"),
-        on_update=on_auth_update,
+        on_update=handlers.get("on_auth_update"),
     )
 
 
