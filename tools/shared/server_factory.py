@@ -27,9 +27,12 @@ Usage in each *_fastmcp.py:
 from __future__ import annotations
 
 import inspect
+import json
+import logging
 import os
 import hmac
 import secrets as _secrets
+import time
 import warnings
 from typing import TYPE_CHECKING, Any
 
@@ -114,6 +117,152 @@ class DualHeaderVerifier(TokenVerifier):
         )
 
 
+def _jsonrpc_failure_marker(body: bytes) -> str | None:
+    """Best-effort failure marker from a JSON-RPC response body (JSON or SSE).
+
+    Two failure shapes exist on the wire: a protocol-level ``error`` object
+    (unknown method, bad params) and FastMCP tool failures, which come back as
+    a successful result carrying ``"isError": true``. Both must be surfaced —
+    both ride inside HTTP 200 responses.
+    """
+    if not body:
+        return None
+    payload = body
+    idx = body.find(b"data:")
+    if idx != -1:  # SSE-framed: the first data line carries the message
+        chunk = body[idx + 5:].lstrip()
+        end = chunk.find(b"\n")
+        payload = chunk[: end if end != -1 else len(chunk)]
+    try:
+        decoded = json.loads(payload)
+    except Exception:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    error = decoded.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
+        return f"rpc_err={code if isinstance(code, (int, str)) else 'error'}"
+    result = decoded.get("result")
+    if isinstance(result, dict) and result.get("isError") is True:
+        return "tool_error"
+    return None
+
+
+class RequestLogMiddleware:
+    """One INFO line per HTTP request hitting the tool app (logger ``mcp.access``).
+
+    The single trace that works for every client dialect — legacy handshake-era
+    clients AND the modern 2026-07-28 single-exchange dialect, whose serving
+    path logs nothing at INFO:
+
+        [simplemcp] POST /mcp from 127.0.0.1 v=2026-07-28 session=NEW -> 200 in 3ms tools/call echo
+
+    Fields:
+    - ``[name]``   — FastMCP server name; all tools share one launcher.log, so
+      without it four servers' lines are indistinguishable
+    - ``v=``       — MCP-Protocol-Version header (``-`` when absent); 2026-07-28
+      names the modern session-less dialect
+    - ``session=`` — Mcp-Session-Id prefix, ``NEW`` when the request carries none
+    - ``in Nms``   — handler duration
+    - ``tools/call echo`` — JSON-RPC method + tool name, taken from the modern
+      routing headers when present, else a bounded sniff of the request body
+    - ``rpc_err=`` / ``tool_error`` — failure markers found in the response
+      body: a JSON-RPC ``error`` object (code shown) or a result with
+      ``"isError": true``. Both ride inside HTTP 200 responses, so without
+      this a failing tool call looks healthy
+
+    Sits outside the auth stack, so 401/404 rejections are logged too, making
+    failed initial connections debuggable. Suppressed entirely by
+    MCP_DISABLE_REQUEST_LOGS.
+    """
+
+    _MAX_SNIFF = 1_000_000       # request body bytes buffered for parsing
+    _MAX_RESPONSE_SNIFF = 8192   # response body bytes kept for error extraction
+
+    def __init__(self, app, name: str = "mcp"):
+        self.app = app
+        self.name = name
+        self.logger = logging.getLogger("mcp.access")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1")
+            for k, v in (scope.get("headers") or [])
+        }
+        session = headers.get("mcp-session-id")
+        proto = headers.get("mcp-protocol-version")
+        client = scope.get("client")
+        peer = f"{client[0]}:{client[1]}" if client else "-"
+        method = scope.get("method", "-")
+        path = scope.get("path", "-")
+
+        # JSON-RPC method + tool name: the modern dialect's routing headers
+        # identify it for free; legacy requests get a bounded body sniff.
+        rpc_method = headers.get("mcp-method")
+        rpc_name = headers.get("mcp-name")
+        buffered = []
+        if method == "POST" and path == "/mcp" and rpc_method is None:
+            body = b""
+            while True:
+                message = await receive()
+                buffered.append(message)
+                if message["type"] != "http.request":
+                    break
+                body += message.get("body", b"")
+                if len(body) > self._MAX_SNIFF or not message.get("more_body"):
+                    break
+            try:
+                decoded = json.loads(body)
+                rpc_method = decoded.get("method")
+                name_value = (decoded.get("params") or {}).get("name")
+                if rpc_name is None and isinstance(name_value, str):
+                    rpc_name = name_value
+            except Exception:
+                pass
+
+        async def receive_replay():
+            # Replay the buffered body, then delegate to the live receive so
+            # disconnect detection during long responses still works — faking
+            # http.disconnect here makes servers close responses early.
+            if buffered:
+                return buffered.pop(0)
+            return await receive()
+
+        status = None
+        response_sniff = bytearray()
+        start = time.monotonic()
+
+        async def send_wrapped(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            elif (message["type"] == "http.response.body"
+                  and len(response_sniff) < self._MAX_RESPONSE_SNIFF):
+                room = self._MAX_RESPONSE_SNIFF - len(response_sniff)
+                response_sniff.extend(message.get("body", b"")[:room])
+            await send(message)
+
+        try:
+            await self.app(scope, receive_replay if buffered else receive, send_wrapped)
+        finally:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            rpc = f" {rpc_method}" if rpc_method else ""
+            if rpc and rpc_name:
+                rpc += f" {rpc_name}"
+            error_marker = _jsonrpc_failure_marker(bytes(response_sniff))
+            error_field = f" {error_marker}" if error_marker is not None else ""
+            self.logger.info(
+                "[%s] %s %s from %s v=%s session=%s -> %s in %dms%s%s",
+                self.name, method, path, peer, proto or "-",
+                session[:8] if session else "NEW", status or "-",
+                elapsed_ms, rpc, error_field,
+            )
+
+
 # ── Factory function ──────────────────────────────────────────────────────
 
 def create_fastmcp_server(
@@ -171,6 +320,11 @@ def get_transport_app(mcp, transport: str | None = None):
       stale sessions self-evict instead of accumulating until process restart.
       Passed natively via ``http_app(session_idle_timeout=...)`` on FastMCP ≥4;
       applied via a lifespan wrap on FastMCP 3.x (see _build_http_app).
+    - A per-request access line (``POST /mcp from 127.0.0.1 session=NEW -> 200``)
+      on the ``mcp.access`` logger so client connections are visible in the
+      launcher log — uvicorn's own access log is disabled in the launcher and
+      would not propagate there anyway. Enabled unless
+      ``MCP_DISABLE_REQUEST_LOGS`` is set.
 
     Args:
         mcp: FastMCP server instance
@@ -199,6 +353,10 @@ def get_transport_app(mcp, transport: str | None = None):
     # before FastMCP's per-route RequireAuthMiddleware on every route.
     app.add_middleware(ApiKeyFallbackMiddleware)
     _wire_session_management(app)
+    # add_middleware stacks last-added = outermost, so the access line sees
+    # every request including auth rejections and flush-endpoint calls.
+    if not os.environ.get("MCP_DISABLE_REQUEST_LOGS"):
+        app.add_middleware(RequestLogMiddleware, name=getattr(mcp, "name", "mcp"))
     return app
 
 

@@ -120,13 +120,16 @@ is the single place that reads it.
 
 ### Session management
 
-Sessions live in-process (`StreamableHTTPSessionManager._server_instances`); a launcher restart invalidates every client session. Two controls, wired in `tools/shared/server_factory.py:get_transport_app`:
+Sessions live in-process (`StreamableHTTPSessionManager._server_instances`); a launcher restart invalidates every client session. Controls, wired in `tools/shared/server_factory.py:get_transport_app`:
 
 | Control | Effect | Default |
 |---|---|---|
 | `POST /admin/flush-sessions` | Terminate all in-memory sessions. Stale client `Mcp-Session-Id` values then get HTTP 404 and the client re-initializes. Auth: same tool API key as `/mcp` (`Authorization: Bearer <key>` or `X-API-Key`). | enabled |
 | `MCP_SESSION_IDLE_TIMEOUT` (secs) | Idle-session TTL — stale sessions self-evict instead of accumulating. `0`/unset disables. | 1800 |
 | `MCP_DISABLE_FLUSH_ENDPOINT` | Suppress the flush route (TTL still applies). | unset |
+| `MCP_DISABLE_REQUEST_LOGS` | Suppress the per-request access line on the `mcp.access` logger (`POST /mcp from 127.0.0.1 session=NEW -> 200`) — the only INFO-level trace of client connects, since uvicorn access log is off and session reuse is silent. | unset |
+
+Client-connect forensics in `logs/launcher.log`: the `mcp.access` line is the one trace that works for **every** client dialect — `[simplemcp] POST /mcp from 127.0.0.1 v=2026-07-28 session=NEW -> 200 in 3ms tools/call echo`. Fields: server name (four tools share one log), `v=` dialect (`MCP-Protocol-Version`; `2026-07-28` = modern session-less single-exchange path, which logs nothing itself), `session=` (ID prefix, `NEW` when headerless), HTTP status, duration, JSON-RPC method + tool name (from modern routing headers, else bounded body sniff), and `rpc_err=<code>` / `tool_error` markers — tool failures ride inside HTTP 200s, so without the marker they look healthy. Legacy dialect additionally gets SDK session lines: `Created new transport with session ID` (fresh session), `Rejected request with unknown or expired session ID` (stale → 404), `Session <id> idle timeout` (TTL reap). Never grep "initialize" — that word only appears in backend-store startup lines.
 
 Flush a single tool after a restart: `curl -X POST -H "Authorization: Bearer <key>" http://127.0.0.1:<port>/admin/flush-sessions` → `{"flushed": N}`. Tests: `tests/test_session_flush.py`.
 
