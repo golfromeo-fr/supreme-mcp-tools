@@ -19,6 +19,32 @@ logger = get_logger(__name__)
 TOOLS_CONFIG_FILE = Path.home() / ".config" / "supreme-mcp-tools" / "tools_config.json"
 
 
+async def apply_function_mask(
+    server_name: str,
+    tool_name: str,
+    is_enabled: bool,
+    on_done: Callable | None = None,
+) -> None:
+    """Persist a function mask through the management API and notify.
+
+    Shared by the Function Masks dialog and the per-tool Functions tab.
+    ``on_done`` (optional) re-renders the caller's rows after the save.
+    """
+    from ..management_ui import get_api_client
+
+    client = get_api_client()
+    if is_enabled:
+        response = await client.enable_tool(server_name, tool_name)
+    else:
+        response = await client.disable_tool(server_name, tool_name)
+    if response.success:
+        ui.notify("Mask saved. Changes take effect immediately.", type="info", duration=3)
+    else:
+        ui.notify(f"Failed to save: {response.error}", type="negative", duration=5)
+    if on_done:
+        on_done()
+
+
 def _load_tools_config() -> dict:
     """Load tools configuration from file."""
     if not TOOLS_CONFIG_FILE.exists():
@@ -302,23 +328,9 @@ class GlobalToolSettingsDialog:
 
     def _on_toggle(self, server_name: str, tool_name: str, is_enabled: bool) -> None:
         """Handle toggle change - save via the management API immediately."""
-        # Lazy import: management_ui imports this module at load time.
-        from ..management_ui import get_api_client
-
         async def _apply() -> None:
-            client = get_api_client()
-            if is_enabled:
-                response = await client.enable_tool(server_name, tool_name)
-            else:
-                response = await client.disable_tool(server_name, tool_name)
-            if response.success:
-                ui.notify("Mask saved. Changes take effect immediately.", type="info", duration=3)
-                # Refresh count + row styling (MASKED badge, dimming) in place.
-                self._refresh_rows_and_count()
-            else:
-                ui.notify(f"Failed to save: {response.error}", type="negative", duration=5)
-                self._refresh_rows_and_count()  # snap the switch back to reality
-            # The refresh ran from a background task outside the dialog's slot
+            await apply_function_mask(server_name, tool_name, is_enabled, on_done=self._refresh_rows_and_count)
+            # The refresh runs from a background task outside the dialog's slot
             # context — force propagation of the rebuilt subtree to the client.
             self._settings_container.update()
 

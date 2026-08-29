@@ -535,6 +535,7 @@ async def main_page() -> None:
         "on_env_update": on_env_update,
         "on_env_delete": on_env_delete,
         "on_auth_update": on_auth_update,
+        "schedule_content_rebuild": schedule_content_rebuild,
     }
 
     async def poll_status() -> None:
@@ -621,6 +622,7 @@ async def _render_content_area(state, handlers: dict) -> None:
     detail = state.selected_tool_detail
     with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
         ui.tab("overview", icon="dashboard", label="Overview")
+        ui.tab("functions", icon="checklist", label="Functions")
         ui.tab("extensions", icon="extension", label="Extensions")
         ui.tab("env", icon="tune", label="Env Vars")
         ui.tab("auth", icon="key", label="Auth")
@@ -628,12 +630,85 @@ async def _render_content_area(state, handlers: dict) -> None:
     with ui.tab_panels(tabs, value=state.active_tab).classes("w-full"):
         with ui.tab_panel("overview"):
             await _render_overview_tab(state, detail)
+        with ui.tab_panel("functions"):
+            _render_functions_tab(state, detail, handlers)
         with ui.tab_panel("extensions"):
             _render_extensions_tab(state, detail, handlers)
         with ui.tab_panel("env"):
             await _render_env_tab(state, detail, handlers)
         with ui.tab_panel("auth"):
             await _render_auth_tab(state, detail, handlers)
+
+
+def _render_functions_tab(state, detail, handlers: dict) -> None:
+    """Functions tab: every MCP function of this server with mask state,
+    an inline mask toggle, and usage counts from the request_stats extension."""
+    if detail is None:
+        if state.loading_detail:
+            loading_spinner(f"Loading {state.selected_tool} functions...")
+        else:
+            ui.label("Tool details not loaded.").classes("text-grey")
+        return
+
+    from .components.tool_settings import (
+        apply_function_mask, get_disabled_tools, get_server_tools,
+    )
+
+    server_name = detail.name
+    inventory = get_server_tools(server_name)
+    disabled = set(get_disabled_tools(server_name))
+    all_functions = sorted(set(inventory) | set(disabled))
+
+    if not all_functions:
+        with ui.card().classes("w-full"):
+            ui.label("No function inventory for this server").classes("text-h6 mb-2")
+            ui.label(
+                "The launcher has not discovered functions for this server yet. "
+                "Open Function Masks once while the server is online to populate it."
+            ).classes("text-grey text-sm")
+        return
+
+    # Usage counts from the request_stats extension (per-process, resets on
+    # launcher restart; absent on servers without the common extensions).
+    usage = {}
+    for ext in detail.extensions:
+        if ext.name == "request_stats" and ext.data:
+            usage = ext.data.get("by_tool", {}) or {}
+            break
+
+    masked = len([f for f in all_functions if f in disabled])
+    on_mask_change = handlers.get("schedule_content_rebuild")
+
+    with ui.column().classes("w-full gap-2"):
+        ui.label(
+            f"{len(all_functions)} functions — {masked} masked"
+            if masked else f"{len(all_functions)} functions — none masked"
+        ).classes("text-body2 text-grey")
+
+        with ui.column().classes("w-full gap-1"):
+            for fn in all_functions:
+                is_masked = fn in disabled
+                calls = usage.get(fn)
+                with ui.row().classes("w-full justify-between items-center py-1"):
+                    with ui.row().classes("items-center gap-2 min-w-0"):
+                        ui.label(fn).classes("font-mono text-sm")
+                        if is_masked:
+                            ui.badge("MASKED", color="orange").props("outline").classes("text-xs")
+                    with ui.row().classes("items-center gap-3"):
+                        usage_label = ui.label(
+                            f"{calls} calls" if calls is not None else "no usage data"
+                        ).classes("text-caption text-grey").tooltip(
+                            "Call count since launcher start (from the "
+                            "request_stats extension)" if calls is not None
+                            else "Usage appears once this server's request_stats "
+                                 "extension has data"
+                        )
+                        ui.switch(
+                            "Enabled",
+                            value=not is_masked,
+                            on_change=lambda e, s=server_name, f=fn:
+                                apply_function_mask(s, f, e.value, on_done=on_mask_change),
+                        )
 
 
 async def _render_overview_tab(state, detail) -> None:
