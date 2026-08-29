@@ -556,29 +556,19 @@ async def main_page() -> None:
             rebuild_status_chip()
 
     # === HEADER ===
+    # Deliberately minimal: title + live status only. Buttons live in the
+    # drawer's bottom block — header rows clip on narrow windows, the drawer
+    # cannot (this is where the Logout button "disappeared" to).
     with ui.header().classes("w-full p-3"):
         with ui.row().classes("w-full justify-between items-center"):
-            ui.label(
-                f"MCP Tools Management — {nicegui_app.storage.user.get('username', 'User')}"
-            ).classes("text-h6")
-            with ui.row().classes("items-center gap-2"):
-                chip_container = ui.row().classes("items-center")
-                ui.button(
-                    icon="dark_mode",
-                    on_click=dark_handle.toggle,
-                ).props("flat round").tooltip("Toggle dark mode")
-                ui.button(
-                    "Function Masks",
-                    icon="visibility_off",
-                    on_click=lambda: _open_tool_settings(state),
-                ).props("flat").tooltip("Enable or disable functions per server")
-                ui.button("Logout", icon="logout", on_click=logout).props("flat")
+            ui.label("MCP Tools Management").classes("text-h6")
+            chip_container = ui.row().classes("items-center")
 
     # === DRAWER: tool navigation ===
     # behavior=desktop pins the drawer open on narrow viewports too — Quasar's
     # default switches to an overlay below 1024px, hiding the navigation
     # (behavior change vs NiceGUI 3.9, where the drawer showed at any width).
-    # mt-auto pins the Function Masks entry to the drawer bottom, always visible.
+    # mt-auto pins the action block to the drawer bottom, always visible.
     with ui.drawer(side="left").props("bordered behavior=desktop"):
         with ui.column().classes("w-full h-full p-3 gap-2"):
             sidebar_container = ui.column().classes("w-full gap-2")
@@ -589,6 +579,12 @@ async def main_page() -> None:
                     icon="visibility_off",
                     on_click=lambda: _open_tool_settings(state),
                 ).classes("w-full").tooltip("Enable or disable functions per server")
+                with ui.row().classes("w-full items-center justify-between"):
+                    with ui.row().classes("items-center gap-1"):
+                        ui.icon("dark_mode", size="xs")
+                        ui.label("Dark mode").classes("text-caption")
+                    ui.switch(value=theme == "dark", on_change=lambda e: dark_handle.set_value(e.value))
+                ui.button("Logout", icon="logout", on_click=logout).classes("w-full").props("flat")
 
     # === CONTENT ===
     with ui.column().classes("w-full p-4 gap-2"):
