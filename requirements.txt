@@ -1,8 +1,10 @@
 # MCP Launcher Requirements
 
 # Core MCP framework
-# fastmcp 4 (2026-07-28 protocol era) — BETA PIN while porting on feature/fastmcp-4;
-# merge to main only after stable 4.0.0 ships (plans/mcp-2026-07-28-stateless-upgrade.md, Rollout).
+# fastmcp 4 (2026-07-28 protocol era) — running the 4.0.0b3 beta on main since the
+# 2026-08-24 user-approved early rollout; stable 4.0.0 has NOT shipped yet (PyPI stable
+# line is still 3.x as of 2026-08-29). When 4.0.0 stable lands: bump this pin and
+# re-run the live auth matrix (plans/mcp-2026-07-28-stateless-upgrade.md, Rollout).
 # fastmcp 4 pulls mcp 2.x + starlette 1.x + pydantic 2.14b transitively and no longer
 # depends on fastapi (fastapi below stays for the launcher's FastAPI-tool validation).
 fastmcp==4.0.0b3
