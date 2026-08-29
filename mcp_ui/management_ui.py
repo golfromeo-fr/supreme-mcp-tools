@@ -578,8 +578,17 @@ async def main_page() -> None:
     # behavior=desktop pins the drawer open on narrow viewports too — Quasar's
     # default switches to an overlay below 1024px, hiding the navigation
     # (behavior change vs NiceGUI 3.9, where the drawer showed at any width).
+    # mt-auto pins the Function Masks entry to the drawer bottom, always visible.
     with ui.drawer(side="left").props("bordered behavior=desktop"):
-        sidebar_container = ui.column().classes("w-full p-3 gap-2")
+        with ui.column().classes("w-full h-full p-3 gap-2"):
+            sidebar_container = ui.column().classes("w-full gap-2")
+            with ui.column().classes("w-full gap-2 mt-auto"):
+                ui.separator()
+                ui.button(
+                    "Function Masks",
+                    icon="visibility_off",
+                    on_click=lambda: _open_tool_settings(state),
+                ).classes("w-full").tooltip("Enable or disable functions per server")
 
     # === CONTENT ===
     with ui.column().classes("w-full p-4 gap-2"):
