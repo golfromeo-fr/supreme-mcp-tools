@@ -184,6 +184,11 @@ class GlobalToolSettingsDialog:
         self.on_save = on_save
         self.selected_server: str | None = None
         self._dialog = None
+        self._filter_text = ""
+        self._rows_container = None
+        self._count_label = None
+        self._all_tools: list[str] = []
+        self._current_server: str | None = None
 
     def _build_ui(self) -> None:
         """Build the dialog UI."""
@@ -221,6 +226,7 @@ class GlobalToolSettingsDialog:
         """Load settings for a specific server."""
         # Clear container
         self._settings_container.clear()
+        self._filter_text = ""
 
         # Get tools from config (only enabled ones are discovered via tools/list)
         tools = get_server_tools(server_name)
@@ -229,23 +235,70 @@ class GlobalToolSettingsDialog:
         disabled = get_disabled_tools(server_name)
 
         # Merge both lists to show all known tools (including disabled ones)
-        all_tools = sorted(set(tools) | set(disabled))
+        self._all_tools = sorted(set(tools) | set(disabled))
+        self._current_server = server_name
 
         with self._settings_container:
-            if not all_tools:
+            if not self._all_tools:
                 ui.label("No tool information available.").classes("text-grey mb-4")
                 ui.label("(Add tools to config file or server may be offline)").classes("text-grey text-caption")
-            else:
-                ui.label("Enable or disable tools:").classes("text-body2 text-grey mb-2")
-                for tool_name in all_tools:
-                    is_disabled = tool_name in disabled
-                    with ui.row().classes("w-full justify-between items-center"):
+                return
+
+            self._count_label = ui.label().classes("text-body2 text-grey mb-2")
+            filter_input = ui.input(
+                "Filter functions...", placeholder="type to filter",
+            ).props("dense clearable outlined").classes("w-full mb-2")
+            filter_input.on_value_change(lambda e: self._set_filter(e.value or ""))
+            self._rows_container = ui.column().classes("w-full gap-1")
+
+        self._refresh_rows_and_count()
+
+    def _set_filter(self, text: str) -> None:
+        """Handle filter-input changes."""
+        self._filter_text = text
+        self._render_rows()
+
+    def _refresh_rows_and_count(self) -> None:
+        """Re-read mask state and refresh the count + rows (post-toggle)."""
+        if not hasattr(self, "_rows_container") or self._rows_container is None:
+            return
+        disabled = get_disabled_tools(self._current_server)
+        masked = len([t for t in self._all_tools if t in disabled])
+        total = len(self._all_tools)
+        self._count_label.text = (
+            f"{masked} of {total} functions masked" if masked
+            else f"All {total} functions enabled"
+        )
+        self._render_rows()
+
+    def _render_rows(self) -> None:
+        """Render the per-function rows, honoring the current filter."""
+        self._rows_container.clear()
+        disabled = get_disabled_tools(self._current_server)
+        filter_text = (self._filter_text or "").lower()
+
+        with self._rows_container:
+            shown = 0
+            for tool_name in self._all_tools:
+                if filter_text and filter_text not in tool_name.lower():
+                    continue
+                shown += 1
+                is_disabled = tool_name in disabled
+                row_classes = "w-full justify-between items-center"
+                if is_disabled:
+                    row_classes += " opacity-60"
+                with ui.row().classes(row_classes):
+                    with ui.row().classes("items-center gap-2"):
                         ui.label(tool_name).classes("font-mono text-sm")
-                        switch = ui.switch(
-                            "Enabled",
-                            value=not is_disabled,
-                            on_change=lambda e, t=tool_name, s=server_name: self._on_toggle(s, t, e.value),
-                        )
+                        if is_disabled:
+                            ui.badge("MASKED", color="orange").props("outline").classes("text-xs")
+                    ui.switch(
+                        "Enabled",
+                        value=not is_disabled,
+                        on_change=lambda e, t=tool_name, s=self._current_server: self._on_toggle(s, t, e.value),
+                    )
+            if shown == 0:
+                ui.label("No functions match the filter.").classes("text-grey text-caption")
 
     def _on_toggle(self, server_name: str, tool_name: str, is_enabled: bool) -> None:
         """Handle toggle change - save via the management API immediately."""
@@ -259,9 +312,15 @@ class GlobalToolSettingsDialog:
             else:
                 response = await client.disable_tool(server_name, tool_name)
             if response.success:
-                ui.notify("Saved. Changes take effect immediately.", type="info", duration=3)
+                ui.notify("Mask saved. Changes take effect immediately.", type="info", duration=3)
+                # Refresh count + row styling (MASKED badge, dimming) in place.
+                self._refresh_rows_and_count()
             else:
                 ui.notify(f"Failed to save: {response.error}", type="negative", duration=5)
+                self._refresh_rows_and_count()  # snap the switch back to reality
+            # The refresh ran from a background task outside the dialog's slot
+            # context — force propagation of the rebuilt subtree to the client.
+            self._settings_container.update()
 
         # Run the API call on the event loop without freezing the dialog.
         import asyncio
