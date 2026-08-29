@@ -30,7 +30,7 @@ from nicegui import ui, app as nicegui_app
 
 # Set up structured logging
 from .logging_config import setup_logging, get_logger
-setup_logging()
+setup_logging(os.environ.get("MCP_UI_LOG_LEVEL", "INFO"))
 logger = get_logger(__name__)
 
 # Load environment variables from .env file
@@ -233,13 +233,17 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
     if nicegui_app.storage.user.get("authenticated", False):
         return RedirectResponse("/")
 
-    with ui.card().classes("absolute-center"):
-        ui.label("Management UI Login").classes("text-h5 mb-4")
-        username = ui.input("Username").on("keydown.enter", try_login).classes("w-full mb-2")
-        password = ui.input("Password", password=True, password_toggle_button=True).on(
-            "keydown.enter", try_login
-        ).classes("w-full mb-4")
-        ui.button("Log in", on_click=try_login).classes("w-full")
+    # Center via flex, NOT Quasar's absolute-center: absolutely-positioned
+    # + transformed containers break hit-testing for client events (buttons
+    # render but their click events never reach the server).
+    with ui.column().classes("w-full h-screen items-center justify-center"):
+        with ui.card():
+            ui.label("Management UI Login").classes("text-h5 mb-4")
+            username = ui.input("Username").on("keydown.enter", try_login).classes("w-full mb-2")
+            password = ui.input("Password", password=True, password_toggle_button=True).on(
+                "keydown.enter", try_login
+            ).classes("w-full mb-4")
+            ui.button("Log in", on_click=try_login).classes("w-full")
 
     return None
 
@@ -333,38 +337,52 @@ async def main_page() -> None:
         .q-drawer { border-right: 1px solid rgba(127, 127, 127, 0.2); }
     """)
 
-    # === Refreshable regions: refreshed individually, never a full teardown ===
+    # === Region rebuilds: container.clear() + rebuild into the container ===
+    # The @ui.refreshable pattern re-rendered into the ambient slot stack and
+    # appended duplicate layouts whenever the page function re-ran (reconnect)
+    # or handlers refreshed from outside the original slot. Explicit
+    # containers are slot-safe by construction. The containers themselves are
+    # created in the layout section below; these closures resolve them (and
+    # the handlers) at call time.
 
-    @ui.refreshable
-    def status_chip():
-        connected = state.connection_status == "connected"
-        ui.badge(
-            state.connection_status,
-            color="green" if connected else "red",
-        ).classes("text-xs")
+    def rebuild_status_chip():
+        chip_container.clear()
+        with chip_container:
+            connected = state.connection_status == "connected"
+            ui.badge(
+                state.connection_status,
+                color="green" if connected else "red",
+            ).classes("text-xs")
 
-    @ui.refreshable
-    def error_banner():
-        if state.last_error:
-            show_error(
-                f"Connection error: {state.last_error}",
-                on_dismiss=lambda: (state.set_error(None), error_banner.refresh()),
-                on_retry=on_refresh_tools,
+    def rebuild_error_banner():
+        banner_container.clear()
+        with banner_container:
+            if state.last_error:
+                show_error(
+                    f"Connection error: {state.last_error}",
+                    on_dismiss=lambda: (state.set_error(None), rebuild_error_banner()),
+                    on_retry=on_refresh_tools,
+                )
+
+    def rebuild_sidebar():
+        sidebar_container.clear()
+        with sidebar_container:
+            ToolList(
+                tools=state.tools,
+                selected_tool=state.selected_tool,
+                on_select=on_select,
+                on_refresh=on_refresh_tools,
+                loading=state.loading_tools,
             )
 
-    @ui.refreshable
-    async def sidebar_panel():
-        ToolList(
-            tools=state.tools,
-            selected_tool=state.selected_tool,
-            on_select=on_select,
-            on_refresh=on_refresh_tools,
-            loading=state.loading_tools,
-        )
+    async def rebuild_content():
+        content_container.clear()
+        with content_container:
+            await _render_content_area(state)
 
-    @ui.refreshable
-    async def content_panel():
-        await _render_content_area(state)
+    def schedule_content_rebuild() -> None:
+        """Content rebuild is async (env/auth fetches); schedule from sync handlers."""
+        asyncio.create_task(rebuild_content())
 
     # === Handlers ===
 
@@ -384,7 +402,7 @@ async def main_page() -> None:
             return
         if tool_response.success:
             state.selected_tool_detail = tool_response.data
-            content_panel.refresh()
+            await rebuild_content()
         else:
             state.selected_tool_detail = None
             show_error(f"Error loading tool: {tool_response.error}")
@@ -394,7 +412,7 @@ async def main_page() -> None:
             return
         if ext_response.success and state.selected_tool_detail:
             state.selected_tool_detail.extensions = ext_response.data
-            content_panel.refresh()
+            await rebuild_content()
 
         env_response = await env_task
         if get_state().selected_tool != tool_name:
@@ -409,7 +427,7 @@ async def main_page() -> None:
         if state.selected_tool_detail:
             state.tool_detail_cache[tool_name] = state.selected_tool_detail
         state.loading_detail = False
-        content_panel.refresh()
+        await rebuild_content()
 
     def on_select(tool_name: str) -> None:
         state = get_state()
@@ -425,15 +443,15 @@ async def main_page() -> None:
             state.loading_detail = True
             state.selected_tool_detail = None
             state.env_variables = state.env_cache.get(tool_name, [])
-        sidebar_panel.refresh()
-        content_panel.refresh()
+        rebuild_sidebar()
+        schedule_content_rebuild()
         if not cached:
             asyncio.create_task(fetch_tool_detail(tool_name))
 
     async def on_refresh_tools() -> None:
         await _refresh_tools()
-        sidebar_panel.refresh()
-        content_panel.refresh()
+        rebuild_sidebar()
+        await rebuild_content()
 
     async def on_query(ext_name: str, params: dict[str, Any] | None = None) -> None:
         state = get_state()
@@ -451,7 +469,7 @@ async def main_page() -> None:
                         ext.data = response.data
                         break
                 show_success("Query successful")
-                content_panel.refresh()
+                schedule_content_rebuild()
             else:
                 show_error(f"Query failed: {response.error}")
         except Exception as e:
@@ -479,7 +497,7 @@ async def main_page() -> None:
             if response.success:
                 show_success(f"Updated {var_name}")
                 state.env_cache.pop(tool_name, None)  # force re-fetch at next render
-                content_panel.refresh()
+                schedule_content_rebuild()
             else:
                 show_error(f"Failed to update {var_name}: {response.error}")
         except Exception as e:
@@ -492,7 +510,7 @@ async def main_page() -> None:
             if response.success:
                 show_success(f"Removed {var_name}")
                 state.env_cache.pop(tool_name, None)
-                content_panel.refresh()
+                schedule_content_rebuild()
             else:
                 show_error(f"Failed to delete {var_name}: {response.error}")
         except Exception as e:
@@ -505,7 +523,7 @@ async def main_page() -> None:
             if response.success:
                 show_success("Authorization key updated - restart tool to take effect")
                 state.tool_auth.pop(tool_name, None)
-                content_panel.refresh()
+                schedule_content_rebuild()
             else:
                 show_error(f"Failed to update auth key: {response.error}")
         except Exception as e:
@@ -520,14 +538,14 @@ async def main_page() -> None:
             state.set_tools(response.data)
             state.connection_status = "connected"
             new_status = {t.name: t.status for t in state.tools}
-            status_chip.refresh()
-            sidebar_panel.refresh()
+            rebuild_status_chip()
+            rebuild_sidebar()
             if new_status != old_status:
                 # A selected tool changed state — refresh the visible detail.
-                content_panel.refresh()
+                schedule_content_rebuild()
         else:
             state.connection_status = "disconnected"
-            status_chip.refresh()
+            rebuild_status_chip()
 
     # === HEADER ===
     with ui.header().classes("w-full p-3"):
@@ -536,7 +554,7 @@ async def main_page() -> None:
                 f"MCP Tools Management — {nicegui_app.storage.user.get('username', 'User')}"
             ).classes("text-h6")
             with ui.row().classes("items-center gap-2"):
-                status_chip()
+                chip_container = ui.row().classes("items-center")
                 ui.button(
                     icon="dark_mode",
                     on_click=dark_handle.toggle,
@@ -549,20 +567,24 @@ async def main_page() -> None:
                 ui.button("Logout", icon="logout", on_click=logout).props("flat")
 
     # === DRAWER: tool navigation ===
-    with ui.drawer(side="left", value=True, pinned=True).props("bordered"):
-        with ui.column().classes("w-full p-3 gap-2"):
-            await sidebar_panel()
+    with ui.drawer(side="left").props("bordered"):
+        sidebar_container = ui.column().classes("w-full p-3 gap-2")
 
     # === CONTENT ===
     with ui.column().classes("w-full p-4 gap-2"):
-        error_banner()
-        await content_panel()
+        banner_container = ui.column().classes("w-full")
+        content_container = ui.column().classes("w-full")
 
-    # Initial load: fetch tools before first render, then refresh regions
+    rebuild_status_chip()
+    rebuild_error_banner()
+    rebuild_sidebar()
+    await rebuild_content()
+
+    # Initial load: fetch tools before first render, then rebuild regions
     if not state.tools and not state.loading_tools:
         await _refresh_tools()
-        sidebar_panel.refresh()
-        content_panel.refresh()
+        rebuild_sidebar()
+        await rebuild_content()
 
     # Live status: poll without tearing down the user's open panels
     ui.timer(POLL_INTERVAL_SECONDS, poll_status)
@@ -575,7 +597,7 @@ async def _render_content_area(state) -> None:
         return
 
     detail = state.selected_tool_detail
-    with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full"):
+    with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
         ui.tab("overview", icon="dashboard", label="Overview")
         ui.tab("extensions", icon="extension", label="Extensions")
         ui.tab("env", icon="tune", label="Env Vars")
@@ -684,23 +706,15 @@ async def _render_auth_tab(state, detail) -> None:
 
 
 # =============================================================================
-# Uvicorn Support - Use ui.run_with() to attach NiceGUI to FastAPI app
+# Entry point
 # =============================================================================
+# NOTE: there is deliberately NO ui.run_with(fastapi_app) at module scope.
+# The earlier dual initialization (run_with at import + ui.run at startup)
+# broke client event routing: pages rendered and sockets connected, but
+# button events were dispatched into the wrong app instance and silently
+# dropped. Standalone ui.run() in run_ui() is the single initialization.
 
-logger.info("Initializing NiceGUI with FastAPI")
-
-# Create a FastAPI app and attach NiceGUI to it
-from fastapi import FastAPI
-
-fastapi_app = FastAPI(title="MCP Tools Management UI")
-
-# Initialize NiceGUI with the FastAPI app
-ui.run_with(fastapi_app, storage_secret=_get_storage_secret())
-
-# Export the FastAPI app for uvicorn
-app = fastapi_app
-
-logger.info("NiceGUI initialization complete")
+logger.info("mcp_ui initialized (standalone ui.run() entry point)")
 
 
 def run_ui() -> None:
