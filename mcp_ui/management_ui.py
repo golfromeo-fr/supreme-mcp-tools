@@ -567,7 +567,10 @@ async def main_page() -> None:
                 ui.button("Logout", icon="logout", on_click=logout).props("flat")
 
     # === DRAWER: tool navigation ===
-    with ui.drawer(side="left").props("bordered"):
+    # behavior=desktop pins the drawer open on narrow viewports too — Quasar's
+    # default switches to an overlay below 1024px, hiding the navigation
+    # (behavior change vs NiceGUI 3.9, where the drawer showed at any width).
+    with ui.drawer(side="left").props("bordered behavior=desktop"):
         sidebar_container = ui.column().classes("w-full p-3 gap-2")
 
     # === CONTENT ===
