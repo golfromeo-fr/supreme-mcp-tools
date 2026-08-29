@@ -52,7 +52,7 @@ import memory_text  # noqa: F401 - registers MCP tools
 import memory_autouse  # noqa: F401 - registers auto-use policy tools and patches getMemorySystemPrompt. Must be imported AFTER memory_tools.
 
 # Import FEF V3 setup function from memory_tools
-from memory_tools import setup_fef_v3
+from memory_tools import setup_fef_v3, setup_extensions  # noqa: F401 - launcher calls setup_extensions by name
 
 # ============================================================================
 # FEF V3 Setup

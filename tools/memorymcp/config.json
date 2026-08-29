@@ -1,5 +1,48 @@
 {
   "auth": {
     "api_key": "memorymcp-test-key-xyz789"
+  },
+  "environment_variables": {
+    "MEMORY_COLLECTION": {
+      "description": "Qdrant collection name for memory storage",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "memory-store"
+    },
+    "LOCAL_EMBEDDING_MODEL": {
+      "description": "Local embedding model for memory vectors",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "BAAI/bge-m3"
+    },
+    "EMBEDDING_DIM": {
+      "description": "Embedding vector dimension (must match the model)",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1024"
+    },
+    "SMARTGRAPH_API_KEY": {
+      "description": "API key for SmartGraph LLM compression calls",
+      "required": false,
+      "secret": true,
+      "type": "string"
+    },
+    "SMARTGRAPH_BASE_URL": {
+      "description": "OpenAI-compatible base URL for SmartGraph calls",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "https://api.openai.com/v1"
+    },
+    "SMARTGRAPH_MODEL": {
+      "description": "Model used for SmartGraph compression",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "gpt-4o-mini"
+    }
   }
 }

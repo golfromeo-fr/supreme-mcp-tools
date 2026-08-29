@@ -23,12 +23,13 @@ All tools use the FastMCP instance and utilities from memory_core.
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from memory_core import (
     mcp, logger, vector_store, sql_store,
-    COLLECTION_NAME, SCRIPT_DIR,
+    COLLECTION_NAME, SCRIPT_DIR, MGMT_PORT, TOOL_NAME,
     generate_embedding, get_now_iso, get_memory_id,
     scroll_all, parse_memory_type,
     memory_item_to_payload, payload_to_memory_hit,
@@ -1059,3 +1060,8 @@ def setup_fef_v3(registry=None):
 
     fef_setup_done = True
     return fef_manager, fef_registry, fef_http_server
+
+
+# The launcher's server_manager calls `setup_extensions` by name on the
+# fastmcp module (hasattr check); webmcp/ragmcp define it under that name.
+setup_extensions = setup_fef_v3
