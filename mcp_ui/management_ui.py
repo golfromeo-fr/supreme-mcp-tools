@@ -10,6 +10,10 @@ Run with:
 
 Port is read from config/ports.json (reserved.management_ui) or
 via MCP_UI_PORT environment variable.
+
+Layout (2026-08 overhaul): ui.drawer navigation with the live tool list,
+per-tool tab panels (Overview / Extensions / Env Vars / Auth), targeted
+panel refreshes instead of full-page teardown, and a 10s status poll.
 """
 
 import asyncio
@@ -111,8 +115,8 @@ def _get_storage_secret() -> str:
 
     Security: there is deliberately NO hardcoded fallback. Without a configured
     secret, an ephemeral random one is generated — sessions survive only until
-    restart, and cookies from a leaked hardcoded default could be forged to
-    bypass login.
+    restart, and cookies signed with a leaked hardcoded default could be
+    forged to bypass login.
     """
     global _storage_secret
     if _storage_secret:
@@ -156,6 +160,8 @@ def _get_storage_secret() -> str:
 ENV_USERNAME = "MCP_UI_USERNAME"
 ENV_PASSWORD = "MCP_UI_PASSWORD"
 
+POLL_INTERVAL_SECONDS = 10.0
+
 
 def _safe_redirect_target(target: str) -> str:
     """Restrict post-login redirects to same-site absolute paths."""
@@ -168,9 +174,13 @@ def _safe_redirect_target(target: str) -> str:
 
 from .api_client import get_client
 from .state import get_state
-from .components import ToolList, ToolCard, show_success, show_error, show_global_tool_settings
+from .components import ToolList, show_success, show_error, show_global_tool_settings
+from .components.tool_card import ToolOverview, render_empty_state, render_loading_state
+from .components.data_sources_box import DataSourcesBox
+from .components.actions_box import ActionsBox
 from .components.auth_box import AuthBox
-from .components.env_var_editor import parse_env_vars_from_api
+from .components.env_var_editor import EnvVarEditor, parse_env_vars_from_api
+from .components.loading import loading_spinner
 
 
 # =============================================================================
@@ -234,66 +244,35 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
     return None
 
 
-@ui.page("/")
-async def main_page() -> None:
-    """Main management page route."""
-    logger.info("page: main_page loaded")
-
-    # Check authentication inside the page function
-    if not nicegui_app.storage.user.get("authenticated", False):
-        ui.navigate.to("/login?redirect_to=/")
-        return
-
-    def logout() -> None:
-        nicegui_app.storage.user.clear()
-        ui.navigate.to("/login")
+async def _refresh_tools() -> None:
+    """Refresh the tools list from the API."""
+    logger.info("action: refresh_tools started")
 
     state = get_state()
+    state.loading_tools = True
+    state.last_error = None
+    state.tool_detail_cache.clear()
 
-    # Set up theme
-    theme = _get_ui_theme()
-    if theme == "dark":
-        ui.dark_mode().enable()
+    try:
+        client = get_api_client()
+        response = await client.get_tools()
 
-    # === HEADER ===
-    with ui.header().classes("w-full p-4 bg-primary"):
-        with ui.row().classes("w-full justify-between items-center"):
-            ui.label(
-                f"MCP Tools Management - {nicegui_app.storage.user.get('username', 'User')}"
-            ).classes("text-h5 text-white")
+        if response.success:
+            state.set_tools(response.data)
+            state.connection_status = "connected"
+            logger.info(f"action: refresh_tools success count={len(response.data)}")
+        else:
+            state.set_error(response.error)
+            show_error(f"Connection error: {response.error}")
 
-            with ui.row():
-                status_icon = ui.icon("circle").classes(
-                    "text-green-400" if state.connection_status == "connected" else "text-red-400"
-                )
+    except Exception as e:
+        state.connection_status = "error"
+        state.last_error = str(e)
+        show_error(f"Unexpected error: {e}")
+    finally:
+        state.loading_tools = False
 
-                ui.button(
-                    "Settings",
-                    icon="settings",
-                    on_click=lambda: _open_tool_settings(state),
-                ).props("flat color=white")
-
-                ui.button("Logout", icon="logout", on_click=logout).props("flat color=white")
-
-    # === CONTENT ROW with refreshable ===
-    @ui.refreshable
-    async def content_area():
-        """Refreshable content area that updates when tool is selected."""
-        with ui.row().classes("w-full h-[calc(100vh-64px)]"):
-            # Left sidebar
-            with ui.column().classes("w-64 p-4 bg-gray-100 dark:bg-gray-800 overflow-auto"):
-                await _render_sidebar(state, content_area.refresh)
-
-            # Main content
-            with ui.column().classes("flex-1 p-4 overflow-auto"):
-                await _render_content(state, content_area.refresh)
-
-    # Initial load: fetch tools before first render, then refresh UI
-    if not state.tools and not state.loading_tools:
-        await _refresh_tools()
-        content_area.refresh()
-
-    await content_area()
+    logger.debug(f"_refresh_tools completed, tools: {len(state.tools)}")
 
 
 async def _open_tool_settings(state) -> None:
@@ -326,39 +305,90 @@ async def _open_tool_settings(state) -> None:
     await show_global_tool_settings(servers)
 
 
-async def _render_sidebar(state, content_refresh: Callable = None, initial_load: bool = True) -> None:
-    """Render the sidebar with tool list."""
-    logger.debug("_render_sidebar called")
+@ui.page("/")
+async def main_page() -> None:
+    """Main management page route."""
+    logger.info("page: main_page loaded")
 
-    async def _fetch_tool_detail(tool_name: str) -> None:
-        """Background task to fetch tool detail, extensions, and env vars in parallel."""
+    # Check authentication inside the page function
+    if not nicegui_app.storage.user.get("authenticated", False):
+        ui.navigate.to("/login?redirect_to=/")
+        return
+
+    def logout() -> None:
+        nicegui_app.storage.user.clear()
+        ui.navigate.to("/login")
+
+    state = get_state()
+
+    # Set up theme
+    theme = _get_ui_theme()
+    if theme == "dark":
+        ui.dark_mode().enable()
+
+    # === Refreshable regions: refreshed individually, never a full teardown ===
+
+    @ui.refreshable
+    def status_chip():
+        connected = state.connection_status == "connected"
+        ui.badge(
+            state.connection_status,
+            color="green" if connected else "red",
+        ).classes("text-xs")
+
+    @ui.refreshable
+    def error_banner():
+        if state.last_error:
+            show_error(
+                f"Connection error: {state.last_error}",
+                on_dismiss=lambda: (state.set_error(None), error_banner.refresh()),
+                on_retry=on_refresh_tools,
+            )
+
+    @ui.refreshable
+    async def sidebar_panel():
+        ToolList(
+            tools=state.tools,
+            selected_tool=state.selected_tool,
+            on_select=on_select,
+            on_refresh=on_refresh_tools,
+            loading=state.loading_tools,
+        )
+
+    @ui.refreshable
+    async def content_panel():
+        await _render_content_area(state)
+
+    # === Handlers ===
+
+    async def fetch_tool_detail(tool_name: str) -> None:
+        """Fetch detail, extensions, and env vars for the selected tool.
+
+        Every await is a chance for the user to select a different tool — a
+        stale fetch must not write its results into shared state (UI-9 race).
+        """
         client = get_api_client()
-        state = get_state()
-
-        # Fetch tool detail, extensions, and env vars concurrently
         tool_task = asyncio.create_task(client.get_tool(tool_name))
         ext_task = asyncio.create_task(client.get_extensions(tool_name))
         env_task = asyncio.create_task(client.get_tool_env(tool_name))
 
-        # Show tool detail as soon as it's ready. Every await is a chance for
-        # the user to select a different tool — a stale fetch must not write
-        # its results into shared state (UI-9 race).
         tool_response = await tool_task
         if get_state().selected_tool != tool_name:
             return
         if tool_response.success:
             state.selected_tool_detail = tool_response.data
-            if content_refresh:
-                content_refresh()
+            content_panel.refresh()
+        else:
+            state.selected_tool_detail = None
+            show_error(f"Error loading tool: {tool_response.error}")
 
-        # Wait for extensions and attach
         ext_response = await ext_task
         if get_state().selected_tool != tool_name:
             return
         if ext_response.success and state.selected_tool_detail:
             state.selected_tool_detail.extensions = ext_response.data
+            content_panel.refresh()
 
-        # Wait for env vars and attach to state
         env_response = await env_task
         if get_state().selected_tool != tool_name:
             return
@@ -369,233 +399,277 @@ async def _render_sidebar(state, content_refresh: Callable = None, initial_load:
         else:
             state.env_variables = state.env_cache.get(tool_name, [])
 
-        if not tool_response.success:
-            state.selected_tool_detail = None
-            show_error(f"Error loading tool: {tool_response.error}")
-        elif state.selected_tool_detail:
-            # Cache for instant re-selection
+        if state.selected_tool_detail:
             state.tool_detail_cache[tool_name] = state.selected_tool_detail
-
         state.loading_detail = False
-        # Refresh UI with final state
-        if content_refresh:
-            content_refresh()
+        content_panel.refresh()
 
     def on_select(tool_name: str) -> None:
         state = get_state()
+        if state.selected_tool == tool_name:
+            return
+        state.active_tab = "overview"
         state.select_tool(tool_name)
-        # Check cache for previously fetched detail
         cached = state.tool_detail_cache.get(tool_name)
         if cached:
             state.selected_tool_detail = cached
             state.loading_detail = False
-            if content_refresh:
-                content_refresh()
-            return
-        # Immediately show loading state
-        state.loading_detail = True
-        state.selected_tool_detail = None
-        if content_refresh:
-            content_refresh()
-        # Fetch in background
-        asyncio.create_task(_fetch_tool_detail(tool_name))
+        else:
+            state.loading_detail = True
+            state.selected_tool_detail = None
+            state.env_variables = state.env_cache.get(tool_name, [])
+        sidebar_panel.refresh()
+        content_panel.refresh()
+        if not cached:
+            asyncio.create_task(fetch_tool_detail(tool_name))
 
-    async def on_refresh() -> None:
+    async def on_refresh_tools() -> None:
         await _refresh_tools()
-        if content_refresh:
-            content_refresh()
-
-    ToolList(
-        tools=state.tools,
-        selected_tool=state.selected_tool,
-        on_select=on_select,
-        on_refresh=on_refresh,
-        loading=state.loading_tools,
-    )
-    logger.debug("_render_sidebar completed")
-
-
-async def _render_content(state, content_refresh: Callable | None = None) -> None:
-    """Render the main content area."""
-    logger.debug("_render_content called")
-
-    # Use cached tool detail from background fetch
-    selected_tool_detail = state.selected_tool_detail
-
-    # Always fetch env vars directly to guarantee they're available for rendering.
-    # Background fetch in _fetch_tool_detail updates the cache, but we can't rely
-    # on it completing before this render fires.
-    # Always fetch env vars for current tool to get latest values (e.g. from .env changes)
-    env_variables = state.env_cache.get(selected_tool_detail.name, []) if selected_tool_detail else []
-    if selected_tool_detail:
-        client = get_api_client()
-        env_response = await client.get_tool_env(selected_tool_detail.name)
-        if env_response.success and env_response.data:
-            env_variables = parse_env_vars_from_api(env_response.data)
-            state.env_variables = env_variables
-            state.env_cache[selected_tool_detail.name] = env_variables
-        elif not env_variables:
-            env_variables = state.env_cache.get(selected_tool_detail.name, [])
-
-    # Fetch auth config for the tool
-    tool_auth: dict = state.tool_auth.get(selected_tool_detail.name, {}) if selected_tool_detail else {}
-    if selected_tool_detail:
-        client = get_api_client()
-        auth_response = await client.get_tool_auth(selected_tool_detail.name)
-        if auth_response.success and auth_response.data:
-            tool_auth = auth_response.data.get("api_key", {})
-            state.tool_auth[selected_tool_detail.name] = tool_auth
+        sidebar_panel.refresh()
+        content_panel.refresh()
 
     async def on_query(ext_name: str, params: dict[str, Any] | None = None) -> None:
         state = get_state()
         if not state.selected_tool:
             return
-        state.loading_detail = True
         try:
-            client = get_api_client()
-            response = await client.query_extension(state.selected_tool, ext_name, params)
+            response = await get_api_client().query_extension(
+                state.selected_tool, ext_name, params
+            )
             if response.success:
-                # Update the extension's data in place and refresh UI
-                for ext in state.selected_tool_detail.extensions:
+                for ext in (
+                    state.selected_tool_detail.extensions if state.selected_tool_detail else []
+                ):
                     if ext.name == ext_name:
                         ext.data = response.data
                         break
                 show_success("Query successful")
-                if content_refresh:
-                    content_refresh()
+                content_panel.refresh()
             else:
                 show_error(f"Query failed: {response.error}")
-        finally:
-            state.loading_detail = False
+        except Exception as e:
+            show_error(f"Query failed: {e}")
 
     async def on_execute(ext_name: str, params: dict[str, Any] | None = None) -> None:
         state = get_state()
         if not state.selected_tool:
             return
-        state.loading_detail = True
         try:
-            client = get_api_client()
-            response = await client.execute_extension(state.selected_tool, ext_name, params)
+            response = await get_api_client().execute_extension(
+                state.selected_tool, ext_name, params
+            )
             if response.success:
                 show_success("Action executed successfully")
             else:
                 show_error(f"Execution failed: {response.error}")
-        finally:
-            state.loading_detail = False
+        except Exception as e:
+            show_error(f"Execution failed: {e}")
 
     async def on_env_update(tool_name: str, var_name: str, value: str) -> None:
         """Handle environment variable update."""
-        state.loading_detail = True
         try:
-            client = get_api_client()
-            response = await client.update_tool_env(tool_name, {var_name: value})
+            response = await get_api_client().update_tool_env(tool_name, {var_name: value})
             if response.success:
                 show_success(f"Updated {var_name}")
-                # Refresh env vars
-                env_response = await client.get_tool_env(tool_name)
-                if env_response.success and env_response.data:
-                    from .components.env_var_editor import parse_env_vars_from_api
-                    state.env_variables = parse_env_vars_from_api(env_response.data)
-                    state.env_cache[tool_name] = state.env_variables
-                if content_refresh:
-                    content_refresh()
+                state.env_cache.pop(tool_name, None)  # force re-fetch at next render
+                content_panel.refresh()
             else:
                 show_error(f"Failed to update {var_name}: {response.error}")
-        finally:
-            state.loading_detail = False
+        except Exception as e:
+            show_error(f"Failed to update {var_name}: {e}")
 
     async def on_env_delete(tool_name: str, var_name: str) -> None:
         """Handle environment variable deletion."""
-        state.loading_detail = True
         try:
-            client = get_api_client()
-            response = await client.delete_tool_env(tool_name, var_name)
+            response = await get_api_client().delete_tool_env(tool_name, var_name)
             if response.success:
                 show_success(f"Removed {var_name}")
-                # Refresh env vars
-                env_response = await client.get_tool_env(tool_name)
-                if env_response.success and env_response.data:
-                    from .components.env_var_editor import parse_env_vars_from_api
-                    state.env_variables = parse_env_vars_from_api(env_response.data)
-                    state.env_cache[tool_name] = state.env_variables
-                if content_refresh:
-                    content_refresh()
+                state.env_cache.pop(tool_name, None)
+                content_panel.refresh()
             else:
                 show_error(f"Failed to delete {var_name}: {response.error}")
-        finally:
-            state.loading_detail = False
+        except Exception as e:
+            show_error(f"Failed to delete {var_name}: {e}")
 
     async def on_auth_update(tool_name: str, new_api_key: str) -> None:
         """Handle auth key update."""
-        state.loading_detail = True
         try:
-            client = get_api_client()
-            response = await client.update_tool_auth(tool_name, new_api_key)
+            response = await get_api_client().update_tool_auth(tool_name, new_api_key)
             if response.success:
                 show_success("Authorization key updated - restart tool to take effect")
-                # Refresh auth config
-                auth_response = await client.get_tool_auth(tool_name)
-                if auth_response.success and auth_response.data:
-                    tool_auth = auth_response.data.get("api_key", {})
-                    state.tool_auth[tool_name] = tool_auth
-                if content_refresh:
-                    content_refresh()
+                state.tool_auth.pop(tool_name, None)
+                content_panel.refresh()
             else:
                 show_error(f"Failed to update auth key: {response.error}")
-        finally:
-            state.loading_detail = False
+        except Exception as e:
+            show_error(f"Failed to update auth key: {e}")
 
-    # Render auth section
-    if selected_tool_detail:
-        AuthBox(
-            tool_name=selected_tool_detail.name,
-            is_set=tool_auth.get("is_set", False),
-            value_masked=tool_auth.get("value_masked"),
-            on_update=on_auth_update,
-        )
-
-    ToolCard(
-        tool=selected_tool_detail,
-        on_query=on_query,
-        on_execute=on_execute,
-        loading=state.loading_detail,
-        env_variables=env_variables,
-        on_env_update=on_env_update,
-        on_env_delete=on_env_delete,
-    )
-    logger.debug("_render_content completed")
-
-
-async def _refresh_tools() -> None:
-    """Refresh the tools list from the API."""
-    logger.info("action: refresh_tools started")
-
-    state = get_state()
-    state.loading_tools = True
-    state.last_error = None
-    state.tool_detail_cache.clear()
-
-    try:
-        client = get_api_client()
-        response = await client.get_tools()
-
+    async def poll_status() -> None:
+        """Periodic status poll: updates badges in place, never rebuilds panels."""
+        state = get_state()
+        response = await get_api_client().get_tools()
         if response.success:
+            old_status = {t.name: t.status for t in state.tools}
             state.set_tools(response.data)
             state.connection_status = "connected"
-            logger.info(f"action: refresh_tools success count={len(response.data)}")
+            new_status = {t.name: t.status for t in state.tools}
+            status_chip.refresh()
+            sidebar_panel.refresh()
+            if new_status != old_status:
+                # A selected tool changed state — refresh the visible detail.
+                content_panel.refresh()
         else:
-            state.set_error(response.error)
-            show_error(f"Connection error: {response.error}")
+            state.connection_status = "disconnected"
+            status_chip.refresh()
 
-    except Exception as e:
-        state.connection_status = "error"
-        state.last_error = str(e)
-        show_error(f"Unexpected error: {e}")
-    finally:
-        state.loading_tools = False
+    # === HEADER ===
+    with ui.header().classes("w-full p-3"):
+        with ui.row().classes("w-full justify-between items-center"):
+            ui.label(
+                f"MCP Tools Management — {nicegui_app.storage.user.get('username', 'User')}"
+            ).classes("text-h6")
+            with ui.row().classes("items-center gap-2"):
+                status_chip()
+                ui.button(
+                    "Settings",
+                    icon="settings",
+                    on_click=lambda: _open_tool_settings(state),
+                ).props("flat")
+                ui.button("Logout", icon="logout", on_click=logout).props("flat")
 
-    logger.debug(f"_refresh_tools completed, tools: {len(state.tools)}")
-    ui.update()
+    # === DRAWER: tool navigation ===
+    with ui.drawer(side="left", value=True, pinned=True).props("bordered"):
+        with ui.column().classes("w-full p-3 gap-2"):
+            await sidebar_panel()
+
+    # === CONTENT ===
+    with ui.column().classes("w-full p-4 gap-2"):
+        error_banner()
+        await content_panel()
+
+    # Initial load: fetch tools before first render, then refresh regions
+    if not state.tools and not state.loading_tools:
+        await _refresh_tools()
+        sidebar_panel.refresh()
+        content_panel.refresh()
+
+    # Live status: poll without tearing down the user's open panels
+    ui.timer(POLL_INTERVAL_SECONDS, poll_status)
+
+
+async def _render_content_area(state) -> None:
+    """Render the detail area for the selected tool: tabs or empty state."""
+    if state.selected_tool is None:
+        render_empty_state()
+        return
+
+    detail = state.selected_tool_detail
+    with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full"):
+        ui.tab("overview", icon="dashboard", label="Overview")
+        ui.tab("extensions", icon="extension", label="Extensions")
+        ui.tab("env", icon="tune", label="Env Vars")
+        ui.tab("auth", icon="key", label="Auth")
+
+    with ui.tab_panels(tabs, value=state.active_tab).classes("w-full"):
+        with ui.tab_panel("overview"):
+            await _render_overview_tab(state, detail)
+        with ui.tab_panel("extensions"):
+            _render_extensions_tab(state, detail)
+        with ui.tab_panel("env"):
+            await _render_env_tab(state, detail)
+        with ui.tab_panel("auth"):
+            await _render_auth_tab(state, detail)
+
+
+async def _render_overview_tab(state, detail) -> None:
+    """Overview tab: identity, status, special panels."""
+    if detail is None:
+        if state.loading_detail:
+            render_loading_state(f"Loading {state.selected_tool}...")
+        else:
+            show_error(f"Could not load details for {state.selected_tool}")
+        return
+
+    ToolOverview(tool=detail)
+
+
+def _render_extensions_tab(state, detail) -> None:
+    """Extensions tab: data sources and actions, one expansion level each."""
+    if detail is None:
+        if state.loading_detail:
+            loading_spinner(f"Loading {state.selected_tool} extensions...")
+        else:
+            ui.label("Tool details not loaded.").classes("text-grey")
+        return
+
+    if not detail.extensions:
+        with ui.card().classes("w-full"):
+            ui.label("No extensions registered").classes("text-h6 mb-2")
+            ui.label(
+                "This tool does not register any management extensions through the "
+                "launcher's extension registry. Tool calls still work through the "
+                "MCP endpoint — this panel only shows launcher-level extensions."
+            ).classes("text-grey text-sm")
+        return
+
+    data_sources = [e for e in detail.extensions if e.type.value == "data_source"]
+    actions = [e for e in detail.extensions if e.type.value == "action"]
+    other = [
+        e for e in detail.extensions
+        if e.type.value not in ("data_source", "action")
+    ]
+
+    with ui.column().classes("w-full gap-3"):
+        if data_sources:
+            DataSourcesBox(extensions=data_sources, on_query=on_query)
+        if actions:
+            ActionsBox(extensions=actions, on_execute=on_execute)
+        if other:
+            ui.label(f"{len(other)} non-interactive extension(s) "
+                     f"(event/stream) not shown here.").classes("text-caption text-grey")
+
+
+async def _render_env_tab(state, detail) -> None:
+    """Env Vars tab: always fetch fresh values at render time."""
+    if detail is None:
+        ui.label("Select a tool to see its environment variables.").classes("text-grey")
+        return
+
+    env_variables = state.env_cache.get(detail.name, [])
+    client = get_api_client()
+    env_response = await client.get_tool_env(detail.name)
+    if env_response.success and env_response.data:
+        env_variables = parse_env_vars_from_api(env_response.data)
+        state.env_variables = env_variables
+        state.env_cache[detail.name] = env_variables
+
+    EnvVarEditor(
+        tool_name=detail.name,
+        variables=env_variables,
+        on_update=on_env_update,
+        on_delete=on_env_delete,
+    )
+
+
+async def _render_auth_tab(state, detail) -> None:
+    """Auth tab: fetch current auth config at render time."""
+    if detail is None:
+        ui.label("Select a tool to see its authorization settings.").classes("text-grey")
+        return
+
+    tool_auth: dict = {}
+    client = get_api_client()
+    auth_response = await client.get_tool_auth(detail.name)
+    if auth_response.success and auth_response.data:
+        tool_auth = auth_response.data.get("api_key", {})
+        state.tool_auth[detail.name] = tool_auth
+
+    AuthBox(
+        tool_name=detail.name,
+        is_set=tool_auth.get("is_set", False),
+        value_masked=tool_auth.get("value_masked"),
+        on_update=on_auth_update,
+    )
 
 
 # =============================================================================

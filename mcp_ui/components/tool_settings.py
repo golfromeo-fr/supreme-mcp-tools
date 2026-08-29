@@ -248,17 +248,31 @@ class GlobalToolSettingsDialog:
                         )
 
     def _on_toggle(self, server_name: str, tool_name: str, is_enabled: bool) -> None:
-        """Handle toggle change - save immediately."""
-        disabled = get_disabled_tools(server_name)
-        if is_enabled:
-            if tool_name in disabled:
-                disabled.remove(tool_name)
-        else:
-            if tool_name not in disabled:
-                disabled.append(tool_name)
+        """Handle toggle change - save via the management API immediately."""
+        # Lazy import: management_ui imports this module at load time.
+        from ..management_ui import get_api_client
 
-        set_disabled_tools(server_name, disabled)
-        ui.notify(f"Saved. Changes take effect immediately.", type="info", duration=3)
+        async def _apply() -> None:
+            client = get_api_client()
+            if is_enabled:
+                response = await client.enable_tool(server_name, tool_name)
+            else:
+                response = await client.disable_tool(server_name, tool_name)
+            if response.success:
+                ui.notify("Saved. Changes take effect immediately.", type="info", duration=3)
+            else:
+                ui.notify(f"Failed to save: {response.error}", type="negative", duration=5)
+
+        # Run the API call on the event loop without freezing the dialog.
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.create_task(_apply())
+        else:
+            asyncio.run(_apply())
 
     def open(self) -> None:
         """Open the settings dialog."""

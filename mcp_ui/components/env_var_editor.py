@@ -6,6 +6,7 @@ associated with a tool. Secret values are masked; inline editing with save/cance
 """
 
 from collections.abc import Callable
+from typing import Any
 
 from nicegui import ui
 
@@ -18,31 +19,33 @@ logger = get_logger(__name__)
 def EnvVarEditor(
     tool_name: str,
     variables: list[EnvVariable],
-    on_update: Callable[[str, str, str], None] | None = None,
-    on_delete: Callable[[str, str], None] | None = None,
+    on_update: Callable[[str, str, str], Any] | None = None,
+    on_delete: Callable[[str, str], Any] | None = None,
 ) -> None:
     """
     Render environment variable editor for a tool.
 
-    Shows all declared env vars with masked values and inline edit capability.
+    Renders directly into the enclosing container (the Env Vars tab) —
+    no outer card or expansion. Shows all declared env vars with masked
+    values and inline edit capability.
 
     Args:
         tool_name: Name of the tool these vars belong to
         variables: List of EnvVariable objects
-        on_update: Callback(tool_name, var_name, new_value) when saving a value
-        on_delete: Callback(tool_name, var_name) when deleting a variable
+        on_update: Awaitable callback(tool_name, var_name, new_value) on save
+        on_delete: Awaitable callback(tool_name, var_name) on delete
     """
     if not variables:
+        ui.label("No environment variables declared for this tool.").classes("text-grey")
         return
 
-    with ui.expansion("Environment Variables", icon="key").classes("w-full"):
-        ui.label("Configure environment variables for this tool. Changes take effect immediately.").classes(
-            "text-caption text-grey mb-3"
-        )
+    ui.label("Changes take effect immediately; masked secrets stay hidden.").classes(
+        "text-caption text-grey mb-3"
+    )
 
-        with ui.column().classes("w-full gap-3"):
-            for var in sorted(variables, key=lambda v: (not v.required, v.name)):
-                _render_var_row(tool_name, var, on_update, on_delete)
+    with ui.column().classes("w-full gap-3"):
+        for var in sorted(variables, key=lambda v: (not v.required, v.name)):
+            _render_var_row(tool_name, var, on_update, on_delete)
 
 
 def _render_var_row(

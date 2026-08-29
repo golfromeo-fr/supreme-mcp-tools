@@ -15,24 +15,24 @@ def _get_extension_status(ext: Extension) -> tuple[str, str]:
     """
     Get the status and note for an extension.
 
-    Returns (status_label, status_note) tuple.
-    status_label is: "✅ Working", "⚠ Warning", or "❌ Not implemented"
+    Returns (status_label, status_note) tuple. status_label is a plain-text
+    short state (emoji-free; badges handle color in the UI).
     """
     if not ext.data:
-        return "❓ Not queried", "Query to see data"
+        return "Not queried", "Query to see data"
 
     # Check for cache_stats - if all hits/misses are 0, cache not implemented
     if ext.name == "cache_stats":
         hits = ext.data.get("hits", 0)
         misses = ext.data.get("misses", 0)
         if hits == 0 and misses == 0:
-            return "⚠ No cache", "Cache not implemented (hits=0, misses=0)"
+            return "No cache", "Cache not implemented (hits=0, misses=0)"
 
     # Check for request_stats - if no requests recorded
     if ext.name == "request_stats":
         total = ext.data.get("total_requests", 0)
         if total == 0:
-            return "⚠ No requests", "No requests recorded yet"
+            return "No requests", "No requests recorded yet"
 
     # Check for api_response_times - if min/max/avg are all 0
     if ext.name == "api_response_times":
@@ -40,10 +40,10 @@ def _get_extension_status(ext: Extension) -> tuple[str, str]:
         max_t = ext.data.get("max_time_ms", 0)
         avg_t = ext.data.get("avg_time_ms", 0)
         if min_t == 0 and max_t == 0 and avg_t == 0:
-            return "⚠ No timing", "No timing data (all values 0)"
+            return "No timing", "No timing data (all values 0)"
 
     # All other extensions with data are considered implemented
-    return "✅ Working", ""
+    return "Working", ""
 
 
 def DataSourcesBox(
@@ -52,56 +52,48 @@ def DataSourcesBox(
     on_refresh: Callable[[str], None] | None = None
 ) -> None:
     """
-    Render read-only data sources box with inline metrics.
+    Render read-only data sources with inline metrics.
+
+    Renders directly into the enclosing container (the Extensions tab) —
+    no outer card or section header. One expansion per data source.
 
     Args:
         extensions: List of Extension objects (data sources).
         on_query: Callback when querying a data source.
-        on_refresh: Callback when refreshing a data source.
+        on_refresh: Deprecated duplicate of on_query; ignored.
     """
-    with ui.card().classes('w-full'):
-        ui.label('Data Sources').classes('text-h6 mb-2')
+    if not extensions:
+        ui.label('No data sources available').classes('text-grey')
+        return
 
-        if not extensions:
-            ui.label('No data sources available').classes('text-grey')
-            return
+    for ext in extensions:
+        summary = _build_summary(ext)
+        _status_label, status_note = _get_extension_status(ext)
 
-        for ext in extensions:
-            # Build summary text for the expansion header
-            summary = _build_summary(ext)
-            status_label, status_note = _get_extension_status(ext)
+        with ui.expansion(f"{summary} — {ext.name}", icon='storage').classes('w-full'):
+            if status_note:
+                ui.label(status_note).classes('text-caption mb-2')
 
-            with ui.expansion(f"{summary} [{status_label}]", icon='storage').classes('w-full'):
-                # Show status note below header
-                if status_note:
-                    ui.label(status_note).classes('text-caption mb-2')
+            if ext.description:
+                ui.label(ext.description).classes('text-grey mb-2')
 
-                if ext.description:
-                    ui.label(ext.description).classes('text-grey mb-2')
+            if ext.data:
+                # Show inline summary cards for key metrics (pass category from metadata)
+                category = ext.metadata.get('category') if ext.metadata else None
+                _inline_metrics(ext.data, category=category)
+                # Show full data table
+                ui.separator()
+                _data_table(ext.data)
+            else:
+                ui.label('No data available').classes('text-grey')
 
-                if ext.data:
-                    # Show inline summary cards for key metrics (pass category from metadata)
-                    category = ext.metadata.get('category') if ext.metadata else None
-                    _inline_metrics(ext.data, category=category)
-                    # Show full data table
-                    ui.separator()
-                    _data_table(ext.data)
-                else:
-                    ui.label('No data available').classes('text-grey')
-
-                with ui.row().classes('gap-2 mt-2'):
-                    if on_query:
-                        ui.button(
-                            'Query',
-                            icon='refresh',
-                            on_click=lambda e=ext.name: on_query(e) if on_query else None
-                        ).props('flat dense')
-                    if on_refresh:
-                        ui.button(
-                            'Refresh',
-                            icon='refresh',
-                            on_click=lambda e=ext.name: on_refresh(e) if on_refresh else None
-                        ).props('flat dense')
+            with ui.row().classes('gap-2 mt-2'):
+                if on_query:
+                    ui.button(
+                        'Query',
+                        icon='refresh',
+                        on_click=lambda e=ext.name: on_query(e) if on_query else None
+                    ).props('flat dense')
 
 
 def _build_summary(ext: Extension) -> str:

@@ -40,6 +40,8 @@ class AppState:
     tool_auth: dict = field(default_factory=dict)  # tool_name -> {"is_set": bool, "value_masked": str}
     loading_tools: bool = False
     loading_detail: bool = False
+    # Active detail tab (overview/extensions/env/auth) — survives content refreshes
+    active_tab: str = "overview"
 
     # Connection state
     connection_status: str = "connected"
@@ -98,6 +100,7 @@ class AppState:
         self.tool_auth = {}
         self.loading_tools = False
         self.loading_detail = False
+        self.active_tab = "overview"
         self.last_error = None
         self.connection_status = "connected"
         logger.debug(f"[{get_trace_id()}] State: cleared")
