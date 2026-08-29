@@ -95,13 +95,19 @@ async def _confirm_and_execute(
         
         with ui.row():
             ui.button('Cancel', on_click=dialog.close).props('flat')
+
+            async def _do_execute() -> None:
+                # Close first so the UI unblocks, then await the parent's async
+                # handler — as a discarded coroutine this call never ran, so
+                # actions appeared to succeed while doing nothing.
+                dialog.close()
+                if on_execute:
+                    await on_execute(extension_name, get_values())
+
             ui.button(
                 'Execute',
                 color='primary',
-                on_click=lambda: [
-                    on_execute(extension_name, get_values()) if on_execute else None,
-                    dialog.close()
-                ]
+                on_click=_do_execute,
             )
     
     dialog.open()

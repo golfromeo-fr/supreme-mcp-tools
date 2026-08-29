@@ -27,10 +27,12 @@ class ToolStatus(str, Enum):
 
 
 class ExtensionType(str, Enum):
-    """Extension type enum."""
+    """Extension type enum (mirrors launcher/tool_extensions/registry.py)."""
     DATA_SOURCE = "data_source"
     MUTATOR = "mutator"
     ACTION = "action"
+    EVENT = "event"
+    STREAM = "stream"
 
 
 class ToolInfo(BaseModel):
@@ -99,7 +101,7 @@ class ToolDetail(BaseModel):
 
     def get_extension_summary(self) -> dict[str, int]:
         """Get summary of extension counts by type."""
-        counts = {"data_sources": 0, "mutators": 0, "actions": 0}
+        counts = {"data_sources": 0, "mutators": 0, "actions": 0, "events": 0, "streams": 0}
         for ext in self.extensions:
             if ext.type == ExtensionType.DATA_SOURCE:
                 counts["data_sources"] += 1
@@ -107,6 +109,10 @@ class ToolDetail(BaseModel):
                 counts["mutators"] += 1
             elif ext.type == ExtensionType.ACTION:
                 counts["actions"] += 1
+            elif ext.type == ExtensionType.EVENT:
+                counts["events"] += 1
+            elif ext.type == ExtensionType.STREAM:
+                counts["streams"] += 1
         return counts
 
 

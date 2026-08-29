@@ -13,6 +13,7 @@ via MCP_UI_PORT environment variable.
 """
 
 import asyncio
+import hmac
 import json
 import os
 from pathlib import Path
@@ -98,14 +99,28 @@ def _get_ui_theme() -> str:
         return "dark"
 
 
-def _get_storage_secret() -> str:
-    """Get storage secret from environment variable, or use default for development.
+_storage_secret: str | None = None
 
-    Note: The secret is used for session cookie signing (required by app.storage.user).
-    The actual user data is stored as plain JSON in .nicegui/storage-user-*.json files.
+
+def _get_storage_secret() -> str:
+    """Get storage secret from environment, secrets file, or generate one.
+
+    The secret signs session cookies (required by app.storage.user). It is
+    resolved once per process and cached so both the run_with() and ui.run()
+    call sites see the same value.
+
+    Security: there is deliberately NO hardcoded fallback. Without a configured
+    secret, an ephemeral random one is generated — sessions survive only until
+    restart, and cookies from a leaked hardcoded default could be forged to
+    bypass login.
     """
+    global _storage_secret
+    if _storage_secret:
+        return _storage_secret
+
     secret = os.environ.get("MCP_UI_SECRET")
     if secret:
+        _storage_secret = secret
         return secret
 
     # Check secrets file
@@ -118,12 +133,20 @@ def _get_storage_secret() -> str:
                     if line and not line.startswith("#"):
                         parts = line.split("=", 1)
                         if len(parts) == 2 and parts[0].strip() == "MCP_UI_SECRET":
-                            return parts[1].strip()
+                            _storage_secret = parts[1].strip()
+                            return _storage_secret
         except Exception:
             pass
 
-    # Development default (data is plain JSON anyway)
-    return "dev-only-secret"
+    # Ephemeral per-process secret: logins reset on restart, nothing forgeable.
+    import secrets as _secrets
+
+    _storage_secret = _secrets.token_hex(32)
+    logger.warning(
+        "MCP_UI_SECRET is not set — using an ephemeral in-memory secret. "
+        "All logins are invalidated on restart. Set MCP_UI_SECRET for persistence."
+    )
+    return _storage_secret
 
 
 # =============================================================================
@@ -133,8 +156,10 @@ def _get_storage_secret() -> str:
 ENV_USERNAME = "MCP_UI_USERNAME"
 ENV_PASSWORD = "MCP_UI_PASSWORD"
 
-# Default credentials (for development only)
-passwords = {"admin": "admin"}
+
+def _safe_redirect_target(target: str) -> str:
+    """Restrict post-login redirects to same-site absolute paths."""
+    return target if target.startswith("/") and not target.startswith("//") else "/"
 
 
 # =============================================================================
@@ -163,6 +188,19 @@ def get_api_client():
     return _api_client
 
 
+def verify_credentials(username: str, password: str) -> bool:
+    """Check credentials against env config with per-credential defaults.
+
+    Either MCP_UI_USERNAME or MCP_UI_PASSWORD may be overridden independently;
+    unset values fall back to admin/admin. Comparison is constant-time.
+    """
+    stored_username = os.environ.get(ENV_USERNAME) or "admin"
+    stored_password = os.environ.get(ENV_PASSWORD) or "admin"
+    user_ok = hmac.compare_digest((username or "").encode(), stored_username.encode())
+    pass_ok = hmac.compare_digest((password or "").encode(), stored_password.encode())
+    return user_ok and pass_ok
+
+
 # =============================================================================
 # Page Functions
 # =============================================================================
@@ -174,18 +212,10 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
 
     def try_login() -> None:
         """Try to log in with the provided credentials."""
-        stored_username = os.environ.get(ENV_USERNAME)
-        stored_password = os.environ.get(ENV_PASSWORD)
-
-        # Use defaults if no credentials configured
-        if stored_username is None and stored_password is None:
-            stored_username = "admin"
-            stored_password = "admin"
-
-        if username.value == stored_username and password.value == stored_password:
+        if verify_credentials(username.value, password.value):
             nicegui_app.storage.user.update({"username": username.value, "authenticated": True})
             show_success("Login successful!")
-            ui.navigate.to(redirect_to)
+            ui.navigate.to(_safe_redirect_target(redirect_to))
         else:
             show_error("Wrong username or password")
 
@@ -256,7 +286,7 @@ async def main_page() -> None:
 
             # Main content
             with ui.column().classes("flex-1 p-4 overflow-auto"):
-                await _render_content(state)
+                await _render_content(state, content_area.refresh)
 
     # Initial load: fetch tools before first render, then refresh UI
     if not state.tools and not state.loading_tools:
@@ -280,7 +310,7 @@ async def _open_tool_settings(state) -> None:
     for tool_info in state.tools:
         server_name = tool_info.name
         if not config.get("tools", {}).get(server_name) and tool_info.mcp_port:
-            mcp_url = f"http://localhost:{tool_info.mcp_port}/mcp"
+            mcp_url = f"http://127.0.0.1:{tool_info.mcp_port}/mcp"
             auth_cfg = load_auth_config(server_name)
             api_key = auth_cfg.get("api_key")
             discovered = await discover_tools_from_server(mcp_url, api_key=api_key)
@@ -310,8 +340,12 @@ async def _render_sidebar(state, content_refresh: Callable = None, initial_load:
         ext_task = asyncio.create_task(client.get_extensions(tool_name))
         env_task = asyncio.create_task(client.get_tool_env(tool_name))
 
-        # Show tool detail as soon as it's ready
+        # Show tool detail as soon as it's ready. Every await is a chance for
+        # the user to select a different tool — a stale fetch must not write
+        # its results into shared state (UI-9 race).
         tool_response = await tool_task
+        if get_state().selected_tool != tool_name:
+            return
         if tool_response.success:
             state.selected_tool_detail = tool_response.data
             if content_refresh:
@@ -319,11 +353,15 @@ async def _render_sidebar(state, content_refresh: Callable = None, initial_load:
 
         # Wait for extensions and attach
         ext_response = await ext_task
+        if get_state().selected_tool != tool_name:
+            return
         if ext_response.success and state.selected_tool_detail:
             state.selected_tool_detail.extensions = ext_response.data
 
         # Wait for env vars and attach to state
         env_response = await env_task
+        if get_state().selected_tool != tool_name:
+            return
         if env_response.success and env_response.data:
             env_vars = parse_env_vars_from_api(env_response.data)
             state.env_variables = env_vars
@@ -377,7 +415,7 @@ async def _render_sidebar(state, content_refresh: Callable = None, initial_load:
     logger.debug("_render_sidebar completed")
 
 
-async def _render_content(state) -> None:
+async def _render_content(state, content_refresh: Callable | None = None) -> None:
     """Render the main content area."""
     logger.debug("_render_content called")
 
@@ -594,6 +632,7 @@ def run_ui() -> None:
 
     run_kwargs = {
         "port": port,
+        "host": os.environ.get("MCP_UI_HOST", "127.0.0.1"),
         "title": "MCP Tool Manager",
         "dark": theme == "dark",
         "reload": False,

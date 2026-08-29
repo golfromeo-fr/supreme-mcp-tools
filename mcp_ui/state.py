@@ -1,19 +1,14 @@
 """
 State Management for the Management UI.
 
-Simple state container with change notification and comprehensive logging.
+Simple state container with comprehensive logging.
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
 
 from .logging_config import get_logger, get_trace_id
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger(__name__)
 
@@ -51,9 +46,6 @@ class AppState:
 
     # Error state
     last_error: str | None = None
-
-    # Internal lock for thread safety
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def set_tools(self, tools: list) -> None:
         """Update tools list and log."""
@@ -109,11 +101,6 @@ class AppState:
         self.last_error = None
         self.connection_status = "connected"
         logger.debug(f"[{get_trace_id()}] State: cleared")
-
-    async def with_lock(self, coro) -> None:
-        """Execute async operation with lock for thread safety."""
-        async with self._lock:
-            await coro
 
 
 # Global state instance (single instance for the application)

@@ -63,7 +63,10 @@ def _show_update_dialog(
 
     with ui.dialog() as dialog, ui.card():
         ui.label(f"Update Authorization Key for {tool_name}").classes("text-h6 mb-4")
-        ui.label("Enter the new authorization key (leave empty to remove):").classes("text-grey mb-2")
+        ui.label(
+            "Enter the new authorization key. Leave empty to disable auth "
+            "(an empty key is stored and the tool accepts unauthenticated calls):"
+        ).classes("text-grey mb-2")
 
         input_field = ui.input(
             "Authorization Key",
@@ -71,14 +74,15 @@ def _show_update_dialog(
             password_toggle_button=True,
         ).classes("w-full")
 
-        def handle_save() -> None:
-            new_key = input_field.value
+        async def _do_save() -> None:
+            # Await the parent's async handler — a discarded coroutine never
+            # runs, which used to close this dialog without saving anything.
             if on_update:
-                on_update(tool_name, new_key or "")
+                await on_update(tool_name, input_field.value or "")
             dialog.close()
 
         with ui.row().classes("gap-2"):
             ui.button("Cancel", on_click=dialog.close).props("flat")
-            ui.button("Save", icon="save", on_click=handle_save).props("color=primary")
+            ui.button("Save", icon="save", on_click=_do_save).props("color=primary")
 
     dialog.open()

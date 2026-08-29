@@ -112,12 +112,13 @@ def _toggle_edit(
 
             # Type-appropriate input field
             var_type = getattr(var, 'type', 'string')
-            # Determine initial value: use current raw value if set, otherwise default
-            current_val = getattr(var, 'value_raw', '') or var.default or ''
+            # Current raw value (API sends value_raw for non-secret set vars);
+            # fall back to the schema default only when nothing is set.
+            current_val = (var.value_raw if var.is_set else "") or var.default or ""
             if var.options:
                 input_field = ui.select(
                     options=var.options,
-                    value=None,
+                    value=current_val if var.is_set and current_val in var.options else None,
                     with_input=True,
                     label=f"Select or enter value for {var.name}",
                 ).classes("w-full")
@@ -178,33 +179,48 @@ def _toggle_edit(
                 ).classes("w-full")
             else:
                 input_field = ui.input(
-                    f"New value for {var.name}",
+                    f"Value for {var.name}" if var.is_set and not var.secret else f"New value for {var.name}",
+                    value=current_val if var.is_set and not var.secret else None,
                 ).classes("w-full")
 
-            # Default hint
-            if var.default:
+            # Default hint (never shown for secrets — a schema default could leak one)
+            if var.default and not var.secret:
                 ui.label(f"Default: {var.default}").classes("text-caption text-grey")
 
             # Action buttons
             with ui.row().classes("gap-2"):
-                def handle_save() -> None:
+                async def handle_save() -> None:
                     var_type = getattr(var, 'type', 'string')
                     if var_type == "boolean":
                         new_value = "true" if input_field.value else "false"
                     elif var_type == "integer":
+                        if input_field.value is None:
+                            ui.notify(f"{var.name}: enter a value first", type="warning")
+                            return
                         new_value = str(int(input_field.value))
                     elif var_type == "number":
+                        if input_field.value is None:
+                            ui.notify(f"{var.name}: enter a value first", type="warning")
+                            return
                         new_value = str(float(input_field.value))
                     else:
                         new_value = str(input_field.value) if input_field.value is not None else ""
-                    if new_value and on_update:
-                        # Call on_update WITHOUT awaiting - it updates state and schedules content_refresh
-                        # which must happen in the UI task, not a background task
-                        on_update(tool_name, var.name, new_value)
-                    # Show saving indicator - parent refresh will replace with fresh data
-                    card.clear()
-                    with card:
-                        ui.label(f"Saving {var.name}...").classes("text-grey italic text-sm")
+                        if not new_value:
+                            ui.notify(f"{var.name}: nothing to save", type="warning")
+                            return
+                    if on_update:
+                        # Await the parent's async handler: a discarded coroutine
+                        # never runs (NiceGUI awaits only handler return values),
+                        # which used to leave this form stuck on "Saving ...".
+                        await on_update(tool_name, var.name, new_value)
+                    # On success the parent refresh re-renders this card with
+                    # fresh data; on failure its error toast shows and the
+                    # form stays editable.
+
+                async def handle_delete() -> None:
+                    logger.info(f"env_delete: tool={tool_name} var={var.name}")
+                    if on_delete:
+                        await on_delete(tool_name, var.name)
 
                 def handle_cancel() -> None:
                     card.clear()
@@ -215,13 +231,6 @@ def _toggle_edit(
                 ui.button("Cancel", on_click=handle_cancel).props("flat")
 
                 if on_delete and not var.required:
-                    def handle_delete() -> None:
-                        logger.info(f"env_delete: tool={tool_name} var={var.name}")
-                        on_delete(tool_name, var.name)
-                        card.clear()
-                        with card:
-                            ui.label(f"Deleting {var.name}...").classes("text-grey italic text-sm")
-
                     ui.button("Delete", icon="delete", on_click=handle_delete).props(
                         "color=negative flat"
                     )
@@ -247,6 +256,7 @@ def parse_env_vars_from_api(data: dict) -> list[EnvVariable]:
             required=var_data.get("required", False),
             secret=var_data.get("secret", True),
             value_masked=var_data.get("value_masked", ""),
+            value_raw=var_data.get("value_raw", ""),
             is_set=var_data.get("is_set", False),
             default=var_data.get("default", ""),
             options=var_data.get("options", []),

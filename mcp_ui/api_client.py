@@ -67,7 +67,8 @@ def _get_default_base_url() -> str:
     ports_config = _load_ports_config()
     port = ports_config.get("reserved", {}).get("central_management")
     if port:
-        return f"http://localhost:{port}"
+        # 127.0.0.1, not localhost — avoids IPv6 ::1 resolution issues.
+        return f"http://127.0.0.1:{port}"
 
     raise ValueError(
         "API base URL not configured. Set MCP_API_URL environment variable or "
@@ -151,7 +152,9 @@ class APIClient:
 
         headers = kwargs.pop("headers", {})
         if self.api_key:
-            headers["X-API-Key"] = self.api_key
+            # The central management API's _verify_api_key accepts only the
+            # Bearer scheme (HTTPBearer) — X-API-Key headers get 401.
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
             session = await self._get_session()
