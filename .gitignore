@@ -256,3 +256,4 @@ setup_opencode_mcp.sh
 /opencode-*.md
 /zcode-*.md
 /misc/
+/.zcode/
