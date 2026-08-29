@@ -115,7 +115,7 @@ class ToolSettingsDialog:
             self._dialog = dialog
 
             with ui.row().classes("w-full justify-between items-center mb-4"):
-                ui.label(f"Tool Settings - {self.server_name}").classes("text-h6")
+                ui.label(f"Function Masks — {self.server_name}").classes("text-h6")
                 ui.button(icon="close", on_click=dialog.close).props("flat round")
 
             if not self.available_tools:
@@ -191,7 +191,7 @@ class GlobalToolSettingsDialog:
             self._dialog = dialog
 
             with ui.row().classes("w-full justify-between items-center mb-4"):
-                ui.label("Tool Settings").classes("text-h6")
+                ui.label("Function Masks — enable or disable tools per server").classes("text-h6")
                 ui.button(icon="close", on_click=dialog.close).props("flat round")
 
             with ui.row().classes("w-full gap-4 mb-4"):

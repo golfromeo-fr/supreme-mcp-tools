@@ -568,10 +568,10 @@ async def main_page() -> None:
                     on_click=dark_handle.toggle,
                 ).props("flat round").tooltip("Toggle dark mode")
                 ui.button(
-                    "Settings",
-                    icon="settings",
+                    "Function Masks",
+                    icon="visibility_off",
                     on_click=lambda: _open_tool_settings(state),
-                ).props("flat")
+                ).props("flat").tooltip("Enable or disable functions per server")
                 ui.button("Logout", icon="logout", on_click=logout).props("flat")
 
     # === DRAWER: tool navigation ===
