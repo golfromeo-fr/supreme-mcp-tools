@@ -24,7 +24,11 @@ pytest.importorskip("nicegui")
 
 
 def test_memorymcp_exposes_setup_extensions_and_registers():
+    """Reproduce the launcher's exact sequence: import the fastmcp module,
+    then call setup_extensions(registry=...) — registration must not be
+    starved by the import-time one-shot guard."""
     try:
+        import memorymcp_fastmcp  # noqa: F401  (launcher: module load)
         from memory_tools import setup_extensions  # noqa: F401
     except Exception as e:  # backend init failures in CI-like envs
         pytest.skip(f"memory_tools import failed: {e}")

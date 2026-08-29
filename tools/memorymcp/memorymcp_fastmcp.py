@@ -57,13 +57,13 @@ from memory_tools import setup_fef_v3, setup_extensions  # noqa: F401 - launcher
 # ============================================================================
 # FEF V3 Setup
 # ============================================================================
-
-fef_setup_done = False
-
-try:
-    setup_fef_v3()
-except Exception as e:
-    logger.debug(f"Early FEF setup deferred: {e}")
+# Deliberately NO eager setup_fef_v3() call at import: it ran in standalone
+# mode, consumed the fef_setup_done one-shot guard, and starved the launcher's
+# later setup_extensions(registry=...) call — leaving memorymcp with an empty
+# extensions list in the management API (and a rogue server on port 8105).
+# Under the launcher, server_manager calls setup_extensions(registry=...)
+# itself after this module loads.
+# ============================================================================
 
 
 # ============================================================================
