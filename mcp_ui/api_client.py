@@ -294,19 +294,6 @@ class APIClient:
             json=payload,
         )
 
-    async def mutate_extension(
-        self,
-        tool_name: str,
-        extension_name: str,
-        params: dict,
-    ) -> APIResponse:
-        """Submit a mutation to a mutator extension."""
-        return await self._request(
-            "POST",
-            f"/api/tools/{tool_name}/extensions/{extension_name}/mutate",
-            json={"params": params},
-        )
-
     async def execute_extension(
         self,
         tool_name: str,
@@ -320,18 +307,6 @@ class APIClient:
             f"/api/tools/{tool_name}/extensions/{extension_name}/execute",
             json=payload,
         )
-
-    async def start_tool(self, name: str) -> APIResponse:
-        """Start a tool."""
-        return await self._request("POST", f"/api/tools/{name}/start")
-
-    async def stop_tool(self, name: str) -> APIResponse:
-        """Stop a tool."""
-        return await self._request("POST", f"/api/tools/{name}/stop")
-
-    async def restart_tool(self, name: str) -> APIResponse:
-        """Restart a tool."""
-        return await self._request("POST", f"/api/tools/{name}/restart")
 
     # === Disabled Tools Configuration ===
 
@@ -439,10 +414,6 @@ class APIClient:
             f"/api/tools/{tool_name}/auth",
             json={"api_key": api_key},
         )
-
-
-# For backwards compatibility
-APIError = Exception
 
 
 # Global client instance (lazy)

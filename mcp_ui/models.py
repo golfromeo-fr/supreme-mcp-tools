@@ -6,7 +6,6 @@ Pydantic models defining the data structures used throughout the UI.
 
 from pydantic import BaseModel, Field, model_validator
 from typing import Any
-from datetime import datetime
 from enum import Enum
 
 
@@ -131,27 +130,6 @@ class APIResponse(BaseModel):
     def fail(cls, error: str) -> "APIResponse":
         """Create a failed response."""
         return cls(success=False, error=error)
-
-
-class UIState(BaseModel):
-    """Global UI state (per-client, managed by NiceGUI)."""
-    selected_tool: str | None = None
-    is_loading: bool = False
-    connection_status: str = "connected"  # connected, disconnected, error
-    last_refresh: datetime | None = None
-    error_message: str | None = None
-
-
-class LoginForm(BaseModel):
-    """Login form data."""
-    username: str = ""
-    password: str = ""
-
-
-class MutatorForm(BaseModel):
-    """Dynamic mutator form data."""
-    extension_name: str
-    values: dict[str, Any] = {}
 
 
 class EnvVariable(BaseModel):

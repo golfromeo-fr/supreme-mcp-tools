@@ -40,20 +40,31 @@ class TraceFormatter(logging.Formatter):
         )
 
 
-def setup_logging(level: str = "DEBUG") -> None:
+_configured = False
+
+
+def setup_logging(level: str = "INFO") -> None:
     """
     Configure logging for the entire application.
+
+    Idempotent: repeated calls (module reload, multi-import) do not add
+    duplicate handlers.
 
     Args:
         level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     """
+    global _configured
+    if _configured:
+        return
+    _configured = True
+
     # Create handler with custom formatter
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(TraceFormatter())
 
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, level.upper(), logging.DEBUG))
+    root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     root_logger.addHandler(handler)
 
     # Reduce noise from third-party libraries

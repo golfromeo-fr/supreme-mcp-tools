@@ -713,6 +713,19 @@ def run_ui() -> None:
     theme = _get_ui_theme()
     storage_secret = _get_storage_secret()
 
+    host = os.environ.get("MCP_UI_HOST", "127.0.0.1")
+    if not os.environ.get(ENV_USERNAME) and not os.environ.get(ENV_PASSWORD):
+        logger.warning(
+            "MCP_UI_USERNAME/MCP_UI_PASSWORD are unset — default admin/admin "
+            f"credentials are active. UI is bound to {host}; set credentials "
+            "before exposing it beyond localhost."
+        )
+    elif not os.environ.get(ENV_USERNAME) or not os.environ.get(ENV_PASSWORD):
+        logger.warning(
+            "Only one of MCP_UI_USERNAME/MCP_UI_PASSWORD is set — the other "
+            "falls back to 'admin'."
+        )
+
     logger.info(f"Starting UI server on port {port}, theme={theme}")
 
     run_kwargs = {

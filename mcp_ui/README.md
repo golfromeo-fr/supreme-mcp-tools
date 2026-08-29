@@ -1,166 +1,82 @@
-# MCP Tools Management UI
+# MCP Management UI
 
-A web-based management interface for MCP tools built with NiceGUI.
+NiceGUI web interface for managing the MCP tools launched by the unified
+launcher. Talks to the launcher's central management API.
 
-## Overview
-
-The Management UI provides a user-friendly web interface for monitoring and managing MCP tools, including:
-- Viewing tool status and capabilities
-- Querying data sources
-- Configuring mutators
-- Executing actions
-
-## Quick Start
-
-### Installation
-
-Ensure all dependencies are installed:
+**Run:**
 
 ```bash
-pip install nicegui>=1.4.0 httpx>=0.27.0 pydantic>=2.5.0
+python -m mcp_ui
 ```
 
-### Launching the UI
+**Ports** (from `config/ports.json`):
 
-```bash
-# Method 1: Using uvicorn (recommended - enables all NiceGUI features)
-cd /home/gr/supreme-mcp-tools
-uvicorn mcp_ui:app --host 0.0.0.0 --port 9092
+| What | Port |
+|---|---|
+| Management UI (this app) | `reserved.management_ui` = **8400** |
+| Management API (talked to) | `reserved.central_management` = **8200** |
 
-# Method 2: Using python module (auto-index mode)
-cd /home/gr/supreme-mcp-tools
-python -m mcp_ui.management_ui
+## What you get
 
-# With authentication
-export MCP_UI_PASSWORD="yourpassword"
-uvicorn mcp_ui:app --host 0.0.0.0 --port 9092
+- **Drawer navigation** with the live tool list and status badges.
+- **Per-tool tabs**: Overview (status, endpoints, tool-specific panels like
+  ragmcp collections), Extensions (data sources with auto-charts and actions),
+  Env Vars (inline editing with masked secrets), Auth (per-tool API key).
+- **Live status**: the tool list and connection badge poll the management API
+  every 10 seconds without rebuilding open panels.
+- **Dark mode** toggle in the header (default from `MCP_UI_THEME` or
+  `ports.json` → `ui.theme`).
 
-# Custom configuration
-export MCP_UI_PORT=9092
-export MCP_UI_THEME="dark"
-export MCP_API_URL="http://localhost:9091"
-uvicorn mcp_ui:app --host 0.0.0.0 --port 9092
-```
+## Environment variables
 
-The UI will be available at `http://localhost:9092`
+| Variable | Effect | Default |
+|---|---|---|
+| `MCP_UI_PORT` | Override the UI port | `ports.json` → 8400 |
+| `MCP_UI_HOST` | Bind host | `127.0.0.1` |
+| `MCP_UI_THEME` | `dark` / `light` initial theme | `ports.json` → dark |
+| `MCP_UI_USERNAME` / `MCP_UI_PASSWORD` | Login credentials (each independently overridable) | `admin` / `admin` |
+| `MCP_UI_SECRET` | Session-cookie signing secret. **Set this for persistent logins** — without it an ephemeral per-process secret is generated and every restart logs everyone out. | ephemeral |
+| `MCP_API_URL` | Management API base URL | `ports.json` → `http://127.0.0.1:8200` |
+| `MCP_API_TIMEOUT` | API request timeout in seconds | `ports.json` → 30 |
+| `MCP_API_KEY` | Bearer token sent to the management API (needed if the API runs with auth enabled) | none |
 
-## Environment Variables
+`MCP_UI_SECRET` may also live in `~/.mcp_ui/secrets` as `MCP_UI_SECRET=<value>`.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_UI_HOST` | `0.0.0.0` | Host to bind the UI server |
-| `MCP_UI_PORT` | `9092` | Port for the UI server |
-| `MCP_UI_THEME` | `dark` | Theme: `dark`, `light`, or `system` |
-| `MCP_UI_USERNAME` | `admin` | Username for login (requires `MCP_UI_PASSWORD`) |
-| `MCP_UI_PASSWORD` | (none) | Password for login. If not set, no login required |
-| `MCP_API_URL` | `http://localhost:9091` | Management API base URL |
-| `MCP_API_KEY` | (none) | API key for Management API authentication |
-| `MCP_UI_REFRESH_INTERVAL` | `30` | Auto-refresh interval in seconds |
+A warning is logged at startup when default admin/admin credentials are active.
 
-## Features
+## Security notes
 
-### Tool Management
-- View all registered MCP tools in the sidebar
-- See tool status (Running, Stopped, Error, Unknown)
-- Select a tool to view detailed information
-
-### Data Sources
-- Query read-only data sources
-- Refresh data on demand
-- View key-value data in tables
-
-### Configuration (Mutators)
-- Modify tool configuration through dynamic forms
-- Support for various input types:
-  - Integer and number inputs with min/max validation
-  - Boolean switches
-  - Text inputs and textareas
-  - Array inputs (comma-separated values)
-
-### Actions
-- Execute tool-specific actions
-- Confirmation dialogs before execution
-- Parameter input forms for action arguments
+- The login session cookie is signed with `MCP_UI_SECRET`. There is no
+  hardcoded fallback secret; an unconfigured one is random per process.
+- Credential comparison is constant-time; post-login redirects are restricted
+  to same-site paths.
+- The UI is a *client* of the management API. Per-tool API keys it writes go
+  through `PUT /api/tools/{name}/auth` (server-side, preserving the nested
+  `auth.api_key` structure of `tools/<name>/config.json`).
 
 ## Architecture
 
 ```
 mcp_ui/
-├── __init__.py              # Package initialization
-├── management_ui.py         # Main NiceGUI application
-├── auth.py                  # Authentication module
-├── api_client.py            # Management API HTTP client
-├── models.py                # Pydantic data models
-├── state.py                 # Client state management
-└── components/
-    ├── __init__.py          # Component exports
-    ├── tool_list.py         # Sidebar tool list
-    ├── tool_card.py         # Tool detail card
-    ├── data_sources_box.py  # Data sources panel
-    ├── mutators_box.py      # Configuration panel
-    └── actions_box.py       # Actions panel
+  __main__.py          # python -m mcp_ui → run_ui()
+  management_ui.py     # pages, layout, handlers, polling
+  api_client.py        # async aiohttp client for the management API
+  state.py             # AppState (tools, selection, caches)
+  models.py            # pydantic models mirroring API payloads
+  logging_config.py    # trace-ID logging
+  components/          # ToolList, ToolOverview, DataSourcesBox, ActionsBox,
+                       # EnvVarEditor, AuthBox, tool settings dialogs, panels
 ```
 
-## Authentication
-
-When `MCP_UI_PASSWORD` is set, the UI requires authentication:
-
-1. Navigate to the UI
-2. Enter username and password
-3. Click Login
-
-The session is stored per-client using NiceGUI's client storage.
-
-## API Connection
-
-The UI connects to the Management API server (default: `http://localhost:9091`). Ensure the API server is running before launching the UI.
-
-### API Endpoints Used
-
-- `GET /health` - Health check
-- `GET /api/tools` - List all tools
-- `GET /api/tools/{name}` - Get tool details
-- `GET /api/tools/{name}/extensions` - Get tool extensions
-- `POST /api/tools/{name}/extensions/{ext}/query` - Query data source
-- `POST /api/tools/{name}/extensions/{ext}/mutate` - Submit mutation
-- `POST /api/tools/{name}/extensions/{ext}/execute` - Execute action
-
-## Troubleshooting
-
-### Connection Errors
-If you see connection errors:
-1. Verify the Management API server is running
-2. Check the `MCP_API_URL` environment variable
-3. Ensure firewall rules allow the connection
-
-### UI Not Loading
-1. Check if port 9092 is available
-2. Try a different port with `MCP_UI_PORT`
-3. Check browser console for JavaScript errors
-
-### Authentication Issues
-1. Ensure `MCP_UI_PASSWORD` is set
-2. Clear browser cookies and cache
-3. Check username defaults to `admin` if not specified
+All API access is async (`aiohttp`); the UI never blocks the event loop on
+network calls. State changes refresh only the affected regions.
 
 ## Development
 
-### Running from Source
-
 ```bash
-cd /home/gr/supreme-mcp-tools
-python -m ui.management_ui
+python -m mcp_ui            # start the UI (http://127.0.0.1:8400)
+python -m pytest tests/     # repo test suite
 ```
 
-### Importing Components
-
-```python
-from ui.management_ui import ManagementUI, main
-from ui.auth import is_auth_enabled, logout
-from ui.api_client import ManagementAPIClient
-from ui.components import ToolList, ToolCard
-```
-
-## License
-
-Part of the MCP Tools project.
+Audit history: `docs/mcp_ui_audit_2026-08-29.md` (repairs + overhaul landed
+the same day).
