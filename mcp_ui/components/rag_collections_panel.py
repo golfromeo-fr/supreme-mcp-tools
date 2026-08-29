@@ -2,8 +2,10 @@
 RAG MCP Collections Panel.
 
 Dedicated panel for ragmcp showing indexed collections with stats.
-Shows at the top of the ragmcp tool detail view.
+Shows in the ragmcp Overview tab.
 """
+
+import re
 
 from nicegui import ui
 from typing import Any
@@ -48,16 +50,7 @@ def RagCollectionsPanel(
             ui.label('No collections indexed yet').classes('text-grey')
             return
 
-        # Render as a table with Collection | Stats columns
-        rows = [{'collection': k, 'stats': v} for k, v in collections.items()]
-        ui.table(
-            columns=[
-                {'name': 'collection', 'label': 'Collection', 'field': 'collection'},
-                {'name': 'stats', 'label': 'Stats', 'field': 'stats'}
-            ],
-            rows=rows,
-            row_key='collection'
-        ).classes('w-full').props('flat dense')
+        _render_collection_rows(collections)
 
         if on_refresh:
             with ui.row().classes('mt-3'):
@@ -66,6 +59,28 @@ def RagCollectionsPanel(
                     icon='refresh',
                     on_click=on_refresh
                 ).props('flat dense')
+
+
+def _chunks_of(stats: Any) -> int | None:
+    """Extract the chunk count from a '124 chunks @ 1536d' style stats string."""
+    match = re.search(r"(\d+)\s+chunks", str(stats))
+    return int(match.group(1)) if match else None
+
+
+def _render_collection_rows(collections: dict[str, Any]) -> None:
+    """Render collections as labeled progress bars sized against the largest."""
+    counts = {k: _chunks_of(v) for k, v in collections.items()}
+    max_count = max((c for c in counts.values() if c is not None), default=None)
+
+    with ui.column().classes('w-full gap-2'):
+        for name, stats in collections.items():
+            count = counts[name]
+            with ui.column().classes('w-full gap-1'):
+                with ui.row().classes('w-full justify-between items-center'):
+                    ui.label(name).classes('font-mono text-sm')
+                    ui.label(str(stats)).classes('text-caption text-grey')
+                if count is not None and max_count:
+                    ui.linear_progress(value=count / max_count, show_value=False).classes('w-full')
 
 
 def _render_indexing_progress(progress: dict[str, Any]) -> None:
@@ -107,7 +122,7 @@ def _render_indexing_progress(progress: dict[str, Any]) -> None:
         pass  # Don't show anything
     else:
         # Unknown status
-        with ui.card().classes('w-full bg-grey-100 dark:bg-grey-800 p-3 mb-3'):
+        with ui.card().classes('w-full bg-gray-100 dark:bg-gray-800 p-3 mb-3'):
             ui.label(f'Indexing status: {status}').classes('text-xs')
 
 

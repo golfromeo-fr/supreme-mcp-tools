@@ -4,6 +4,8 @@ Data Sources Box Component.
 Renders read-only data sources panel with inline metrics display.
 """
 
+import json
+
 from nicegui import ui
 from typing import Any
 from collections.abc import Callable
@@ -81,6 +83,8 @@ def DataSourcesBox(
                 # Show inline summary cards for key metrics (pass category from metadata)
                 category = ext.metadata.get('category') if ext.metadata else None
                 _inline_metrics(ext.data, category=category)
+                # Bar charts for nested numeric series (e.g. by_tool, by_endpoint)
+                _maybe_charts(ext.data)
                 # Show full data table
                 ui.separator()
                 _data_table(ext.data)
@@ -207,19 +211,71 @@ def _get_metric_color(key: str) -> str:
         return 'grey'
 
 
+def _maybe_charts(data: dict[str, Any], max_charts: int = 2) -> None:
+    """
+    Render bar charts for nested numeric dict series (e.g. by_tool, by_endpoint).
+
+    Only dicts with at least two numeric values are charted, capped at
+    ``max_charts`` so a data source with many series stays readable.
+    """
+    charted = 0
+    for key, value in data.items():
+        if charted >= max_charts:
+            break
+        if not isinstance(value, dict) or len(value) < 2:
+            continue
+        numeric = {
+            k: v for k, v in value.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
+        if len(numeric) < 2:
+            continue
+        ui.label(key).classes("text-caption text-grey mt-1")
+        ui.echart({
+            "xAxis": {
+                "type": "category",
+                "data": list(numeric.keys()),
+                "axisLabel": {"rotate": 30, "fontSize": 10},
+            },
+            "yAxis": {"type": "value"},
+            "series": [{"type": "bar", "data": list(numeric.values())}],
+            "tooltip": {"trigger": "axis"},
+            "grid": {"containLabel": True},
+        }).classes("w-full h-48")
+        charted += 1
+
+
+def _format_scalar(value: Any) -> str:
+    """Render a value as display text; pretty-print nested structures."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, default=str)
+    return str(value)
+
+
 def _data_table(data: dict[str, Any]) -> None:
-    """Render data as a key-value table."""
-    rows = [{'key': k, 'value': str(v)} for k, v in data.items()]
-    
-    if not rows:
-        ui.label('No data').classes('text-grey')
-        return
-    
-    ui.table(
-        columns=[
-            {'name': 'key', 'label': 'Property', 'field': 'key'},
-            {'name': 'value', 'label': 'Value', 'field': 'value'}
-        ],
-        rows=rows,
-        row_key='key'
-    ).classes('w-full').props('flat dense')
+    """Render data as a key-value table; nested structures as JSON blocks."""
+    rows = [
+        {'key': k, 'value': _format_scalar(v)}
+        for k, v in data.items()
+        if not isinstance(v, (dict, list)) or not v
+    ]
+
+    if rows:
+        ui.table(
+            columns=[
+                {'name': 'key', 'label': 'Property', 'field': 'key'},
+                {'name': 'value', 'label': 'Value', 'field': 'value'}
+            ],
+            rows=rows,
+            row_key='key'
+        ).classes('w-full').props('flat dense')
+
+    # Non-empty nested structures: pretty JSON in collapsible code blocks
+    # (Quasar table cells don't render newlines, so indent=2 would collapse).
+    nested = {
+        k: v for k, v in data.items()
+        if isinstance(v, (dict, list)) and v
+    }
+    for key, value in nested.items():
+        with ui.expansion(key, icon="data_object").classes("w-full"):
+            ui.code(json.dumps(value, indent=2, default=str)).classes("w-full")

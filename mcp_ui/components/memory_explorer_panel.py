@@ -26,25 +26,28 @@ def MemoryExplorerPanel(
     with ui.card().classes('w-full mb-4'):
         ui.label('Memory Explorer').classes('text-h6 mb-3')
 
-        # Search bar
-        with ui.row().classes('w-full gap-2 mb-3'):
-            search_input = ui.input(
-                'Search memories...',
-                placeholder='Query memories with recency weighting...'
-            ).classes('flex-grow')
-            ui.button(
-                'Search',
-                icon='search',
-                on_click=lambda: _do_search(search_input.value, on_search)
-            ).props('color=primary')
+        # Search + filters are only interactive when a callback is wired;
+        # without one they used to render as dead controls.
+        if on_search:
+            # Search bar
+            with ui.row().classes('w-full gap-2 mb-3'):
+                search_input = ui.input(
+                    'Search memories...',
+                    placeholder='Query memories with recency weighting...'
+                ).classes('flex-grow')
+                ui.button(
+                    'Search',
+                    icon='search',
+                    on_click=lambda: _do_search(search_input.value, on_search)
+                ).props('color=primary')
 
-        # Quick filter chips
-        with ui.row().classes('items-center gap-2 mb-3'):
-            ui.label('Quick filters:').classes('text-sm text-grey')
-            _render_filter_chip('code_pattern', 'Code Pattern', on_search)
-            _render_filter_chip('trick', 'Trick', on_search)
-            _render_filter_chip('lesson', 'Lesson', on_search)
-            _render_filter_chip('plan', 'Plan', on_search)
+            # Quick filter chips
+            with ui.row().classes('items-center gap-2 mb-3'):
+                ui.label('Quick filters:').classes('text-sm text-grey')
+                _render_filter_chip('code_pattern', 'Code Pattern', on_search)
+                _render_filter_chip('trick', 'Trick', on_search)
+                _render_filter_chip('lesson', 'Lesson', on_search)
+                _render_filter_chip('plan', 'Plan', on_search)
 
         # Memory types reference
         with ui.expansion('Memory Types Reference', icon='info_outline').classes('w-full mb-3'):

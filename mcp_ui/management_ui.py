@@ -323,8 +323,15 @@ async def main_page() -> None:
 
     # Set up theme
     theme = _get_ui_theme()
+    dark_handle = ui.dark_mode()
     if theme == "dark":
-        ui.dark_mode().enable()
+        dark_handle.enable()
+
+    # Design tokens: consistent radii and a subtle drawer border in both modes
+    ui.add_css("""
+        .q-card { border-radius: 12px; }
+        .q-drawer { border-right: 1px solid rgba(127, 127, 127, 0.2); }
+    """)
 
     # === Refreshable regions: refreshed individually, never a full teardown ===
 
@@ -530,6 +537,10 @@ async def main_page() -> None:
             ).classes("text-h6")
             with ui.row().classes("items-center gap-2"):
                 status_chip()
+                ui.button(
+                    icon="dark_mode",
+                    on_click=dark_handle.toggle,
+                ).props("flat round").tooltip("Toggle dark mode")
                 ui.button(
                     "Settings",
                     icon="settings",
