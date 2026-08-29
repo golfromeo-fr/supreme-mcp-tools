@@ -26,7 +26,6 @@ Usage in each *_fastmcp.py:
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 import os
@@ -318,8 +317,7 @@ def get_transport_app(mcp, transport: str | None = None):
       tool API key). Enabled unless ``MCP_DISABLE_FLUSH_ENDPOINT`` is set.
     - A session idle TTL (``MCP_SESSION_IDLE_TIMEOUT`` seconds, default 1800) so
       stale sessions self-evict instead of accumulating until process restart.
-      Passed natively via ``http_app(session_idle_timeout=...)`` on FastMCP ≥4;
-      applied via a lifespan wrap on FastMCP 3.x (see _build_http_app).
+      Passed natively via ``http_app(session_idle_timeout=...)``.
     - A per-request access line (``POST /mcp from 127.0.0.1 session=NEW -> 200``)
       on the ``mcp.access`` logger so client connections are visible in the
       launcher log — uvicorn's own access log is disabled in the launcher and
@@ -364,13 +362,11 @@ def _build_http_app(mcp):
     """Build the streamable-http ASGI app with the session idle TTL applied.
 
     MCP_SESSION_IDLE_TIMEOUT (default 1800s; <=0 disables) keeps stale sessions
-    self-evicting instead of accumulating until process restart.
-
-    FastMCP ≥4 exposes a native ``session_idle_timeout`` kwarg on ``http_app()``
-    (Phase 0 verdict Q4), so the value is passed at construction there. On
-    FastMCP 3.x, which lacks the kwarg, fall back to setting the attribute on
-    the manager via the lifespan wrap. That fallback is temporary scaffolding:
-    it goes away when the runtime environment upgrades to FastMCP 4.
+    self-evicting instead of accumulating until process restart. The value goes
+    to ``http_app(session_idle_timeout=...)`` natively (FastMCP ≥4, Phase 0
+    verdict Q4). No fallback: the runtime is pinned to fastmcp 4.x, and if a
+    future version drops the kwarg the TypeError at startup is the loud
+    failure we want.
     """
     raw_timeout = os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")
     try:
@@ -380,17 +376,9 @@ def _build_http_app(mcp):
     except (TypeError, ValueError):
         idle_timeout = None
 
-    has_native_kwarg = (
-        idle_timeout is not None
-        and "session_idle_timeout" in inspect.signature(mcp.http_app).parameters
-    )
-    if has_native_kwarg:
-        return mcp.http_app(transport="http", session_idle_timeout=idle_timeout)
-
-    app = mcp.http_app(transport="http")
     if idle_timeout is not None:
-        _apply_session_idle_timeout_via_lifespan(app)
-    return app
+        return mcp.http_app(transport="http", session_idle_timeout=idle_timeout)
+    return mcp.http_app(transport="http")
 
 
 def _wire_session_management(app) -> None:
@@ -465,51 +453,6 @@ def _get_session_manager(app):
                 break
             node = inner
     return None
-
-
-def _apply_session_idle_timeout_via_lifespan(app) -> None:
-    """Set session_idle_timeout on the session manager once the lifespan creates it.
-
-    FastMCP's http_app() does not expose session_idle_timeout, and the manager is
-    instantiated inside the lifespan — so wrap the lifespan context factory to
-    set the attribute after the original startup runs. The reaper reads this
-    attribute live, so the value takes effect for new sessions immediately.
-    """
-    raw_timeout = os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")
-    try:
-        idle_timeout = float(raw_timeout)
-        if idle_timeout <= 0:
-            idle_timeout = None
-    except (TypeError, ValueError):
-        idle_timeout = None
-    if idle_timeout is None:
-        return
-
-    router = getattr(app, "router", None)
-    original_lifespan = getattr(router, "lifespan_context", None) if router else None
-    if original_lifespan is None:
-        return
-
-    from contextlib import asynccontextmanager
-
-    @asynccontextmanager
-    async def lifespan_with_ttl(scoped_app):
-        # Original lifespan creates + runs the session manager; once it has
-        # yielded (startup complete), the manager exists and we can patch it.
-        async with original_lifespan(scoped_app):
-            sm = _get_session_manager(app)
-            if sm is not None and getattr(sm, "session_idle_timeout", None) is None:
-                try:
-                    sm.session_idle_timeout = idle_timeout
-                except Exception:
-                    pass
-            yield
-
-    # Starlette's Router uses lifespan_context at startup.
-    try:
-        router.lifespan_context = lifespan_with_ttl
-    except Exception:
-        pass
 
 
 def _resolve_api_key(name: str, fallback: str | None) -> str:
