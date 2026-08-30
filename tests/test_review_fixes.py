@@ -134,6 +134,59 @@ class TestTransportSwitchingAllTools:
         )
 
 
+class TestTransportDefaultUnpinned:
+    """The versatile multi-transport default must be reachable via startlauncher.
+
+    Regression 2026-08-30 (fix 7801773): DEFAULT_CONFIG carried
+    ``"transport": "streamable-http"``, so launchmcp.py's resolution chain
+    (args.transport > config > MCP_TRANSPORT > multi default) never reached
+    its fallback — every tool came up single-transport and /sse 404'd for
+    legacy clients. These tests pin the config layers above the tools, not
+    just get_transport_app.
+    """
+
+    def test_default_config_has_no_transport_key(self):
+        """DEFAULT_CONFIG must not pin a transport (regression 7801773)."""
+        from launcher.launcher_config import Config
+
+        assert "transport" not in Config.DEFAULT_CONFIG, (
+            "DEFAULT_CONFIG must not carry a 'transport' key — it pins every "
+            "tool and makes the multi-transport default unreachable via "
+            "startlauncher"
+        )
+
+    def test_launcher_config_resolves_to_multi_default(self, monkeypatch):
+        """The real Config() that launchmcp.main() builds (machine
+        config/launcher_config.json merged over DEFAULT_CONFIG) must leave the
+        launchmcp.py resolution chain empty -> multi default."""
+        import os
+
+        from launcher.launcher_config import Config
+
+        monkeypatch.delenv("MCP_TRANSPORT", raising=False)
+        config_path = str(
+            Path(__file__).parent.parent / "config" / "launcher_config.json"
+        )
+        config = Config(config_path)
+
+        # Exact chain from launchmcp.py (args.transport is None without --transport)
+        resolved = None or config.config.get("transport") or os.environ.get("MCP_TRANSPORT")
+        assert resolved is None, (
+            f"transport resolved to {resolved!r} — a config layer pins it; "
+            "expected no pin (multi-transport default)"
+        )
+
+    def test_resolution_chain_still_consults_config(self):
+        """launchmcp.py's chain must still read the config layer — keeps
+        test_launcher_config_resolves_to_multi_default honest if the chain
+        moves elsewhere."""
+        content = Path("launchmcp.py").read_text()
+        assert 'config.config.get("transport")' in content, (
+            "launchmcp.py resolution chain must consult config.config — the "
+            "unpinned-default regression test covers the wrong layer otherwise"
+        )
+
+
 class TestConfigGodObjectComment:
     """Test that Config class has architectural debt comment."""
 
