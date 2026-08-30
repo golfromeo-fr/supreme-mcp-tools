@@ -165,9 +165,10 @@ Examples:
     parser.add_argument(
         "--transport",
         type=str,
-        choices=["streamable-http"],
+        choices=["streamable-http", "sse"],
         default=None,
-        help="Transport protocol for all tools (streamable-http only; SSE was removed)"
+        help="Transport protocol for all tools (default: streamable-http; "
+             "sse is legacy compatibility for outdated harnesses)"
     )
     
     return parser.parse_args(args)
@@ -188,10 +189,10 @@ class Launcher:
         
         # Set transport protocol before tool modules are imported
         transport = args.transport or os.environ.get("MCP_TRANSPORT", "streamable-http")
-        if transport != "streamable-http":
+        if transport not in ("streamable-http", "sse"):
             raise ValueError(
-                f"Unsupported transport {transport!r}: only 'streamable-http' is supported "
-                "(SSE was removed 2026-08)"
+                f"Unsupported transport {transport!r}: only 'streamable-http' or "
+                "'sse' (legacy compat) are supported"
             )
         os.environ["MCP_TRANSPORT"] = transport
         logger.info(f"Transport protocol: {transport}")

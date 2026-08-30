@@ -268,7 +268,7 @@ The SSE version uses:
 
 ### Streamable HTTP Transport
 
-The server (single transport — SSE was removed 2026-08) uses:
+The server supports streamable HTTP (`/mcp`, default) and SSE (`/sse`, legacy compatibility for outdated harnesses). Both use:
 - **FastMCP**: server framework (`tools/shared/server_factory.py`)
 - **FastAPI**: Modern ASGI web framework for HTTP handling
 - **Uvicorn**: ASGI server to run the application

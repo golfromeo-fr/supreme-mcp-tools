@@ -204,9 +204,10 @@ Examples:
     parser.add_argument(
         "--transport",
         type=str,
-        choices=["streamable-http"],
+        choices=["streamable-http", "sse"],
         default=None,
-        help="Transport protocol for all tools (streamable-http only; SSE was removed)"
+        help="Transport protocol for all tools (default: streamable-http; "
+             "sse is legacy compatibility for outdated harnesses)"
     )
 
     parser.add_argument(
@@ -668,10 +669,10 @@ async def main() -> int:
     
     # Set transport protocol for all tools (must be set before tool modules are imported)
     transport = args.transport or config.config.get("transport", "streamable-http")
-    if transport != "streamable-http":
+    if transport not in ("streamable-http", "sse"):
         raise ValueError(
-            f"Unsupported transport {transport!r}: only 'streamable-http' is supported "
-            "(SSE was removed 2026-08)"
+            f"Unsupported transport {transport!r}: only 'streamable-http' or "
+            "'sse' (legacy compat) are supported"
         )
     os.environ["MCP_TRANSPORT"] = transport
     logging.info(f"Transport protocol: {transport}")

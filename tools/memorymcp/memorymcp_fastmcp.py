@@ -68,7 +68,7 @@ from memory_tools import setup_fef_v3, setup_extensions  # noqa: F401 - launcher
 
 # ============================================================================
 # ASGI App (for launcher)
-# Streamable HTTP only (/mcp). SSE was removed 2026-08 — MCP_TRANSPORT=sse raises.
+# Transports: streamable-http (default, /mcp) or sse (legacy compat, /sse + /messages)
 # ============================================================================
 
 from tools.shared.server_factory import get_transport_app, DEFAULT_HOST
@@ -83,9 +83,13 @@ app = get_transport_app(mcp)
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info(f"Starting {TOOL_NAME} FastMCP server (transport: streamable-http)")
+    transport = os.environ.get("MCP_TRANSPORT", "streamable-http").lower()
+    logger.info(f"Starting {TOOL_NAME} FastMCP server (transport: {transport})")
     logger.info(f"  MCP port: {MCP_PORT}")
-    logger.info(f"  Streamable HTTP: http://localhost:{MCP_PORT}/mcp")
+    if transport == "sse":
+        logger.info(f"  SSE endpoint: http://localhost:{MCP_PORT}/sse")
+    else:
+        logger.info(f"  Streamable HTTP: http://localhost:{MCP_PORT}/mcp")
 
     uvicorn.run(
         app,

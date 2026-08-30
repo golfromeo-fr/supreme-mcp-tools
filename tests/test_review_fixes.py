@@ -69,7 +69,7 @@ class TestPortLeakFix:
 
 
 class TestWebmcpTransportSwitching:
-    """Test that _fastmcp.py builds its app via get_transport_app (streamable HTTP only)."""
+    """Test that _fastmcp.py builds its app via get_transport_app."""
 
     def test_fastmcp_app_export_exists(self):
         """webmcp_fastmcp.py must export app built via get_transport_app."""
@@ -109,11 +109,14 @@ class TestTransportSwitchingAllTools:
             assert not streamable.exists(), f"Legacy {streamable} should be deleted (replaced by _fastmcp.py)"
 
     def test_launcher_has_transport_flag(self):
-        """Launcher must accept --transport CLI flag (streamable-http only; SSE removed)."""
+        """Launcher must accept --transport with both transports (sse = legacy compat)."""
         content = Path("launchmcp.py").read_text()
         assert "--transport" in content
         assert "streamable-http" in content
-        assert '"sse"' not in content, "SSE transport was removed (Phase -1); --transport must not offer it"
+        assert '"sse"' in content, (
+            "SSE was re-added 2026-08-30 as legacy compatibility for outdated "
+            "harnesses; --transport must offer it again"
+        )
 
     def test_launcher_sets_env_var(self):
         """Launcher must set MCP_TRANSPORT env var before importing tools."""
@@ -121,11 +124,14 @@ class TestTransportSwitchingAllTools:
         assert 'os.environ["MCP_TRANSPORT"]' in content
 
     def test_main_has_transport_flag(self):
-        """launcher/__main__.py must accept --transport CLI flag (streamable-http only)."""
+        """launcher/__main__.py must accept --transport with both transports."""
         content = Path("launcher/__main__.py").read_text()
         assert "--transport" in content
         assert "MCP_TRANSPORT" in content
-        assert '"sse"' not in content, "SSE transport was removed (Phase -1); --transport must not offer it"
+        assert '"sse"' in content, (
+            "SSE was re-added 2026-08-30 as legacy compatibility; "
+            "--transport must offer it again"
+        )
 
 
 class TestConfigGodObjectComment:

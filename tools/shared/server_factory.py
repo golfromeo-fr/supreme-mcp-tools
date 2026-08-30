@@ -200,11 +200,12 @@ class RequestLogMiddleware:
         path = scope.get("path", "-")
 
         # JSON-RPC method + tool name: the modern dialect's routing headers
-        # identify it for free; legacy requests get a bounded body sniff.
+        # identify it for free; legacy requests (streamable /mcp AND SSE-era
+        # /messages) get a bounded body sniff.
         rpc_method = headers.get("mcp-method")
         rpc_name = headers.get("mcp-name")
         buffered = []
-        if method == "POST" and path == "/mcp" and rpc_method is None:
+        if method == "POST" and path in ("/mcp", "/messages") and rpc_method is None:
             body = b""
             while True:
                 message = await receive()
@@ -306,51 +307,46 @@ def create_fastmcp_server(
 
 
 def get_transport_app(mcp, transport: str | None = None):
-    """Get the ASGI app for the streamable-http transport.
+    """Get the ASGI app for the requested transport.
 
-    SSE support was removed (2026-08, plans/mcp-2026-07-28-stateless-upgrade.md
-    Phase -1): ``MCP_TRANSPORT=sse`` raises instead of silently switching.
+    Two transports are supported (2026-08-30: SSE re-added for legacy harness
+    compatibility — fastmcp 4 still ships it, ``http_app(transport="sse")``;
+    see plans/mcp-2026-07-28-stateless-upgrade.md Phase -1 note):
 
-    Also wires session management on the returned app:
-    - ``POST /admin/flush-sessions`` — terminate all in-memory sessions so stale
-      clients get HTTP 404 and re-initialize. Reuses the app-wide auth (same
-      tool API key). Enabled unless ``MCP_DISABLE_FLUSH_ENDPOINT`` is set.
-    - A session idle TTL (``MCP_SESSION_IDLE_TIMEOUT`` seconds, default 1800) so
-      stale sessions self-evict instead of accumulating until process restart.
-      Passed natively via ``http_app(session_idle_timeout=...)``.
-    - A per-request access line (``POST /mcp from 127.0.0.1 session=NEW -> 200``)
-      on the ``mcp.access`` logger so client connections are visible in the
-      launcher log — uvicorn's own access log is disabled in the launcher and
-      would not propagate there anyway. Enabled unless
-      ``MCP_DISABLE_REQUEST_LOGS`` is set.
+    - ``streamable-http`` (default) — sessions + ``/admin/flush-sessions`` +
+      idle TTL + session-less 2026-07-28 dialect.
+    - ``sse`` — legacy compatibility for outdated harnesses. Auth (dual-header
+      via ApiKeyFallbackMiddleware + DualHeaderVerifier) and the ``mcp.access``
+      request log apply to both. The flush endpoint and idle TTL are NOT wired
+      for SSE (they walk the streamable session manager); SSE clients self-heal
+      through EventSource reconnect instead.
 
     Args:
         mcp: FastMCP server instance
-        transport: optional override; only "streamable-http" (or "http") is
-            accepted — anything else, notably "sse", raises.
+        transport: optional override; "streamable-http" (or "http") or "sse".
+            Anything else raises.
 
     Returns:
         Starlette ASGI application
     """
     transport = (transport or os.environ.get("MCP_TRANSPORT", "streamable-http")).lower()
-    if transport == "sse":
+    if transport == "http":
+        transport = "streamable-http"
+    if transport not in ("streamable-http", "sse"):
         raise ValueError(
-            "SSE transport was removed (plans/mcp-2026-07-28-stateless-upgrade.md, "
-            "Phase -1). Unset MCP_TRANSPORT or set it to 'streamable-http'."
-        )
-    if transport not in ("streamable-http", "http"):
-        raise ValueError(
-            f"Unsupported MCP_TRANSPORT {transport!r}: only 'streamable-http' is supported"
+            f"Unsupported MCP_TRANSPORT {transport!r}: "
+            "only 'streamable-http' or 'sse' (legacy) are supported"
         )
 
     if not hasattr(mcp, "http_app"):
         raise RuntimeError(f"FastMCP server has no http_app method: {type(mcp)}")
 
-    app = _build_http_app(mcp)
+    app = _build_http_app(mcp, transport)
     # User middleware runs outside the router, so the normalizer executes
     # before FastMCP's per-route RequireAuthMiddleware on every route.
     app.add_middleware(ApiKeyFallbackMiddleware)
-    _wire_session_management(app)
+    if transport == "streamable-http":
+        _wire_session_management(app)
     # add_middleware stacks last-added = outermost, so the access line sees
     # every request including auth rejections and flush-endpoint calls.
     if not os.environ.get("MCP_DISABLE_REQUEST_LOGS"):
@@ -358,16 +354,19 @@ def get_transport_app(mcp, transport: str | None = None):
     return app
 
 
-def _build_http_app(mcp):
-    """Build the streamable-http ASGI app with the session idle TTL applied.
+def _build_http_app(mcp, transport: str):
+    """Build the ASGI app for the requested transport.
 
-    MCP_SESSION_IDLE_TIMEOUT (default 1800s; <=0 disables) keeps stale sessions
-    self-evicting instead of accumulating until process restart. The value goes
-    to ``http_app(session_idle_timeout=...)`` natively (FastMCP ≥4, Phase 0
-    verdict Q4). No fallback: the runtime is pinned to fastmcp 4.x, and if a
-    future version drops the kwarg the TypeError at startup is the loud
-    failure we want.
+    For streamable-http, MCP_SESSION_IDLE_TIMEOUT (default 1800s; <=0 disables)
+    keeps stale sessions self-evicting instead of accumulating until process
+    restart. The value goes to ``http_app(session_idle_timeout=...)`` natively
+    (FastMCP ≥4, Phase 0 verdict Q4). No fallback: the runtime is pinned to
+    fastmcp 4.x, and if a future version drops the kwarg the TypeError at
+    startup is the loud failure we want. SSE apps have no idle-TTL kwarg.
     """
+    if transport == "sse":
+        return mcp.http_app(transport="sse")
+
     raw_timeout = os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")
     try:
         idle_timeout = float(raw_timeout)

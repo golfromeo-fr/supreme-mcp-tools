@@ -124,6 +124,15 @@ tests that assert on internals.** Nothing else in the codebase changes.
 
 ### Phase -1 — Legacy SSE & dead-transport removal (on FastMCP 3.4.x, before the port)
 
+> **⚠ Partially superseded 2026-08-30:** SSE was **re-added** as legacy compatibility
+> (`MCP_TRANSPORT=sse` / `--transport sse`) after outdated harnesses still pointing at
+> `/sse` surfaced in production logs. FastMCP 4 always supported it
+> (`http_app` transport Literal includes `'sse'`; `sse-starlette` ships transitively) —
+> the removal was repo policy, not a framework limit. `get_transport_app` now passes
+> `"sse"` through; auth + access logging cover both transports; flush/TTL remain
+> streamable-only. Still gone for good: the dead `launcher/streamable_http/` package,
+> legacy `convertermcp.py`, and SSE-*module* exports (`server`/`app`/`sse_transport`).
+
 *Added 2026-08-14.* A repo audit (Appendix B) found the legacy SSE path is entirely vestigial: no
 `*_sse.py` files exist (deleted 2026-05-06), nothing anywhere sets `MCP_TRANSPORT=sse` (repo `.env`,
 `config/*.json`, scripts all clean; live config has no `transport` key, so the code default

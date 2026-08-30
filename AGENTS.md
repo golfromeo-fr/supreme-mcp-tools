@@ -112,11 +112,18 @@ Concrete impls in `tools/shared/impls/`:
 
 ### Transport
 
-All tools serve **streamable HTTP only** (`/mcp`). SSE was removed 2026-08
-(`plans/mcp-2026-07-28-stateless-upgrade.md`, Phase -1) — `MCP_TRANSPORT=sse` raises a clear
-`ValueError` at tool startup instead of silently switching. The launcher sets `MCP_TRANSPORT`
-(default `streamable-http`) before importing tool modules; `tools/shared/server_factory.py:get_transport_app`
-is the single place that reads it.
+Two transports, selected via `MCP_TRANSPORT` / `--transport` (single selection point:
+`tools/shared/server_factory.py:get_transport_app`; the launcher sets the env var before
+importing tool modules):
+
+| Transport | Status | Notes |
+|---|---|---|
+| `streamable-http` | **default** | `/mcp`; sessions, `/admin/flush-sessions`, idle TTL |
+| `sse` | legacy compatibility (re-added 2026-08-30 for outdated harnesses) | `/sse` + `/messages`; auth + `mcp.access` logging work identically, but flush/TTL are streamable-only — SSE clients self-heal via EventSource reconnect |
+
+Auth (dual-header `X-API-Key` / `Authorization: Bearer`) is app-level and covers both
+transports. History: SSE was removed 2026-08-14 (Phase -1) when zero consumers existed,
+then re-added 2026-08-30 when legacy harnesses still pointing at `/sse` surfaced.
 
 ### Session management
 
