@@ -150,8 +150,11 @@ class Config:
         "errorHandling": {
             "continueOnError": True,
             "failFast": False
-        },
-        "transport": "streamable-http"
+        }
+        # NOTE: no default "transport" here — an absent key lets tools build
+        # the versatile multi-transport app (/mcp, /mcp-stateless, /sse).
+        # Set "transport" explicitly (here or via --transport/MCP_TRANSPORT)
+        # only to pin ALL tools to one mode.
     }
     
     def __init__(self, config_path: str | None = None):

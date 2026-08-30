@@ -84,7 +84,7 @@ class TestTransportSwitchingAllTools:
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_fastmcp_app_via_factory(self, tool):
-        """Each _fastmcp.py must build its app via get_transport_app (streamable HTTP)."""
+        """Each _fastmcp.py must build its app via get_transport_app (multi default)."""
         fpath = Path(f"tools/{tool}/{tool}_fastmcp.py")
         if not fpath.exists():
             pytest.skip(f"{tool} has no _fastmcp.py")
