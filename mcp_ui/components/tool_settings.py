@@ -18,6 +18,22 @@ logger = get_logger(__name__)
 # Config file location
 TOOLS_CONFIG_FILE = Path.home() / ".config" / "supreme-mcp-tools" / "tools_config.json"
 
+REPO_TOOLS_DIR = Path(__file__).resolve().parent.parent.parent / "tools"
+
+
+def get_function_descriptions(server_name: str) -> dict[str, str]:
+    """Read function descriptions from the tool's config.json (name -> description)."""
+    path = REPO_TOOLS_DIR / server_name / "config.json"
+    try:
+        cfg = json.loads(path.read_text())
+        return {
+            t["name"]: t.get("description", "")
+            for t in cfg.get("tools", [])
+            if isinstance(t, dict) and t.get("name")
+        }
+    except Exception:
+        return {}
+
 
 async def apply_function_mask(
     server_name: str,
