@@ -678,25 +678,27 @@ def _render_functions_tab(state, detail, handlers: dict) -> None:
             usage = ext.data.get("by_tool", {}) or {}
             break
 
-    # The tab lists the AVAILABLE functions — the ones this server actually
-    # serves. Masked functions are invisible here by design; they are managed
-    # in the Function Masks dialog.
-    available = [f for f in all_functions if f not in disabled]
-    masked_count = len(all_functions) - len(available)
+    # All functions are listed — masked ones stay visible with their switches
+    # (user spec: "keep the switch with the masked functions and showing the
+    # masked functions too"), each with its description and usage.
     on_mask_change = handlers.get("schedule_content_rebuild")
 
     with ui.column().classes("w-full gap-2"):
         ui.label(
-            f"{len(available)} functions available"
-            + (f" ({masked_count} masked hidden — manage in Function Masks)" if masked_count else "")
+            f"{len(all_functions)} functions — {len(disabled)} masked"
+            if disabled else f"{len(all_functions)} functions — none masked"
         ).classes("text-body2 text-grey")
 
         with ui.column().classes("w-full gap-1"):
-            for fn in available:
+            for fn in all_functions:
+                is_masked = fn in disabled
                 calls = usage.get(fn)
                 with ui.row().classes("w-full justify-between items-center py-1"):
                     with ui.column().classes("min-w-0 gap-0"):
-                        ui.label(fn).classes("font-mono text-sm")
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label(fn).classes("font-mono text-sm")
+                            if is_masked:
+                                ui.badge("MASKED", color="orange").props("outline").classes("text-xs")
                         fn_description = descriptions.get(fn, "")
                         if fn_description:
                             ui.label(fn_description).classes("text-caption text-grey")
@@ -709,11 +711,12 @@ def _render_functions_tab(state, detail, handlers: dict) -> None:
                             else "Usage appears once this server's request_stats "
                                  "extension has data"
                         )
-                        ui.button(
-                            icon="visibility_off",
-                            on_click=lambda e, s=server_name, f=fn:
-                                apply_function_mask(s, f, False, on_done=on_mask_change),
-                        ).props("flat dense round").tooltip("Mask this function")
+                        ui.switch(
+                            "Enabled",
+                            value=not is_masked,
+                            on_change=lambda e, s=server_name, f=fn:
+                                apply_function_mask(s, f, e.value, on_done=on_mask_change),
+                        )
 
 
 async def _render_overview_tab(state, detail) -> None:

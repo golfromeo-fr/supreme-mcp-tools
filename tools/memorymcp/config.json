@@ -44,5 +44,107 @@
       "type": "string",
       "default": "gpt-4o-mini"
     }
-  }
+  },
+  "tools": [
+    {
+      "name": "attachProvenance",
+      "description": "Add provenance metadata to a memory. \ud83d\udca1 Tip: When storing agent-generated content, attach provenance so future queries can trace the source and confidence of the memory."
+    },
+    {
+      "name": "auditTrail",
+      "description": "Get audit trail for a memory (retrieval history). \ud83d\udca1 Tip: Check this when investigating why a memory was retrieved or to debug memory behavior and access patterns."
+    },
+    {
+      "name": "createMemoryEdge",
+      "description": "Create a directed edge (link) between two memories. \ud83d\udca1 Tip: Use to build knowledge graphs \u2014 connect related memories, show dependencies, or chain steps in a process. Edges are stored in each memory's metadata under the \"edges\" key. Common relations: related_to, depends_on, follows, contradicts, refines, example_of"
+    },
+    {
+      "name": "decayOrExpire",
+      "description": "Clean up expired memories based on TTL and usage. \ud83d\udca1 Tip: Call periodically to clean up temporary memories and enforce retention policies. Use dry_run=true first to see what would be deleted."
+    },
+    {
+      "name": "deleteMemory",
+      "description": "Delete a memory by ID. \ud83d\udca1 Tip: Use to remove outdated or incorrect memories."
+    },
+    {
+      "name": "exportGraphAsMarkdown",
+      "description": "Export memories and their edges as a Markdown document with embedded Mermaid diagrams. \ud83d\udca1 Tip: Use to generate a readable document from your knowledge graph. Great for LLM context injection, documentation, or sharing knowledge. If no root_id, exports all memories (optionally filtered by type or tag)."
+    },
+    {
+      "name": "getMemory",
+      "description": "Get a specific memory by ID. \ud83d\udca1 Tip: Use when you have a memory ID from a previous query and want the full content."
+    },
+    {
+      "name": "getMemoryAutousePolicy",
+      "description": "Return the full memorymcp auto-use policy body. Tip: Call this at session start to load the reflex policy into your context. Prefer `getMemoryCheatsheet()` if your context budget is tight. Returns: Full auto-use policy as Markdown."
+    },
+    {
+      "name": "getMemoryCheatsheet",
+      "description": "Return the short memorymcp cheatsheet for tight context budgets. Tip: Call this at session start as the minimum-viable reflex primer. For the full policy, call `getMemoryAutousePolicy()` instead. Returns: Short cheatsheet as Markdown (~25 lines)."
+    },
+    {
+      "name": "getMemoryGraph",
+      "description": "Get the graph of memories connected to a starting memory, expanding out to N hops. \ud83d\udca1 Tip: Use to explore the knowledge neighborhood around a concept. Returns a graph you can render in any Mermaid-compatible viewer."
+    },
+    {
+      "name": "getMemoryMetrics",
+      "description": "Get memory system metrics and statistics. \ud83d\udca1 Tip: Check this to monitor memory system health, storage usage, and retrieval patterns. Returns: Formatted metrics report"
+    },
+    {
+      "name": "getMemorySystemPrompt",
+      "description": "Returns the memory system prompt for LLM injection. \ud83d\udca1 Tip: Call this at session start to load memory usage guidelines into your context. This helps you understand when to store and retrieve memories effectively. Returns: System prompt for memory behavior"
+    },
+    {
+      "name": "getMetaDecisions",
+      "description": "Query only the meta-level architectural decisions about a topic, filtered by priority tier. Tip: Use this when asking \"why was X built this way?\" or \"what are the big design trade-offs for X?\". Returns only memories tagged `level:meta` AND `priority:<priority>`, avoiding the noise of code patterns and less-critical decisions. Priority tier: - \"A\" (default): must-know, the curated set of high-signal decisions - \"B\": should-know, broader set including less central decisions - \"C\": nice-to-know, exhaustive including edge-case decisions For implementation details, use `queryMemory(query)` instead, which returns both `level:meta` and `level:detail` memories."
+    },
+    {
+      "name": "listMemoryTypes",
+      "description": "List available memory types. \ud83d\udca1 Tip: Use to see what types of memories you can store. Each type serves a different purpose - patterns for code idioms, tricks for clever solutions, plans for project direction, lessons for things to avoid. Returns: List of memory types with descriptions"
+    },
+    {
+      "name": "memoryTypeChart",
+      "description": "Show distribution of memories by type as a bar chart. \ud83d\udca1 Tip: Use to see what kinds of knowledge you store most and spot gaps."
+    },
+    {
+      "name": "mergeDuplicates",
+      "description": "Find and merge duplicate memories based on similarity threshold. \ud83d\udca1 Tip: Use when memory count grows large and you want to consolidate redundant entries. Set threshold to control how similar memories must be to be merged (0-1, higher = stricter matching)."
+    },
+    {
+      "name": "migrateMemoryBackend",
+      "description": "Migrate memory data from one backend to another."
+    },
+    {
+      "name": "onAgentAction",
+      "description": "Capture agent action context for memory storage. \ud83d\udca1 Tip: Call this when you discover important patterns in code, make architectural decisions, or learn something worth remembering. Include the relevant context! Action types: - file_open: When you read an important file - file_edit: When you modify code - test_run: When tests execute with notable results - commit: When you commit changes (include diff context) - question: When you ask for help (include the problem context) - discovery: When you learn something interesting about the codebase"
+    },
+    {
+      "name": "queryMemory",
+      "description": "Query memories with recency and usage weighting. \ud83d\udca1 Tip: Before starting a new task, query memory for relevant past learnings. When stuck, search for similar problems others have solved."
+    },
+    {
+      "name": "redactSensitive",
+      "description": "Detect and redact PII from text. \ud83d\udca1 Tip: Before storing memories that might contain secrets, keys, or personal info, use this to check and redact sensitive content."
+    },
+    {
+      "name": "reindexMemory",
+      "description": "Re-index all memories with a new embedding model. \ud83d\udca1 Tip: Use when switching embedding models to re-encode all memories with the new model. This ensures consistent similarity calculations."
+    },
+    {
+      "name": "textToGraph",
+      "description": "Convert structured text (Markdown, skill files, docs) into a knowledge graph. \ud83d\udca1 Tip: LLMs reason better over graphs than flat text. Feed this output back into an LLM prompt to improve comprehension of complex documents, skills, or procedures. Parses headings, lists, numbered steps, prose, code blocks, and cross-references into nodes and edges with full content preserved. Best for: SKILL.md files, README sections, procedure docs, architecture notes, any text with hierarchical or sequential structure."
+    },
+    {
+      "name": "textToSmartGraph",
+      "description": "Convert text to a compressed, LLM-optimized knowledge graph using an LLM pass. Takes structured text (Markdown, skill files, docs), first runs textToGraph to extract structure, then sends it to an LLM for intelligent compression: cluster analysis, rule merging, dependency annotation, and example trimming. Reduces token count by 3-4x while preserving all technical semantics (function names, variable types, SQL patterns, file paths). Uses any OpenAI-compatible chat completions API. Configure via environment variables or pass parameters directly. Best for: SKILL.md files, coding rules, procedure docs \u2014 any structured document that will be injected into LLM context repeatedly."
+    },
+    {
+      "name": "upsertMemory",
+      "description": "Store or update a memory. \ud83d\udca1 Tip: After discovering useful patterns, solving tricky bugs, or learning something novel about the codebase, use this to remember it. Future-you will thank you!"
+    },
+    {
+      "name": "verifyBackendParity",
+      "description": "Verify two backend combos hold the same data."
+    }
+  ]
 }
