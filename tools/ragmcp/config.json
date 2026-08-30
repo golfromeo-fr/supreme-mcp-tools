@@ -131,79 +131,52 @@
   },
   "tools": [
     {
+      "name": "migrateMemoryBackend",
+      "description": "Migrate memory data from one backend to another."
+    },
+    {
+      "name": "verifyBackendParity",
+      "description": "Verify two backend combos hold the same data."
+    },
+    {
       "name": "search_code",
-      "description": "Semantic search across indexed code using natural language",
-      "required_params": [
-        "query"
-      ],
-      "optional_params": [
-        "limit",
-        "file_type",
-        "function_name",
-        "collection_name"
-      ]
+      "description": "Semantic search across indexed code (Pro*C, PL/SQL, Java, etc.) using natural language. Returns relevant code chunks with function names and file locations. [DEPRECATED] Use 'search' tool with mode='dense' instead."
     },
     {
       "name": "search_code_sparse",
-      "description": "Lexical (BM25-style) code search using sparse vectors",
-      "required_params": [
-        "query"
-      ],
-      "optional_params": [
-        "limit",
-        "file_type",
-        "function_name",
-        "collection_name"
-      ]
+      "description": "Lexical (BM25-style) code search using sparse vectors. Excellent for finding exact identifiers, table names, function names. Works offline without API costs. Use this for precise code lookups (e.g., 'STOMVT table', 'get_movement_type function'). [DEPRECATED] Use 'search' tool with mode='sparse' instead."
+    },
+    {
+      "name": "search",
+      "description": "Unified code search with automatic detection of collection capabilities. - mode='auto': Detect collection and use best available search method - mode='dense': Semantic search using embeddings (requires matching dimension) - mode='sparse': BM25 lexical search for exact identifiers - mode='hybrid': Combined dense + sparse (requires hybrid collection) copilot_format adds GitHub Copilot formatting: - 'comment': Inline comment block - 'sidebar': Sidebar context block"
     },
     {
       "name": "get_copilot_context",
-      "description": "Get formatted code context for GitHub Copilot injection",
-      "required_params": [
-        "current_context"
-      ],
-      "optional_params": [
-        "format",
-        "language",
-        "limit",
-        "max_lines",
-        "collection_name"
-      ]
+      "description": "Get formatted code context for GitHub Copilot injection. Retrieves relevant code using sparse vectors and formats it as inline comments or markdown. Perfect for making Copilot project-aware. [DEPRECATED] Use 'search' tool with copilot_format='comment' or 'sidebar' instead."
+    },
+    {
+      "name": "index_code",
+      "description": "Index code files into Qdrant for semantic search. Simple interface: just specify workspace and collection name. embedding_model presets: - 'auto': BGE-M3 (1024d) - best local quality, multilingual, hybrid - 'fast': BGE Base (768d) - quick testing, local - 'high-quality': text-embedding-3-large (3072d) - best, Azure API cost For advanced options (mode, custom embedding provider), use start_indexing."
     },
     {
       "name": "start_indexing",
-      "description": "Start background indexing of code files into Qdrant",
-      "required_params": [],
-      "optional_params": [
-        "workspace_root",
-        "collection_name",
-        "mode",
-        "force",
-        "directories"
-      ]
+      "description": "Start background indexing of code files into Qdrant. Returns process ID (PID) for monitoring. Indexes Pro*C, PL/SQL, Java, and other files with smart function-level chunking. Supports sparse (BM25, $0), dense (embeddings, API cost), or hybrid modes. [DEPRECATED] Use 'index_code' tool with embedding_model preset instead."
     },
     {
       "name": "check_indexing_progress",
-      "description": "Check the progress of background indexing process",
-      "required_params": [],
-      "optional_params": [
-        "pid"
-      ]
-    },
-    {
-      "name": "clear_index",
-      "description": "Clear all indexed code from Qdrant vector database",
-      "required_params": [],
-      "optional_params": [
-        "collection_name",
-        "confirm"
-      ]
+      "description": "Check the progress of background indexing process. Returns status, files processed, chunks indexed, errors, and recent log entries."
     },
     {
       "name": "list_collections",
-      "description": "List all Qdrant collections with their stats",
-      "required_params": [],
-      "optional_params": []
+      "description": "List all Qdrant collections with their stats (number of chunks, vector dimensions)."
+    },
+    {
+      "name": "stop_indexing",
+      "description": "Stop the currently running background indexing process. Gracefully terminates the indexer by sending SIGTERM. If the process does not stop within 5 seconds, sends SIGKILL (force kill). Also kills any orphaned indexer child processes. Use force=True to skip the graceful SIGTERM and kill immediately."
+    },
+    {
+      "name": "clear_index",
+      "description": "Clear all indexed code from Qdrant vector database. Only use this when you are CERTAIN an index needs to be deleted."
     }
   ],
   "environment_variables": {

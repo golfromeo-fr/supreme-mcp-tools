@@ -12,63 +12,24 @@
       "encoding": "utf-8"
     }
   },
-  "tools": {
-    "double": {
+  "tools": [
+    {
       "name": "double",
-      "description": "Doubles the value of a number",
-      "enabled": true,
-      "input_schema": {
-        "type": "object",
-        "required": [
-          "value"
-        ],
-        "properties": {
-          "value": {
-            "type": "number",
-            "description": "The number to double"
-          }
-        }
-      }
+      "description": "Doubles the value of a number."
     },
-    "square": {
+    {
       "name": "square",
-      "description": "Calculates the square of a number",
-      "enabled": true,
-      "input_schema": {
-        "type": "object",
-        "required": [
-          "value"
-        ],
-        "properties": {
-          "value": {
-            "type": "number",
-            "description": "The number to square"
-          }
-        }
-      }
+      "description": "Calculates the square of a number."
     },
-    "greet": {
+    {
       "name": "greet",
-      "description": "Generates a greeting message",
-      "enabled": true,
-      "input_schema": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The name to greet"
-          },
-          "greeting": {
-            "type": "string",
-            "description": "Optional custom greeting (default: 'Hello')"
-          }
-        }
-      }
+      "description": "Generates a greeting message."
+    },
+    {
+      "name": "get_secret",
+      "description": "Returns the current value of SIMPLEMCP_SECRET env var for hot-reload testing. SECURITY NOTE (H-7 \u2014 by design): This tool intentionally exposes the value of SIMPLEMCP_SECRET to authenticated callers. It exists solely as a development/test fixture for verifying that the management UI can hot-reload environment variables without restarting the server. Do NOT place real production secrets in SIMPLEMCP_SECRET. The .env file is git-ignored and scoped to the local developer machine."
     }
-  },
+  ],
   "environment_variables": {
     "SIMPLEMCP_SECRET": {
       "description": "Test secret value - update via WebUI then call get_secret to verify hot-reload",

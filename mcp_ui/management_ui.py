@@ -690,7 +690,7 @@ def _render_functions_tab(state, detail, handlers: dict) -> None:
         ).classes("text-body2 text-grey")
 
         # Sheet layout: aligned columns (Function | Description | Usage | Mask)
-        grid_cols = "minmax(160px, 220px) minmax(240px, 1fr) 110px 60px"
+        grid_cols = "minmax(170px, 230px) minmax(240px, 1fr) 100px 64px"
         with ui.element("div").classes("w-full grid text-caption text-grey").style(
             f"grid-template-columns: {grid_cols}; gap: 4px 16px;"
         ):
@@ -722,8 +722,9 @@ def _render_functions_tab(state, detail, handlers: dict) -> None:
                     else "Usage appears once this server's request_stats "
                          "extension has data"
                 )
+                # Bare switch: the column header already says "Mask", and the
+                # "Enabled" label truncated the 64px cell.
                 ui.switch(
-                    "Enabled",
                     value=not is_masked,
                     on_change=lambda e, s=server_name, f=fn:
                         apply_function_mask(s, f, e.value, on_done=on_mask_change),
