@@ -83,5 +83,6 @@
   },
   "auth": {
     "api_key": "simplemcp-test-key-5678"
-  }
+  },
+  "transport": "sse"
 }
