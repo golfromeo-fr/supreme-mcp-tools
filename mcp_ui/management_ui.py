@@ -689,34 +689,45 @@ def _render_functions_tab(state, detail, handlers: dict) -> None:
             if disabled else f"{len(all_functions)} functions — none masked"
         ).classes("text-body2 text-grey")
 
-        with ui.column().classes("w-full gap-1"):
-            for fn in all_functions:
-                is_masked = fn in disabled
-                calls = usage.get(fn)
-                with ui.row().classes("w-full justify-between items-center py-1"):
-                    with ui.column().classes("min-w-0 gap-0"):
-                        with ui.row().classes("items-center gap-2"):
-                            ui.label(fn).classes("font-mono text-sm")
-                            if is_masked:
-                                ui.badge("MASKED", color="orange").props("outline").classes("text-xs")
-                        fn_description = descriptions.get(fn, "")
-                        if fn_description:
-                            ui.label(fn_description).classes("text-caption text-grey")
-                    with ui.row().classes("items-center gap-3"):
-                        usage_label = ui.label(
-                            f"{calls} calls" if calls is not None else "no usage data"
-                        ).classes("text-caption text-grey").tooltip(
-                            "Call count since launcher start (from the "
-                            "request_stats extension)" if calls is not None
-                            else "Usage appears once this server's request_stats "
-                                 "extension has data"
-                        )
-                        ui.switch(
-                            "Enabled",
-                            value=not is_masked,
-                            on_change=lambda e, s=server_name, f=fn:
-                                apply_function_mask(s, f, e.value, on_done=on_mask_change),
-                        )
+        # Sheet layout: aligned columns (Function | Description | Usage | Mask)
+        grid_cols = "minmax(160px, 220px) minmax(240px, 1fr) 110px 60px"
+        with ui.element("div").classes("w-full grid text-caption text-grey").style(
+            f"grid-template-columns: {grid_cols}; gap: 4px 16px;"
+        ):
+            ui.label("Function").classes("font-medium")
+            ui.label("Description")
+            ui.label("Usage")
+            ui.label("Mask")
+
+        for fn in all_functions:
+            is_masked = fn in disabled
+            calls = usage.get(fn)
+            with ui.element("div").classes(
+                "w-full grid items-center py-1 border-t"
+            ).style(f"grid-template-columns: {grid_cols}; gap: 4px 16px;"):
+                with ui.column().classes("gap-0 min-w-0"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(fn).classes("font-mono text-sm")
+                        if is_masked:
+                            ui.badge("MASKED", color="orange").props("outline").classes("text-xs")
+                fn_description = descriptions.get(fn, "")
+                ui.label(
+                    fn_description if fn_description else "—"
+                ).classes("text-caption text-grey min-w-0")
+                usage_label = ui.label(
+                    f"{calls} calls" if calls is not None else "no usage data"
+                ).classes("text-caption text-grey").tooltip(
+                    "Call count since launcher start (from the "
+                    "request_stats extension)" if calls is not None
+                    else "Usage appears once this server's request_stats "
+                         "extension has data"
+                )
+                ui.switch(
+                    "Enabled",
+                    value=not is_masked,
+                    on_change=lambda e, s=server_name, f=fn:
+                        apply_function_mask(s, f, e.value, on_done=on_mask_change),
+                )
 
 
 async def _render_overview_tab(state, detail) -> None:
