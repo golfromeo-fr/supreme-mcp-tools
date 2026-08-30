@@ -306,6 +306,40 @@ def create_fastmcp_server(
     return mcp
 
 
+def _tool_config_transport(name: str | None) -> str | None:
+    """Per-tool transport override from tools/<name>/config.json ("transport" key).
+
+    Lets one tool serve SSE for legacy harnesses while the rest of the launcher
+    stays on streamable-http. Only accepts the two known transports, so a typo
+    in config.json fails loudly here instead of silently doing nothing.
+    """
+    if not name:
+        return None
+    try:
+        from pathlib import Path
+        cfg = json.loads(
+            (Path(__file__).resolve().parent.parent / name / "config.json").read_text()
+        )
+        value = cfg.get("transport")
+        if isinstance(value, dict):
+            # Legacy config shape ("transport": {type, endpoint, ...}) — not a
+            # transport selection. Selection stays with env/default.
+            return None
+        value = (value or "").lower()
+        if value == "http":
+            value = "streamable-http"
+        if value and value not in ("streamable-http", "sse"):
+            raise ValueError(
+                f"tools/{name}/config.json: unsupported transport {value!r} "
+                "(use 'streamable-http' or 'sse')"
+            )
+        return value or None
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as e:
+        raise ValueError(f"tools/{name}/config.json is not valid JSON: {e}") from e
+
+
 def get_transport_app(mcp, transport: str | None = None):
     """Get the ASGI app for the requested transport.
 
@@ -321,15 +355,24 @@ def get_transport_app(mcp, transport: str | None = None):
       for SSE (they walk the streamable session manager); SSE clients self-heal
       through EventSource reconnect instead.
 
+    Precedence: explicit ``transport`` argument > ``"transport"`` key in
+    ``tools/<name>/config.json`` (per-tool override — lets one tool serve SSE
+    while the rest stay on streamable-http) > ``MCP_TRANSPORT`` env var
+    (launcher-global) > default ``streamable-http``.
+
     Args:
         mcp: FastMCP server instance
-        transport: optional override; "streamable-http" (or "http") or "sse".
-            Anything else raises.
+        transport: optional explicit override; "streamable-http" (or "http")
+            or "sse". Anything else raises.
 
     Returns:
         Starlette ASGI application
     """
-    transport = (transport or os.environ.get("MCP_TRANSPORT", "streamable-http")).lower()
+    transport = (
+        transport
+        or _tool_config_transport(getattr(mcp, "name", None))
+        or os.environ.get("MCP_TRANSPORT", "streamable-http")
+    ).lower()
     if transport == "http":
         transport = "streamable-http"
     if transport not in ("streamable-http", "sse"):

@@ -114,7 +114,10 @@ Concrete impls in `tools/shared/impls/`:
 
 Two transports, selected via `MCP_TRANSPORT` / `--transport` (single selection point:
 `tools/shared/server_factory.py:get_transport_app`; the launcher sets the env var before
-importing tool modules):
+importing tool modules). Precedence: explicit argument > `"transport"` key in
+`tools/<name>/config.json` (per-tool — e.g. webmcp serves `sse` for a legacy harness
+while everything else stays streamable; legacy dict-shaped `transport` blocks in some
+configs are ignored) > `MCP_TRANSPORT` env (launcher-global) > default.
 
 | Transport | Status | Notes |
 |---|---|---|

@@ -61,7 +61,11 @@
       "secret": false,
       "type": "string",
       "default": "active",
-      "options": ["off", "moderate", "active"]
+      "options": [
+        "off",
+        "moderate",
+        "active"
+      ]
     },
     "WEBMCP_COUNTRY": {
       "description": "Default country code for search results",
@@ -97,10 +101,14 @@
       "secret": false,
       "type": "string",
       "default": "true",
-      "options": ["true", "false"]
+      "options": [
+        "true",
+        "false"
+      ]
     }
   },
   "auth": {
     "api_key": "webmcp-test-key-1234"
-  }
+  },
+  "transport": "sse"
 }
