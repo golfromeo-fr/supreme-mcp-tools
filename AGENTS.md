@@ -112,21 +112,25 @@ Concrete impls in `tools/shared/impls/`:
 
 ### Transport
 
-Two transports, selected via `MCP_TRANSPORT` / `--transport` (single selection point:
-`tools/shared/server_factory.py:get_transport_app`; the launcher sets the env var before
-importing tool modules). Precedence: explicit argument > `"transport"` key in
-`tools/<name>/config.json` (per-tool — e.g. webmcp serves `sse` for a legacy harness
-while everything else stays streamable; legacy dict-shaped `transport` blocks in some
-configs are ignored) > `MCP_TRANSPORT` env (launcher-global) > default.
+**Default is the versatile multi-transport app** (2026-08-30): every tool serves every
+client dialect simultaneously from one FastMCP instance — client selection is by URL,
+nothing to configure:
 
-| Transport | Status | Notes |
+| Endpoint | Mode | Notes |
 |---|---|---|
-| `streamable-http` | **default** | `/mcp`; sessions, `/admin/flush-sessions`, idle TTL |
-| `sse` | legacy compatibility (re-added 2026-08-30 for outdated harnesses) | `/sse` + `/messages`; auth + `mcp.access` logging work identically, but flush/TTL are streamable-only — SSE clients self-heal via EventSource reconnect |
+| `/mcp` | streamable HTTP, stateful | sessions, `/admin/flush-sessions`, idle TTL |
+| `/mcp-stateless` | streamable HTTP, stateless | per-request fresh, no session ids (for LB/multi-process setups or handshake-less clients) |
+| `/sse` + `/messages` | legacy SSE | outdated harnesses; clients self-heal via EventSource reconnect |
 
-Auth (dual-header `X-API-Key` / `Authorization: Bearer`) is app-level and covers both
-transports. History: SSE was removed 2026-08-14 (Phase -1) when zero consumers existed,
-then re-added 2026-08-30 when legacy harnesses still pointing at `/sse` surfaced.
+Auth (dual-header `X-API-Key` / `Authorization: Bearer`) and `mcp.access` logging cover
+all endpoints. Single-transport modes remain as escape hatches via `--transport` /
+`MCP_TRANSPORT` / `"transport"` key in `tools/<name>/config.json` (per-tool pinning;
+legacy dict-shaped `transport` blocks in some configs are ignored). Precedence:
+explicit argument > config.json key > env var > default `multi`. Single selection
+point: `tools/shared/server_factory.py:get_transport_app`; the launcher only sets
+`MCP_TRANSPORT` when explicitly asked, so the default reaches the tools. History:
+SSE was removed 2026-08-14 (Phase -1), re-added 2026-08-30, then generalized into the
+multi-transport default the same day (spike-proven against fastmcp 4.0.0b3).
 
 ### Session management
 

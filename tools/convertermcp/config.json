@@ -96,6 +96,5 @@
   "allowed_roots": [
     "/workspaces"
   ],
-  "max_docx_size_mb": 20,
-  "transport": "sse"
+  "max_docx_size_mb": 20
 }

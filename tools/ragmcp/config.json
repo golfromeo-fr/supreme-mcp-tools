@@ -7,7 +7,6 @@
   "host": "0.0.0.0",
   "sse_path": "/sse",
   "messages_path": "/messages/",
-  "transport": "sse",
   "qdrant": {
     "host": "qdrant",
     "port": 6333,

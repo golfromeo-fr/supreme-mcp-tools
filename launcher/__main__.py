@@ -187,15 +187,20 @@ class Launcher:
         self.args = args
         self.running = False
         
-        # Set transport protocol before tool modules are imported
-        transport = args.transport or os.environ.get("MCP_TRANSPORT", "streamable-http")
-        if transport not in ("streamable-http", "sse"):
-            raise ValueError(
-                f"Unsupported transport {transport!r}: only 'streamable-http' or "
-                "'sse' (legacy compat) are supported"
-            )
-        os.environ["MCP_TRANSPORT"] = transport
-        logger.info(f"Transport protocol: {transport}")
+        # Set transport protocol before tool modules are imported. Default is
+        # unset -> tools build the versatile multi-transport app (/mcp,
+        # /mcp-stateless, /sse). An explicit value pins ALL tools to one mode.
+        transport = args.transport or os.environ.get("MCP_TRANSPORT")
+        if transport:
+            if transport not in ("multi", "streamable-http", "streamable-stateless", "sse"):
+                raise ValueError(
+                    f"Unsupported transport {transport!r}: 'multi' (default), "
+                    "'streamable-http', 'streamable-stateless' or 'sse'"
+                )
+            os.environ["MCP_TRANSPORT"] = transport
+            logger.info(f"Transport protocol: {transport}")
+        else:
+            logger.info("Transport: multi (default — /mcp stateful+stateless, /sse)")
 
         # Fail fast if another launcher instance is already running
         from launcher.port_manager import management_endpoint_occupied

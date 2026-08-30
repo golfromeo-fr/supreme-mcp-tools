@@ -111,6 +111,5 @@
   "files": {
     "optimization": "optimization.json",
     "proc_rules": "proc_rules.md"
-  },
-  "transport": "sse"
+  }
 }

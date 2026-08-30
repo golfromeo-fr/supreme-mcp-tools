@@ -109,6 +109,5 @@
   },
   "auth": {
     "api_key": "webmcp-test-key-1234"
-  },
-  "transport": "sse"
+  }
 }

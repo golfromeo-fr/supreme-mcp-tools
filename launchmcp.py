@@ -667,15 +667,20 @@ async def main() -> int:
     # Set up logging
     setup_logging(config, args.verbose)
     
-    # Set transport protocol for all tools (must be set before tool modules are imported)
-    transport = args.transport or config.config.get("transport", "streamable-http")
-    if transport not in ("streamable-http", "sse"):
-        raise ValueError(
-            f"Unsupported transport {transport!r}: only 'streamable-http' or "
-            "'sse' (legacy compat) are supported"
-        )
-    os.environ["MCP_TRANSPORT"] = transport
-    logging.info(f"Transport protocol: {transport}")
+    # Set transport protocol for all tools (must be set before tool modules are
+    # imported). Default is unset -> tools build the versatile multi-transport
+    # app (/mcp, /mcp-stateless, /sse); an explicit value pins all tools.
+    transport = args.transport or config.config.get("transport") or os.environ.get("MCP_TRANSPORT")
+    if transport:
+        if transport not in ("multi", "streamable-http", "streamable-stateless", "sse"):
+            raise ValueError(
+                f"Unsupported transport {transport!r}: 'multi' (default), "
+                "'streamable-http', 'streamable-stateless' or 'sse'"
+            )
+        os.environ["MCP_TRANSPORT"] = transport
+        logging.info(f"Transport protocol: {transport}")
+    else:
+        logging.info("Transport: multi (default — /mcp stateful+stateless, /sse)")
 
     # Health check settings
     if args.health_check_logs:

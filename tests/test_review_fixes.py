@@ -93,12 +93,12 @@ class TestTransportSwitchingAllTools:
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_streamable_http_default(self, tool):
-        """streamable-http must be the only/default transport in each _fastmcp.py."""
+        """Each _fastmcp.py must advertise the versatile multi-transport app."""
         fpath = Path(f"tools/{tool}/{tool}_fastmcp.py")
         if not fpath.exists():
             pytest.skip(f"{tool} has no _fastmcp.py")
         content = fpath.read_text()
-        assert "streamable-http" in content, f"{tool} must use streamable-http"
+        assert "multi-transport" in content, f"{tool} must log the multi-transport app"
 
     def test_legacy_files_removed(self):
         """No _sse.py or _streamable.py files should exist for tools with _fastmcp.py."""

@@ -33,6 +33,7 @@ import hmac
 import secrets as _secrets
 import time
 import warnings
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 # ── Single source of truth for bind host ──────────────────────────────────
@@ -205,7 +206,7 @@ class RequestLogMiddleware:
         rpc_method = headers.get("mcp-method")
         rpc_name = headers.get("mcp-name")
         buffered = []
-        if method == "POST" and path in ("/mcp", "/messages") and rpc_method is None:
+        if method == "POST" and path in ("/mcp", "/mcp-stateless", "/messages") and rpc_method is None:
             body = b""
             while True:
                 message = await receive()
@@ -328,10 +329,10 @@ def _tool_config_transport(name: str | None) -> str | None:
         value = (value or "").lower()
         if value == "http":
             value = "streamable-http"
-        if value and value not in ("streamable-http", "sse"):
+        if value and value not in ("streamable-http", "streamable-stateless", "sse"):
             raise ValueError(
                 f"tools/{name}/config.json: unsupported transport {value!r} "
-                "(use 'streamable-http' or 'sse')"
+                "(use 'streamable-http', 'streamable-stateless' or 'sse')"
             )
         return value or None
     except FileNotFoundError:
@@ -341,29 +342,27 @@ def _tool_config_transport(name: str | None) -> str | None:
 
 
 def get_transport_app(mcp, transport: str | None = None):
-    """Get the ASGI app for the requested transport.
+    """Get the ASGI app for the requested transport mode.
 
-    Two transports are supported (2026-08-30: SSE re-added for legacy harness
-    compatibility — fastmcp 4 still ships it, ``http_app(transport="sse")``;
-    see plans/mcp-2026-07-28-stateless-upgrade.md Phase -1 note):
+    **Default is the versatile multi-transport app** (2026-08-30): one FastMCP
+    instance serving every client dialect at once —
 
-    - ``streamable-http`` (default) — sessions + ``/admin/flush-sessions`` +
-      idle TTL + session-less 2026-07-28 dialect.
-    - ``sse`` — legacy compatibility for outdated harnesses. Auth (dual-header
-      via ApiKeyFallbackMiddleware + DualHeaderVerifier) and the ``mcp.access``
-      request log apply to both. The flush endpoint and idle TTL are NOT wired
-      for SSE (they walk the streamable session manager); SSE clients self-heal
-      through EventSource reconnect instead.
+    - ``/mcp``            streamable HTTP, stateful (sessions, flush, idle TTL)
+    - ``/mcp-stateless``  streamable HTTP, per-request fresh (no session ids)
+    - ``/sse`` + ``/messages``  legacy SSE
 
-    Precedence: explicit ``transport`` argument > ``"transport"`` key in
-    ``tools/<name>/config.json`` (per-tool override — lets one tool serve SSE
-    while the rest stay on streamable-http) > ``MCP_TRANSPORT`` env var
-    (launcher-global) > default ``streamable-http``.
+    Auth (dual-header via ApiKeyFallbackMiddleware + DualHeaderVerifier) and
+    the ``mcp.access`` request log cover all endpoints. Client selection is by
+    URL; nothing needs to be configured.
+
+    Single-transport modes remain as escape hatches (``"streamable-http"``,
+    ``"streamable-stateless"``, ``"sse"``). Precedence: explicit ``transport``
+    argument > ``"transport"`` key in ``tools/<name>/config.json`` >
+    ``MCP_TRANSPORT`` env var > default ``"multi"``.
 
     Args:
         mcp: FastMCP server instance
-        transport: optional explicit override; "streamable-http" (or "http")
-            or "sse". Anything else raises.
+        transport: optional explicit override (see above)
 
     Returns:
         Starlette ASGI application
@@ -371,25 +370,29 @@ def get_transport_app(mcp, transport: str | None = None):
     transport = (
         transport
         or _tool_config_transport(getattr(mcp, "name", None))
-        or os.environ.get("MCP_TRANSPORT", "streamable-http")
+        or os.environ.get("MCP_TRANSPORT")
+        or "multi"
     ).lower()
     if transport == "http":
         transport = "streamable-http"
-    if transport not in ("streamable-http", "sse"):
+    if transport not in ("multi", "streamable-http", "streamable-stateless", "sse"):
         raise ValueError(
-            f"Unsupported MCP_TRANSPORT {transport!r}: "
-            "only 'streamable-http' or 'sse' (legacy) are supported"
+            f"Unsupported MCP_TRANSPORT {transport!r}: only 'multi' (default), "
+            "'streamable-http', 'streamable-stateless' or 'sse' are supported"
         )
 
     if not hasattr(mcp, "http_app"):
         raise RuntimeError(f"FastMCP server has no http_app method: {type(mcp)}")
 
-    app = _build_http_app(mcp, transport)
+    if transport == "multi":
+        app = _build_multi_app(mcp)
+    else:
+        app = _build_http_app(mcp, transport)
+        if transport == "streamable-http":
+            _wire_session_management(app)
     # User middleware runs outside the router, so the normalizer executes
     # before FastMCP's per-route RequireAuthMiddleware on every route.
     app.add_middleware(ApiKeyFallbackMiddleware)
-    if transport == "streamable-http":
-        _wire_session_management(app)
     # add_middleware stacks last-added = outermost, so the access line sees
     # every request including auth rejections and flush-endpoint calls.
     if not os.environ.get("MCP_DISABLE_REQUEST_LOGS"):
@@ -397,18 +400,62 @@ def get_transport_app(mcp, transport: str | None = None):
     return app
 
 
+def _build_multi_app(mcp):
+    """Versatile app: one tool, every client dialect (spike-proven 2026-08-30).
+
+    Three child apps built from the same FastMCP instance have disjoint paths
+    (/mcp, /mcp-stateless, /sse + /messages), so their routes flatten into one
+    parent Starlette app. The parent lifespan runs the three child lifespans
+    (each child's session manager starts inside its own lifespan). Child
+    middleware is deduplicated onto the parent — all children share this
+    factory's single auth provider, so one AuthenticationMiddleware stack
+    serves every route. The flush route is wired onto the stateful child
+    before flattening, and the idle TTL applies to it.
+    """
+    stateful = _build_http_app(mcp, "streamable-http")
+    _wire_session_management(stateful)
+    stateless = mcp.http_app(transport="http", stateless_http=True, path="/mcp-stateless")
+    sse = mcp.http_app(transport="sse", path="/sse")
+
+    routes = [*stateful.router.routes, *stateless.router.routes, *sse.router.routes]
+    seen, middlewares = set(), []
+    for child in (stateful, stateless, sse):
+        for mw in child.user_middleware:
+            if mw.cls not in seen:
+                seen.add(mw.cls)
+                middlewares.append(mw)
+
+    from starlette.applications import Starlette
+
+    @asynccontextmanager
+    async def combined_lifespan(app):
+        async with stateful.router.lifespan_context(stateful):
+            async with stateless.router.lifespan_context(stateless):
+                async with sse.router.lifespan_context(sse):
+                    yield
+
+    parent = Starlette(routes=routes, lifespan=combined_lifespan)
+    for mw in middlewares:
+        parent.add_middleware(mw.cls, **mw.kwargs)
+    return parent
+
+
 def _build_http_app(mcp, transport: str):
     """Build the ASGI app for the requested transport.
 
-    For streamable-http, MCP_SESSION_IDLE_TIMEOUT (default 1800s; <=0 disables)
-    keeps stale sessions self-evicting instead of accumulating until process
-    restart. The value goes to ``http_app(session_idle_timeout=...)`` natively
+    streamable-http is stateful: MCP_SESSION_IDLE_TIMEOUT (default 1800s;
+    <=0 disables) keeps stale sessions self-evicting instead of accumulating
+    until process restart, applied natively via ``http_app(session_idle_timeout=...)``
     (FastMCP ≥4, Phase 0 verdict Q4). No fallback: the runtime is pinned to
     fastmcp 4.x, and if a future version drops the kwarg the TypeError at
     startup is the loud failure we want. SSE apps have no idle-TTL kwarg.
+    streamable-stateless serves per-request fresh contexts (no session ids,
+    no GET stream) — nothing to reap or flush, so no session wiring either.
     """
     if transport == "sse":
         return mcp.http_app(transport="sse")
+    if transport == "streamable-stateless":
+        return mcp.http_app(transport="http", stateless_http=True)
 
     raw_timeout = os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")
     try:

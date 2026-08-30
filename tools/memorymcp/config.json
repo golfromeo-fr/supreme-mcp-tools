@@ -146,6 +146,5 @@
       "name": "verifyBackendParity",
       "description": "Verify two backend combos hold the same data."
     }
-  ],
-  "transport": "sse"
+  ]
 }
