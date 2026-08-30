@@ -7,16 +7,7 @@
   "host": "0.0.0.0",
   "sse_path": "/sse",
   "messages_path": "/messages/",
-  "transport": {
-    "type": "streamable-http",
-    "endpoint": "/mcp",
-    "framing_format": "newline-delimited",
-    "request_timeout": 60.0,
-    "headers": {
-      "Content-Type": "application/json",
-      "Accept": "application/json,text/event-stream"
-    }
-  },
+  "transport": "sse",
   "qdrant": {
     "host": "qdrant",
     "port": 6333,

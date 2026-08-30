@@ -26,7 +26,13 @@
       "secret": false,
       "type": "string",
       "default": "pdf",
-      "options": ["pdf", "txt", "html", "md", "docx"]
+      "options": [
+        "pdf",
+        "txt",
+        "html",
+        "md",
+        "docx"
+      ]
     },
     "CONVERTER_MAX_FILE_SIZE_MB": {
       "description": "Maximum input file size in MB",
@@ -42,7 +48,10 @@
       "secret": false,
       "type": "string",
       "default": "true",
-      "options": ["true", "false"]
+      "options": [
+        "true",
+        "false"
+      ]
     },
     "CONVERTER_PARALLEL_LIMIT": {
       "description": "Maximum number of parallel conversions",
@@ -75,14 +84,18 @@
       "secret": false,
       "type": "string",
       "default": "true",
-      "options": ["true", "false"]
+      "options": [
+        "true",
+        "false"
+      ]
     }
   },
   "auth": {
-  "api_key": "convertermcp-test-key-ijkl"
-},
+    "api_key": "convertermcp-test-key-ijkl"
+  },
   "allowed_roots": [
     "/workspaces"
   ],
-  "max_docx_size_mb": 20
+  "max_docx_size_mb": 20,
+  "transport": "sse"
 }
