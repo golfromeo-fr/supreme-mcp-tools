@@ -37,6 +37,7 @@ from memory_core import (
     redact_sensitive_text, check_sensitivity,
 )
 from shared.store_models import Filter, FieldCondition, MatchValue, MatchContains, PointStruct
+from text_utils import similarity_with_fallback
 
 # For FEF V3 extensions
 try:
@@ -911,6 +912,11 @@ async def mergeDuplicates(
     redundant entries. Set threshold to control how similar memories must be
     to be merged (0-1, higher = stricter matching).
 
+    Similarity prefers cosine over the already-stored embedding vectors (so
+    paraphrases with identical meaning are caught); pairs where either vector
+    is missing fall back to word-level Jaccard overlap. No new embeddings
+    are computed.
+
     Args:
         threshold: Similarity threshold for duplicates (0-1, default: 0.95)
         dry_run: If True, only report what would be merged
@@ -924,8 +930,10 @@ async def mergeDuplicates(
     try:
         from collections import defaultdict
 
-        # Get all memories
-        all_points = scroll_all(COLLECTION_NAME)
+        # Get all memories, stored vectors included so duplicate detection can
+        # use cosine similarity (LOW-4); points without vectors degrade to the
+        # word-Jaccard fallback per pair.
+        all_points = list(vector_store.iter_all(COLLECTION_NAME, with_vectors=True))
 
         # Group by type and compute similarity
         groups = defaultdict(list)
@@ -944,14 +952,19 @@ async def mergeDuplicates(
                 for p2 in points[i+1:]:
                     if str(p2.id) in already_marked:
                         continue
-                    # Compare text similarity (simple word overlap for now)
-                    text1 = set(p1.payload.get("text", "").lower().split())
-                    text2 = set(p2.payload.get("text", "").lower().split())
-
-                    if not text1 or not text2:
+                    # Compare similarity (LOW-4): cosine over stored embedding
+                    # vectors when both are available, word-level Jaccard
+                    # otherwise. Never computes new embeddings.
+                    result = similarity_with_fallback(
+                        getattr(p1, "vector", None),
+                        getattr(p2, "vector", None),
+                        p1.payload.get("text", ""),
+                        p2.payload.get("text", ""),
+                    )
+                    if result is None:
                         continue
 
-                    overlap = len(text1 & text2) / max(len(text1 | text2), 1)
+                    overlap, _similarity_method = result
 
                     if overlap >= threshold:
                         # Keep the one with more usage

@@ -401,5 +401,146 @@ class TestTextToGraphMermaid(unittest.TestCase):
         self.assertIn("has_section", result)
 
 
+# ============================================================================
+# text_utils: similarity math (LOW-4 — mergeDuplicates cosine + fallback)
+# ============================================================================
+
+class TestCosineSimilarity(unittest.TestCase):
+
+    def test_identical_vectors(self):
+        from text_utils import cosine_similarity
+        self.assertAlmostEqual(cosine_similarity([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]), 1.0)
+
+    def test_orthogonal_vectors(self):
+        from text_utils import cosine_similarity
+        self.assertAlmostEqual(cosine_similarity([1.0, 0.0], [0.0, 1.0]), 0.0)
+
+    def test_opposite_vectors(self):
+        from text_utils import cosine_similarity
+        self.assertAlmostEqual(cosine_similarity([1.0, 0.0], [-1.0, 0.0]), -1.0)
+
+    def test_known_value(self):
+        from text_utils import cosine_similarity
+        # [1,0,1] vs [1,1,0] -> dot=1, norms=sqrt(2)*sqrt(2) -> 0.5
+        self.assertAlmostEqual(cosine_similarity([1.0, 0.0, 1.0], [1.0, 1.0, 0.0]), 0.5)
+
+    def test_none_vector(self):
+        from text_utils import cosine_similarity
+        self.assertIsNone(cosine_similarity(None, [1.0, 0.0]))
+        self.assertIsNone(cosine_similarity([1.0, 0.0], None))
+
+    def test_empty_vector(self):
+        from text_utils import cosine_similarity
+        self.assertIsNone(cosine_similarity([], [1.0, 0.0]))
+        self.assertIsNone(cosine_similarity([1.0, 0.0], []))
+
+    def test_dimension_mismatch(self):
+        from text_utils import cosine_similarity
+        self.assertIsNone(cosine_similarity([1.0, 0.0], [1.0, 0.0, 0.0]))
+
+    def test_zero_vector(self):
+        from text_utils import cosine_similarity
+        self.assertIsNone(cosine_similarity([0.0, 0.0], [1.0, 0.0]))
+
+    def test_non_numeric_garbage(self):
+        from text_utils import cosine_similarity
+        self.assertIsNone(cosine_similarity(["a", "b"], [1.0, 0.0]))
+
+    def test_single_named_vector_dict(self):
+        from text_utils import cosine_similarity
+        self.assertAlmostEqual(cosine_similarity({"default": [1.0, 0.0]}, [1.0, 0.0]), 1.0)
+
+    def test_multi_named_vector_dict_unusable(self):
+        from text_utils import cosine_similarity
+        self.assertIsNone(cosine_similarity({"a": [1.0], "b": [0.0]}, [1.0, 0.0]))
+
+
+class TestWordJaccardSimilarity(unittest.TestCase):
+
+    def test_identical_texts(self):
+        from text_utils import word_jaccard_similarity
+        self.assertAlmostEqual(word_jaccard_similarity("a b c", "a b c"), 1.0)
+
+    def test_disjoint_texts(self):
+        from text_utils import word_jaccard_similarity
+        self.assertAlmostEqual(word_jaccard_similarity("a b", "c d"), 0.0)
+
+    def test_case_and_whitespace_tokenization(self):
+        from text_utils import word_jaccard_similarity
+        self.assertAlmostEqual(word_jaccard_similarity("Hello World", "hello   world"), 1.0)
+
+    def test_partial_overlap(self):
+        from text_utils import word_jaccard_similarity
+        # {"a","b","c"} vs {"a","b","d"} -> 2/4
+        self.assertAlmostEqual(word_jaccard_similarity("a b c", "a b d"), 0.5)
+
+    def test_empty_text_returns_none(self):
+        from text_utils import word_jaccard_similarity
+        self.assertIsNone(word_jaccard_similarity("", "a b"))
+        self.assertIsNone(word_jaccard_similarity("a b", ""))
+        self.assertIsNone(word_jaccard_similarity(None, "a b"))
+
+
+class TestSimilarityWithFallback(unittest.TestCase):
+
+    def test_prefers_cosine_when_both_vectors_present(self):
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback(
+            [1.0, 0.0], [0.0, 1.0], "completely different words", "nothing alike here",
+        )
+        self.assertEqual(method, "cosine")
+        self.assertAlmostEqual(score, 0.0)
+
+    def test_falls_back_when_one_vector_missing(self):
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback(None, [1.0, 0.0], "a b c", "a b c")
+        self.assertEqual(method, "jaccard")
+        self.assertAlmostEqual(score, 1.0)
+
+    def test_falls_back_when_both_vectors_missing(self):
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback(None, [], "a b c", "a b d")
+        self.assertEqual(method, "jaccard")
+        self.assertAlmostEqual(score, 0.5)
+
+    def test_falls_back_on_dimension_mismatch(self):
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback([1.0, 0.0], [1.0, 0.0, 0.0], "a b", "a b")
+        self.assertEqual(method, "jaccard")
+        self.assertAlmostEqual(score, 1.0)
+
+    def test_falls_back_on_zero_vector(self):
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback([0.0, 0.0], [1.0, 0.0], "a b", "a b c")
+        self.assertEqual(method, "jaccard")
+        self.assertAlmostEqual(score, 2 / 3)
+
+    def test_returns_none_when_nothing_usable(self):
+        from text_utils import similarity_with_fallback
+        self.assertIsNone(similarity_with_fallback(None, None, "", "a b"))
+        self.assertIsNone(similarity_with_fallback(None, None, "a b", ""))
+
+    def test_above_threshold_pair(self):
+        # Identical stored vectors score 1.0 -> merges at the default 0.95
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback([3.0, 4.0], [3.0, 4.0], "x", "y")
+        self.assertEqual(method, "cosine")
+        self.assertGreaterEqual(score, 0.95)
+
+    def test_below_threshold_pair(self):
+        # [1,0] vs [1,1] -> cos = 1/sqrt(2) ~ 0.707 < 0.95 -> no merge
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback([1.0, 0.0], [1.0, 1.0], "x", "y")
+        self.assertEqual(method, "cosine")
+        self.assertLess(score, 0.95)
+
+    def test_fallback_threshold_behavior(self):
+        # Jaccard path honors the same threshold: 2/3 < 0.95 -> no merge
+        from text_utils import similarity_with_fallback
+        score, method = similarity_with_fallback(None, None, "a b", "a b c")
+        self.assertEqual(method, "jaccard")
+        self.assertLess(score, 0.95)
+
+
 if __name__ == "__main__":
     unittest.main()

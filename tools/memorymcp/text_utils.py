@@ -133,3 +133,80 @@ def extract_verified_names(text: str) -> str:
     for name in sorted(found):
         lines.append(f"  {name}")
     return "\n".join(lines)
+
+
+# ============================================================================
+# Similarity scoring (pure math — used by mergeDuplicates, unit-testable)
+# ============================================================================
+
+def _as_dense_vector(vec) -> list[float] | None:
+    """Normalize a stored vector into a plain list[float], or None if unusable."""
+    if isinstance(vec, dict):
+        # Named-vector layout: only usable when there is exactly one named vector
+        if len(vec) != 1:
+            return None
+        vec = next(iter(vec.values()))
+    if not isinstance(vec, (list, tuple)) or not vec:
+        return None
+    try:
+        return [float(x) for x in vec]
+    except (TypeError, ValueError):
+        return None
+
+
+def cosine_similarity(vec1, vec2) -> float | None:
+    """
+    Cosine similarity between two dense vectors (higher = more similar).
+
+    Returns None when either vector is missing/empty/malformed, when the
+    dimensions differ, or when either has zero magnitude — callers should
+    treat None as "cannot compare" and fall back (e.g. to word Jaccard).
+    """
+    a = _as_dense_vector(vec1)
+    b = _as_dense_vector(vec2)
+    if a is None or b is None or len(a) != len(b):
+        return None
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return None
+    return dot / ((norm_a ** 0.5) * (norm_b ** 0.5))
+
+
+def word_jaccard_similarity(text1: str, text2: str) -> float | None:
+    """
+    Word-level Jaccard similarity (|A∩B| / |A∪B|) over lowercased whitespace
+    tokens.
+
+    Returns None when either text has no tokens (caller skips the pair).
+    Kept as the fallback for duplicate detection when embedding vectors are
+    unavailable.
+    """
+    set1 = set((text1 or "").lower().split())
+    set2 = set((text2 or "").lower().split())
+    if not set1 or not set2:
+        return None
+    return len(set1 & set2) / max(len(set1 | set2), 1)
+
+
+def similarity_with_fallback(vec1, vec2, text1: str, text2: str) -> tuple[float, str] | None:
+    """
+    Pairwise similarity for duplicate detection.
+
+    Prefers cosine similarity over already-stored embedding vectors (no new
+    embedding calls are made); falls back to word-level Jaccard when either
+    vector is unavailable. Returns (score, method) where method is "cosine"
+    or "jaccard", or None when neither method can score the pair.
+    """
+    cosine = cosine_similarity(vec1, vec2)
+    if cosine is not None:
+        return cosine, "cosine"
+    jaccard = word_jaccard_similarity(text1, text2)
+    if jaccard is not None:
+        return jaccard, "jaccard"
+    return None
