@@ -32,6 +32,7 @@ import os
 import hmac
 import secrets as _secrets
 import time
+import urllib.parse
 import warnings
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
@@ -149,6 +150,28 @@ def _jsonrpc_failure_marker(body: bytes) -> str | None:
     return None
 
 
+def _extract_log_session(
+    headers: dict[str, str], path: str, query_string: bytes | str = b""
+) -> str | None:
+    """Session id for the access line: Mcp-Session-Id header, else SSE query param.
+
+    The modern dialects carry the session in a header; legacy SSE clients
+    cannot — the SSE transport hands the client an endpoint URL and every
+    message POSTs to ``/messages/?session_id=<id>``. The header wins when
+    present; the query param is the SSE-only fallback so /messages lines stop
+    looking session-less. None → the log line prints ``NEW``.
+    """
+    session = headers.get("mcp-session-id")
+    if session:
+        return session
+    if path.rstrip("/") == "/messages" and query_string:
+        if isinstance(query_string, bytes):
+            query_string = query_string.decode("latin-1")
+        values = urllib.parse.parse_qs(query_string).get("session_id") or []
+        return values[0] if values else None
+    return None
+
+
 class RequestLogMiddleware:
     """One INFO line per HTTP request hitting the tool app (logger ``mcp.access``).
 
@@ -163,7 +186,9 @@ class RequestLogMiddleware:
       without it four servers' lines are indistinguishable
     - ``v=``       — MCP-Protocol-Version header (``-`` when absent); 2026-07-28
       names the modern session-less dialect
-    - ``session=`` — Mcp-Session-Id prefix, ``NEW`` when the request carries none
+    - ``session=`` — Mcp-Session-Id prefix, ``NEW`` when the request carries
+      none; legacy-SSE POSTs to ``/messages/?session_id=<id>`` show the
+      query-param id (see _extract_log_session)
     - ``in Nms``   — handler duration
     - ``tools/call echo`` — JSON-RPC method + tool name, taken from the modern
       routing headers when present, else a bounded sniff of the request body
@@ -193,12 +218,16 @@ class RequestLogMiddleware:
             k.decode("latin-1").lower(): v.decode("latin-1")
             for k, v in (scope.get("headers") or [])
         }
-        session = headers.get("mcp-session-id")
         proto = headers.get("mcp-protocol-version")
         client = scope.get("client")
         peer = f"{client[0]}:{client[1]}" if client else "-"
         method = scope.get("method", "-")
         path = scope.get("path", "-")
+        # Header session when present (modern dialects); SSE POSTs carry theirs
+        # only as a query param (/messages/?session_id=<id>) — fall back to it.
+        session = _extract_log_session(
+            headers, path, scope.get("query_string") or b""
+        )
 
         # JSON-RPC method + tool name: the modern dialect's routing headers
         # identify it for free; legacy requests (streamable /mcp AND SSE-era

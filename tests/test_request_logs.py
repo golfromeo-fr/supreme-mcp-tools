@@ -85,6 +85,39 @@ def test_initialize_and_reuse_are_logged(reqlog_app, caplog):
                for m in messages), messages
 
 
+def test_sse_messages_post_logs_query_session(reqlog_app, caplog):
+    """A legacy-SSE POST /messages/?session_id=<id> logs the id, not NEW.
+
+    The SSE session id never rides a header — the transport hands the client
+    an endpoint URL and every message POSTs to /messages/?session_id=<id>.
+    No live SSE stream backs the id here (unknown session -> 4xx), but the
+    middleware sits outside auth and logs the line regardless, so the session
+    field is exercised either way. Truncation follows the session[:8] prefix
+    convention used for header ids.
+    """
+    from starlette.testclient import TestClient
+
+    caplog.set_level(logging.INFO, logger="mcp.access")
+    with TestClient(reqlog_app) as client:
+        r = client.post(
+            "/messages/",
+            params={"session_id": "abcdefgh-1234-5678-90ab-cdef00000000"},
+            headers={
+                "Authorization": "Bearer test-key-123",
+                "Content-Type": "application/json",
+            },
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        assert r.status_code in (200, 400, 404)
+
+    records = _access_records(caplog)
+    messages = [r.getMessage() for r in records]
+    assert any("POST /messages/" in m and "session=abcdefgh" in m and "-> " in m
+               for m in messages), messages
+    assert not any("POST /messages/" in m and "session=NEW" in m
+                   for m in messages), messages
+
+
 def test_modern_protocol_dialect_is_logged(reqlog_app, caplog):
     """A 2026-07-28 single-exchange request (no session, modern header) logs v=... .
 
@@ -187,3 +220,43 @@ def test_request_logs_can_be_disabled(monkeypatch, caplog):
         assert client.get("/admin/flush-sessions").status_code in (401, 405)
 
     assert _access_records(caplog) == []
+
+
+# ── _extract_log_session: pure session-field resolution (no server) ────────
+
+
+def test_header_session_wins_everywhere():
+    """Mcp-Session-Id header takes precedence — on /mcp and on /messages."""
+    from tools.shared.server_factory import _extract_log_session
+
+    assert _extract_log_session(
+        {"mcp-session-id": "header0-aaaa"}, "/mcp", b""
+    ) == "header0-aaaa"
+    assert _extract_log_session(
+        {"mcp-session-id": "header0-aaaa"}, "/messages/",
+        b"session_id=query0-bbbb",
+    ) == "header0-aaaa"
+
+
+def test_sse_query_param_is_the_fallback():
+    """/messages/?session_id=<id> resolves the id when no header exists."""
+    from tools.shared.server_factory import _extract_log_session
+
+    assert _extract_log_session(
+        {}, "/messages/", b"session_id=abcdefgh12345678"
+    ) == "abcdefgh12345678"
+    assert _extract_log_session(
+        {}, "/messages", b"session_id=abcdefgh12345678"
+    ) == "abcdefgh12345678"
+
+
+def test_no_session_yields_new():
+    """Missing everywhere -> None (the line prints NEW); non-SSE paths never
+    fall back to the query param."""
+    from tools.shared.server_factory import _extract_log_session
+
+    assert _extract_log_session({}, "/mcp", b"") is None
+    assert _extract_log_session({}, "/messages/", b"") is None
+    assert _extract_log_session({}, "/messages/", b"other=1") is None
+    assert _extract_log_session({}, "/mcp", b"session_id=not-for-mcp") is None
+    assert _extract_log_session({}, "/messages/", b"session_id=") is None
