@@ -945,12 +945,12 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 |--------|-------|-------------|
 | **🟢 DONE** | 40 | Fixed in current branch (verified 2026-05-29) |
 | **❌ UNFIXED** | 0 | Was 6 (only 5 IDs ever enumerated — a miscount); all fixed, re-verified 2026-09-02 |
-| **⚠️ PARTIAL** | 4 | Partially addressed |
+| **⚠️ PARTIAL** | 0 | Was 4 — all closed 2026-09-02 (HIGH-14, MED-17, LOW-4, LOW-5) |
 | **❌ N/A** | 2 | False positive (not a bug) |
 | **INFO** | 14 | Dead code, style issues, deprecated APIs |
 | **TOTAL** | 67 | All tracked bugs (excl. INFO)
 
-**Fix Progress** (verified 2026-05-29; re-verified 2026-09-02): 45 fixed (🟢) — the 5 enumerated UNFIXED items (CRIT-3, MED-16, LOW-7, LOW-8, LOW-9) are all fixed now; 0 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A) — out of 67 tracked bugs
+**Fix Progress** (verified 2026-05-29; re-verified and closed out 2026-09-02): 49 fixed (🟢) — the 5 enumerated UNFIXED items and all 4 PARTIAL items are fixed/closed; 0 unfixed (❌), 0 partial (⚠️), 2 false positive (N/A) — out of 67 tracked bugs
 
 ---
 
@@ -1096,7 +1096,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **HIGH-11** | ✅ CONFIRMED | Move `sys.modules` insertion AFTER `exec_module()` succeeds, or clean up on failure | 🟢 DONE | Verified: plugins/loader.py:88-90 cleans up sys.modules on failure |
 | **HIGH-12** | ✅ CONFIRMED | Add `_registry_lock` acquisition to `__init__` and `register_global` writes in `registry.py` | 🟢 DONE | Verified: registry.py:138,150 use `with _registry_write_lock` |
 | **HIGH-13** | ✅ CONFIRMED | Replace fake pool (lines 82-106) with `psycopg_pool.ConnectionPool` or real connection reuse | 🟢 DONE | Verified: pg_store.py:86-112 implements psycopg_pool with real ConnectionPool |
-| **HIGH-14** | ⚠️ PARTIAL | Require pg_trgm only when full-text search is needed, not for basic schema init | ⚠️ PARTIAL | Verified: _ensure_schema still requires pg_trgm but DDL continues on failure |
+| **HIGH-14** | ⚠️ PARTIAL | Require pg_trgm only when full-text search is needed, not for basic schema init | 🟢 DONE 2026-09-02 | Feature-scoped in impls/postgres_sql.py: core DDL first, trgm extension attempt optional with availability flag; search_text degrades to ILIKE (one-time warn) when trgm unavailable. Note: no live caller depends on search_text today |
 | **HIGH-15** | ✅ CONFIRMED | Fall back to `created_at` when `last_accessed` is None, or return 1.0 for fresh memories | 🟢 DONE | Verified: relevance_scorer.py:59 returns 1.0 when last_accessed is None |
 | **HIGH-16** | ✅ CONFIRMED | Wrap `search.get_dict()` in `await asyncio.to_thread()` in `webmcp_fastmcp.py:496` | 🟢 DONE | Verified: webmcp_fastmcp.py:547 uses `await asyncio.to_thread(search.get_dict)` |
 | **HIGH-17** | ✅ CONFIRMED | Track visited descendants to avoid double-emitting in `_html_to_markdown` | 🟢 DONE | Verified: webmcp_fastmcp.py:188-192 uses `_visited` set to prevent duplicates |
@@ -1117,7 +1117,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **MED-14** | ✅ CONFIRMED | Close response in `except` block (not just `finally`) or use `async with` for auto-close | 🟢 DONE | Verified: tools_config.py:218,248 closes in `finally` block |
 | **MED-15** | ✅ CONFIRMED | Add TTL-based cleanup for `_pending_codes` with periodic `asyncio.create_task()` sweep | 🟢 DONE | Verified: server_manager.py adds _cleanup_expired() and background task every 60s |
 | **MED-16** | ⚠️ PARTIAL | Replace FIFO dict with `collections.OrderedDict` and move accessed keys to end (true LRU) | 🟢 DONE 2026-09-02 | CacheManager is now a true LRU: OrderedDict, `move_to_end` on fresh get, `popitem(last=False)` at capacity; tests/test_bug_fixes_medium.py::TestMED16LRUCacheEviction |
-| **MED-17** | ⚠️ PARTIAL | Hold lock through subscriber queue iteration, or copy list before iterating | ⚠️ PARTIAL | Verified: distributed_registry.py:315-316 releases lock before iterating; copy is made |
+| **MED-17** | ⚠️ PARTIAL | Hold lock through subscriber queue iteration, or copy list before iterating | 🟢 DONE | Re-verified 2026-09-02: publish() copies the subscriber list under the lock and iterates the copy with per-subscriber try/except isolation (distributed_registry.py:316-323) — the prescribed option 2, race-free |
 | **MED-18** | ✅ CONFIRMED | Reuse single `asyncio.EventLoop` across all files in incremental indexer | 🟢 DONE | Verified: incremental_indexer.py:860-920 uses single event loop with concurrent semaphore (max 20), `asyncio.as_completed()` for progress, model caching via `local_embeddings._model_cache` |
 | **MED-19** | ✅ CONFIRMED | Pass config via parameters instead of mutating `os.environ` globally | 🟢 DONE | Verified: local_embeddings.py:85-99 restores old env values in finally block |
 | **MED-20** | ✅ CONFIRMED | Move metrics increment before early return in `convertermcp_fastmcp.py:230` | 🟢 DONE | Verified: convertermcp_fastmcp.py:248 increments before return |
@@ -1125,8 +1125,8 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **LOW-1** | ✅ CONFIRMED | Add `timeout=` parameter to `QdrantClient(host=..., port=..., timeout=...)` | 🟢 DONE | Verified: memory_core.py:107 uses `timeout=30` |
 | **LOW-2** | ✅ CONFIRMED | Read vector dimension from embedding model config, fail fast if mismatch | 🟢 DONE | Verified: memory_core.py:117 reads `EMBEDDING_DIM` env var |
 | **LOW-3** | ✅ CONFIRMED | Build hash-map of point IDs for O(1) lookup instead of O(n) scan | 🟢 DONE | Verified: memory_graph.py:304 builds `point_ids` set for O(1) lookup |
-| **LOW-4** | ⚠️ PARTIAL | Use semantic embeddings for Jaccard comparison instead of tokenized words | ⚠️ PARTIAL | Verified: memory_tools.py:952-959 still uses word-level Jaccard; no embedding-based similarity |
-| **LOW-5** | ⚠️ PARTIAL | Mask password in DSN string, never log exception messages containing DSN | ⚠️ PARTIAL | Verified: DSN still contains password; error logging not reviewed |
+| **LOW-4** | ⚠️ PARTIAL | Use semantic embeddings for Jaccard comparison instead of tokenized words | 🟢 DONE 2026-09-02 | mergeDuplicates compares stored-vector cosines (text_utils.similarity_with_fallback); word-Jaccard remains the fallback when vectors are unavailable |
+| **LOW-5** | ⚠️ PARTIAL | Mask password in DSN string, never log exception messages containing DSN | 🟢 DONE 2026-09-02 | _masked_dsn/_safe_error applied at all 10 exception-carrying log sites in impls/postgres_sql.py (keyword + URL DSN forms) |
 | **LOW-6** | ✅ CONFIRMED | Add `threading.Lock()` or check-and-set in `init_pg()` before creating `_pool` | 🟢 DONE | Verified: pg_store.py:52 uses `_init_lock` |
 | **LOW-7** | ✅ CONFIRMED | Check existence before delete in S3 fallback, or return `False` for both local/S3 | 🟢 DONE | Re-verified 2026-09-02: delete() head_object-checks first, returns False on 404 (regression guard: tests/test_artifact_store.py::TestDeleteS3Unchanged) |
 | **LOW-8** | ✅ CONFIRMED | Distinguish "not found" from network errors (raise custom exception or return enum) | 🟢 DONE 2026-09-02 | `ArtifactStoreError` raised on non-404 S3 failures in exists()/load()/get_metadata(); 404 still returns False/None; tests/test_artifact_store.py |
@@ -1152,7 +1152,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **P2** | Significant refactor (half-day each) |
 | **P3** | Major structural work (full day+) |
 
-**Summary:** 12 CRIT / 16 HIGH / 21 MED / 16 LOW = 65 tracked bugs (+ 14 INFO). As of 2026-05-29: 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A). Re-verified 2026-09-02: all 5 enumerated unfixed items fixed — 0 unfixed, 4 partial (⚠️).
+**Summary:** 12 CRIT / 16 HIGH / 21 MED / 16 LOW = 65 tracked bugs (+ 14 INFO). As of 2026-05-29: 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A). 2026-09-02 first pass: all 5 enumerated unfixed items fixed. 2026-09-02 second pass: all 4 PARTIALs fixed/closed. **Tracker state: 0 unfixed, 0 partial.**
 
 ---
 
@@ -1175,7 +1175,7 @@ All five enumerated UNFIXED items are now fixed (the "6" above was a miscount �
 - **MED-16** — CacheManager converted to true LRU (fixed this pass, 2026-09-02)
 - **LOW-8** — `ArtifactStoreError` distinguishes storage failures from not-found (fixed this pass, 2026-09-02)
 
-**Still PARTIAL (re-confirmed 2026-09-02, no change):** HIGH-14 (pg_trgm still required at schema init) | MED-17 (copied-list mitigation noted; kept PARTIAL pending re-review) | LOW-4 (word-level Jaccard, not embeddings) | LOW-5 (DSN password still unmasked in logs)
+**Former PARTIALs — closed 2026-09-02 (agent pass):** HIGH-14 trgm feature-scoped (postgres impl) | MED-17 closed as DONE (copy + per-subscriber isolation verified) | LOW-4 cosine with Jaccard fallback in mergeDuplicates | LOW-5 DSN masking at all log sites. **Zero UNFIXED, zero PARTIAL remain in this tracker.**
 
 ---
 
