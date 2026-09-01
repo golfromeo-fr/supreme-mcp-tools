@@ -1,8 +1,8 @@
 # Memory MCP dependencies
 qdrant-client>=1.7.0
 sentence-transformers>=2.2.0
-# BETA PIN while porting to fastmcp 4 (feature/fastmcp-4) — match root requirements.txt
-fastmcp==4.0.0b3
+# Match root requirements.txt (stable fastmcp 4)
+fastmcp==4.0.0
 pydantic>=2.12.0
 python-dotenv>=1.0.0
 boto3>=1.28.0
