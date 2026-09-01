@@ -21,7 +21,7 @@ from collections import defaultdict
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-SKIP_DIRS = {".git", "old", "__pycache__", ".venv", "env", "node_modules"}
+SKIP_DIRS = {".git", ".kilo", "old", "__pycache__", ".venv", "env", "node_modules"}
 
 
 def find_requirements() -> list[Path]:

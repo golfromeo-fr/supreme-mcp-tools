@@ -313,7 +313,9 @@ from launcher.config.manager import ConfigManager
                 "version": "v3",
                 "management_server": {
                     "host": DEFAULT_HOST,
-                    "port": 9091
+                    # Central management port; keep in sync with config/ports.json
+                    # (reserved.central_management). 9091 was a dead old-scheme port.
+                    "port": 8200
                 },
                 "security": {
                     "enabled": False
