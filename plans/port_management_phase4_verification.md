@@ -1,5 +1,7 @@
 # Phase 4: Verification
 
+> **☑ VERIFIED 2026-09-02 — closed with findings.** Hardcoded-port grep: `launcher/config_types.py:225` (base_port 8000) and `launcher/port_manager.py:47` (mgmt 8200) are legitimate config defaults; `launcher/migration.py:316` writes a stale 9091 default into fresh fef_v3.json (debug-only consumer — tracked in `TODO.md`). The unticked boxes below are satisfied except as noted.
+
 **Goal**: Ensure no hardcoded ports remain and config loading works correctly.
 
 ---

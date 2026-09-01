@@ -1,5 +1,7 @@
 # AGENTS.md
 
+*Pending work: [`TODO.md`](TODO.md) at the repo root (local-only, gitignored) is the single actionable tracker. Superseded plan/architecture docs carry dated deprecation banners pointing there — do not execute them.*
+
 ## Commands
 
 ```bash

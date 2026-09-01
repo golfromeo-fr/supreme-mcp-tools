@@ -1,5 +1,7 @@
 # NiceGUI Management UI Development Plan
 
+> **⚠ HISTORICAL — superseded 2026-08-30 by the mcp_ui overhaul (ac3c189..a22b6d0).** Describes the pre-overhaul UI; unchecked boxes below are not pending work. Live tracker: `TODO.md` (repo root, local-only).
+
 ## Context
 
 The MCP tools management system has a centralized management server (`launcher/management_server.py`) that provides REST API endpoints for:

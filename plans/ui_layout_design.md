@@ -1,5 +1,7 @@
 # NiceGUI Management UI - Layout Design Document
 
+> **⚠ HISTORICAL — superseded 2026-08-30 by the mcp_ui overhaul (ac3c189..a22b6d0).** Describes the pre-overhaul layout; unchecked boxes below are not pending work. Live tracker: `TODO.md` (repo root, local-only).
+
 ## Overview
 
 This document provides a comprehensive UI layout specification for the NiceGUI Management UI. It defines the exact page structure, component layouts, CSS styling, and launch configuration needed to implement and run the web interface.

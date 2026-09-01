@@ -1,5 +1,7 @@
 # Unified MCP Launcher System - Architecture Design
 
+> **⚠ HISTORICAL — early design proposal (“Proposed Layout”).** The real tree diverged: tools/<name>/<name>_fastmcp.py entries, tools/shared/ + impls/ backends, multi-transport server_factory. Trust AGENTS.md and `python -m launcher --help` / `python launchmcp.py --help`. Live tracker: `TODO.md` (repo root, local-only).
+
 ## Directory Structure
 
 ### Proposed Layout

@@ -1,5 +1,7 @@
 # mcp_ui Rebuild Plan
 
+> **❌ REJECTED 2026-08-30 — DO NOT EXECUTE.** The full rebuild was declined; the shipped outcome was the targeted audit-repair + overhaul (ac3c189..a22b6d0). Historical reference only — the unchecked boxes below are NOT pending work. Live tracker: `TODO.md` (repo root, local-only).
+
 ## Executive Summary
 
 The mcp_ui (Management UI) requires a complete rebuild to address blocking issues, missing logging, and architectural complexity. This plan provides a structured approach to rebuild the UI with simplicity, non-blocking patterns, and comprehensive logging as core principles.
