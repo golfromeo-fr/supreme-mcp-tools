@@ -115,7 +115,48 @@ class TestLOW8S3ExistsErrors(unittest.TestCase):
         func = source[source.find("async def exists"):]
         chunk = func[:1000]
         self.assertIn("logger.error", chunk)
-        self.assertIn("ClientError", chunk)
+        # 404-vs-error discrimination lives in the _is_s3_not_found helper
+        # (a ClientError HTTP-status check); real errors raise ArtifactStoreError.
+        self.assertIn("_is_s3_not_found", chunk)
+        self.assertIn("ArtifactStoreError", chunk)
+
+    def test_exists_raises_on_network_error(self):
+        # Simulated S3 outage: exists() must raise, not return False.
+        from tools.shared.artifact_store import ArtifactStore, ArtifactStoreError
+        from botocore.exceptions import EndpointConnectionError
+        store = ArtifactStore(local_fallback=True, local_dir="/tmp/test_artifacts_low8")
+        store._client = MagicMock()
+        store._client.head_object.side_effect = EndpointConnectionError(
+            endpoint_url="http://127.0.0.1:9"
+        )
+        store._initialized = True
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(ArtifactStoreError):
+                loop.run_until_complete(store.exists("some_key"))
+        finally:
+            loop.close()
+
+    def test_exists_false_on_404(self):
+        # A genuine 404 must still mean "not found" (False), not an error.
+        from tools.shared.artifact_store import ArtifactStore
+        from botocore.exceptions import ClientError
+        store = ArtifactStore(local_fallback=True, local_dir="/tmp/test_artifacts_low8")
+        store._client = MagicMock()
+        store._client.head_object.side_effect = ClientError(
+            {"Error": {"Code": "404", "Message": "Not Found"},
+             "ResponseMetadata": {"HTTPStatusCode": 404}},
+            "HeadObject",
+        )
+        store._initialized = True
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(store.exists("some_key"))
+        finally:
+            loop.close()
+        self.assertFalse(result)
 
 
 class TestLOW9DuplicateArgparse(unittest.TestCase):

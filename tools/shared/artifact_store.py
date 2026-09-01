@@ -25,6 +25,26 @@ class ArtifactRef:
     metadata: dict[str, str] | None = None
 
 
+class ArtifactStoreError(Exception):
+    """
+    Raised when an artifact operation fails for a reason other than the
+    key not existing (network error, auth failure, throttling, ...).
+
+    "Not found" is NOT an error: exists() returns False and load()/
+    get_metadata() return None in that case. This exception distinguishes
+    "artifact store unreachable" from "artifact gone".
+    """
+
+
+def _is_s3_not_found(e: Exception) -> bool:
+    """True if the exception is an S3 ClientError with HTTP status 404."""
+    import botocore.exceptions
+    return (
+        isinstance(e, botocore.exceptions.ClientError)
+        and e.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404
+    )
+
+
 class ArtifactStore:
     """
     S3/MinIO artifact store for large memory blobs.
@@ -176,6 +196,9 @@ class ArtifactStore:
 
         Returns:
             Binary data or None if not found
+
+        Raises:
+            ArtifactStoreError: On network/storage failures (not for missing keys)
         """
         self._init_client()
 
@@ -184,8 +207,10 @@ class ArtifactStore:
                 response = self._client.get_object(Bucket=self.bucket, Key=key)
                 return response["Body"].read()
             except Exception as e:
+                if _is_s3_not_found(e):
+                    return None
                 logger.error(f"S3 load failed for {key}: {e}")
-                return None
+                raise ArtifactStoreError(f"S3 load failed for {key}: {e}") from e
         else:
             path = self._local_path(key)
             if path.exists():
@@ -208,8 +233,7 @@ class ArtifactStore:
             try:
                 self._client.head_object(Bucket=self.bucket, Key=key)
             except Exception as e:
-                import botocore.exceptions
-                if isinstance(e, botocore.exceptions.ClientError) and e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
+                if _is_s3_not_found(e):
                     return False
                 logger.error(f"S3 head_object failed for {key}: {e}")
                 return False
@@ -234,7 +258,12 @@ class ArtifactStore:
             return deleted
 
     async def exists(self, key: str) -> bool:
-        """Check if artifact exists."""
+        """
+        Check if artifact exists.
+
+        Raises:
+            ArtifactStoreError: On network/storage failures (not for missing keys)
+        """
         self._init_client()
 
         if self._client:
@@ -242,16 +271,23 @@ class ArtifactStore:
                 self._client.head_object(Bucket=self.bucket, Key=key)
                 return True
             except Exception as e:
-                import botocore.exceptions
-                if isinstance(e, botocore.exceptions.ClientError) and e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
+                if _is_s3_not_found(e):
                     return False
                 logger.error(f"S3 exists check failed for {key}: {e}")
-                return False
+                raise ArtifactStoreError(f"S3 exists check failed for {key}: {e}") from e
         else:
             return self._local_path(key).exists()
 
     async def get_metadata(self, key: str) -> dict[str, Any] | None:
-        """Get artifact metadata."""
+        """
+        Get artifact metadata.
+
+        Returns:
+            Metadata dict or None if not found
+
+        Raises:
+            ArtifactStoreError: On network/storage failures (not for missing keys)
+        """
         self._init_client()
 
         if self._client:
@@ -263,8 +299,11 @@ class ArtifactStore:
                     "metadata": response.get("Metadata", {}),
                     "stored_at": response.get("LastModified"),
                 }
-            except Exception:
-                return None
+            except Exception as e:
+                if _is_s3_not_found(e):
+                    return None
+                logger.error(f"S3 get_metadata failed for {key}: {e}")
+                raise ArtifactStoreError(f"S3 get_metadata failed for {key}: {e}") from e
         else:
             meta_path = self._meta_path(key)
             if meta_path.exists():
