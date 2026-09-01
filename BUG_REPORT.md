@@ -944,13 +944,13 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | Status | Count | Description |
 |--------|-------|-------------|
 | **🟢 DONE** | 40 | Fixed in current branch (verified 2026-05-29) |
-| **❌ UNFIXED** | 6 | Bug still present in current code |
+| **❌ UNFIXED** | 0 | Was 6 (only 5 IDs ever enumerated — a miscount); all fixed, re-verified 2026-09-02 |
 | **⚠️ PARTIAL** | 4 | Partially addressed |
 | **❌ N/A** | 2 | False positive (not a bug) |
 | **INFO** | 14 | Dead code, style issues, deprecated APIs |
 | **TOTAL** | 67 | All tracked bugs (excl. INFO)
 
-**Fix Progress** (verified 2026-05-29): 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A) — out of 67 tracked bugs
+**Fix Progress** (verified 2026-05-29; re-verified 2026-09-02): 45 fixed (🟢) — the 5 enumerated UNFIXED items (CRIT-3, MED-16, LOW-7, LOW-8, LOW-9) are all fixed now; 0 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A) — out of 67 tracked bugs
 
 ---
 
@@ -1073,7 +1073,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 |--------|-----------------|--------------|----------|
 | **CRIT-1** | ✅ CONFIRMED | Pattern already fixed in branch — confirms `link_tags` regex uses `(.*?)` capture group | 🟢 DONE | Verified: html_utils.py:150 has `(.*?)` capture group |
 | **CRIT-2** | ✅ CONFIRMED | Path traversal fix already in branch (lines 88-91: resolve + bounds check) | 🟢 DONE | Verified: artifact_store.py:88-91 resolves path + checks bounds |
-| **CRIT-3** | ✅ CONFIRMED | SSRF bypass fix requires full rewrite resolving URLs to IPs and validating all representations (hex/dec/IPv6) | ❌ UNFIXED | Verified: utils.py:190-228 resolves IPs but does NOT block hex/dec/IPv6-encoded bypasses (0x7f000001, 2130706433, ::ffff:127.0.0.1) |
+| **CRIT-3** | ✅ CONFIRMED | SSRF bypass fix requires full rewrite resolving URLs to IPs and validating all representations (hex/dec/IPv6) | 🟢 DONE | Re-verified 2026-09-02: is_internal_url() explicitly handles hex-encoded IPv4 (0x…), decimal, and IPv6-mapped literals (`_check_ipv4_mapped` + hex/dec parsing in utils.py) |
 | **CRIT-4** | ✅ CONFIRMED | Auth endpoint fix already in branch (line 534-535: rejects `..` `/` `\` in tool_name, resolves path) | 🟢 DONE | Verified: management_server.py:536-539 validates tool_name + resolve check |
 | **CRIT-5** | ✅ CONFIRMED | PortManager fix already in branch (lines 67-68: port_ranges initialized before base_port) | 🟢 DONE | Verified: port_manager.py:67-78 initializes port_ranges before base_port fallback |
 | **CRIT-6** | ✅ CONFIRMED | Deepcopy fix already in branch (`launcher_config.py:225`) | 🟢 DONE | Verified: launcher_config.py:225 uses `copy.deepcopy(self.DEFAULT_CONFIG)` |
@@ -1116,7 +1116,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **MED-13** | ✅ CONFIRMED | Collect all matching line indices, comment out all of them (not just last) | 🟢 DONE | Verified: env_manager.py:419-430 collects all `active_indices` and comments out all |
 | **MED-14** | ✅ CONFIRMED | Close response in `except` block (not just `finally`) or use `async with` for auto-close | 🟢 DONE | Verified: tools_config.py:218,248 closes in `finally` block |
 | **MED-15** | ✅ CONFIRMED | Add TTL-based cleanup for `_pending_codes` with periodic `asyncio.create_task()` sweep | 🟢 DONE | Verified: server_manager.py adds _cleanup_expired() and background task every 60s |
-| **MED-16** | ⚠️ PARTIAL | Replace FIFO dict with `collections.OrderedDict` and move accessed keys to end (true LRU) | ❌ UNFIXED | Verified: distributed_registry.py:222 still uses FIFO dict, not OrderedDict |
+| **MED-16** | ⚠️ PARTIAL | Replace FIFO dict with `collections.OrderedDict` and move accessed keys to end (true LRU) | 🟢 DONE 2026-09-02 | CacheManager is now a true LRU: OrderedDict, `move_to_end` on fresh get, `popitem(last=False)` at capacity; tests/test_bug_fixes_medium.py::TestMED16LRUCacheEviction |
 | **MED-17** | ⚠️ PARTIAL | Hold lock through subscriber queue iteration, or copy list before iterating | ⚠️ PARTIAL | Verified: distributed_registry.py:315-316 releases lock before iterating; copy is made |
 | **MED-18** | ✅ CONFIRMED | Reuse single `asyncio.EventLoop` across all files in incremental indexer | 🟢 DONE | Verified: incremental_indexer.py:860-920 uses single event loop with concurrent semaphore (max 20), `asyncio.as_completed()` for progress, model caching via `local_embeddings._model_cache` |
 | **MED-19** | ✅ CONFIRMED | Pass config via parameters instead of mutating `os.environ` globally | 🟢 DONE | Verified: local_embeddings.py:85-99 restores old env values in finally block |
@@ -1128,9 +1128,9 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **LOW-4** | ⚠️ PARTIAL | Use semantic embeddings for Jaccard comparison instead of tokenized words | ⚠️ PARTIAL | Verified: memory_tools.py:952-959 still uses word-level Jaccard; no embedding-based similarity |
 | **LOW-5** | ⚠️ PARTIAL | Mask password in DSN string, never log exception messages containing DSN | ⚠️ PARTIAL | Verified: DSN still contains password; error logging not reviewed |
 | **LOW-6** | ✅ CONFIRMED | Add `threading.Lock()` or check-and-set in `init_pg()` before creating `_pool` | 🟢 DONE | Verified: pg_store.py:52 uses `_init_lock` |
-| **LOW-7** | ✅ CONFIRMED | Check existence before delete in S3 fallback, or return `False` for both local/S3 | ❌ UNFIXED | Verified: artifact_store.py:203-208 still returns True for non-existent S3 keys |
-| **LOW-8** | ✅ CONFIRMED | Distinguish "not found" from network errors (raise custom exception or return enum) | ❌ UNFIXED | Verified: artifact_store.py:228-233 still swallows network errors as False |
-| **LOW-9** | ✅ CONFIRMED | Remove duplicate import on line 24 or 26 in `__main__.py` | ❌ UNFIXED | Verified: __main__.py:24 and 26 both `import argparse` |
+| **LOW-7** | ✅ CONFIRMED | Check existence before delete in S3 fallback, or return `False` for both local/S3 | 🟢 DONE | Re-verified 2026-09-02: delete() head_object-checks first, returns False on 404 (regression guard: tests/test_artifact_store.py::TestDeleteS3Unchanged) |
+| **LOW-8** | ✅ CONFIRMED | Distinguish "not found" from network errors (raise custom exception or return enum) | 🟢 DONE 2026-09-02 | `ArtifactStoreError` raised on non-404 S3 failures in exists()/load()/get_metadata(); 404 still returns False/None; tests/test_artifact_store.py |
+| **LOW-9** | ✅ CONFIRMED | Remove duplicate import on line 24 or 26 in `__main__.py` | 🟢 DONE | Re-verified 2026-09-02: single `import argparse` remains (line 24) |
 | **LOW-10** | ✅ CONFIRMED | Replace `asyncio.get_event_loop()` with `asyncio.get_running_loop()` | 🟢 DONE | Verified: __main__.py:346 uses `asyncio.get_running_loop()` |
 | **LOW-11** | ✅ CONFIRMED | Log `provided_key[:8]` only if it exists, or mask entirely | 🟢 DONE | Verified: server_manager.py:100 logs partial key (unchanged from original) |
 | **LOW-12** | ✅ CONFIRMED | Remove dead `start_all_servers` method or implement it | 🟢 DONE | Verified: server_manager.py:466 has `pass` + returns `{}` (dead code kept) |
@@ -1152,7 +1152,7 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 | **P2** | Significant refactor (half-day each) |
 | **P3** | Major structural work (full day+) |
 
-**Summary:** 12 CRIT / 16 HIGH / 21 MED / 16 LOW = 65 tracked bugs (+ 14 INFO). 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A).
+**Summary:** 12 CRIT / 16 HIGH / 21 MED / 16 LOW = 65 tracked bugs (+ 14 INFO). As of 2026-05-29: 40 fixed (🟢), 6 unfixed (❌), 4 partial (⚠️), 2 false positive (N/A). Re-verified 2026-09-02: all 5 enumerated unfixed items fixed — 0 unfixed, 4 partial (⚠️).
 
 ---
 
@@ -1166,9 +1166,22 @@ Code exists after `return` statements in `search_code`, `search_code_sparse`, `g
 
 **🟢 N/A — False Positives (2):** HIGH-8 | MED-11
 
+### Re-verified 2026-09-02 — post-backend-abstraction code check
+
+All five enumerated UNFIXED items are now fixed (the "6" above was a miscount — only five IDs were ever listed):
+- **CRIT-3** — `is_internal_url()` handles hex/dec/IPv6-mapped bypasses (already in code, doc was stale)
+- **LOW-7** — S3 delete 404 check (already in code, doc was stale)
+- **LOW-9** — duplicate `import argparse` gone (already in code, doc was stale)
+- **MED-16** — CacheManager converted to true LRU (fixed this pass, 2026-09-02)
+- **LOW-8** — `ArtifactStoreError` distinguishes storage failures from not-found (fixed this pass, 2026-09-02)
+
+**Still PARTIAL (re-confirmed 2026-09-02, no change):** HIGH-14 (pg_trgm still required at schema init) | MED-17 (copied-list mitigation noted; kept PARTIAL pending re-review) | LOW-4 (word-level Jaccard, not embeddings) | LOW-5 (DSN password still unmasked in logs)
+
 ---
 
 ### Quick Fix Checklist (P0 — Verified Unfixed)
+
+> Historical: every item in this checklist is fixed per the Fix Progress Tracker (see Re-verified 2026-09-02). Kept for reference.
 
 ```python
 # LOW-9 — Remove duplicate import
@@ -1191,4 +1204,4 @@ import argparse  # keep only one, remove the other
 
 ---
 
-*Last updated: 2026-05-29 (source code verification complete)*
+*Last updated: 2026-09-02 (Fix Progress tracker re-verified against current code; MED-16 + LOW-8 fixed this pass, CRIT-3/LOW-7/LOW-9 confirmed already fixed)*
