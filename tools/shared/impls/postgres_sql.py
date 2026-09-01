@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from typing import Any
 from datetime import datetime, timezone
@@ -17,6 +18,37 @@ from datetime import datetime, timezone
 from shared.hashing import text_hash
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# DSN secret masking (LOW-5)
+#
+# DSNs carry the password in keyword form ("password=...") or URL form
+# ("postgresql://user:password@host/db"). psycopg OperationalError messages can
+# embed the conninfo verbatim, so every log site that interpolates an exception
+# funnels it through _safe_error() and the password never reaches the logs.
+# ---------------------------------------------------------------------------
+
+# Keyword form: password=secret / password='two words' / password="quoted"
+_PASSWORD_KW_RE = re.compile(
+    r"(password\s*=\s*)('(?:[^']|'')*'|\"[^\"]*\"|[^\s]+)", re.IGNORECASE
+)
+# URL form: scheme://[user[:password]@]host — mask only the password segment
+_PASSWORD_URL_RE = re.compile(
+    r"((?:[A-Za-z][A-Za-z0-9+.\-]*://)[^:/@\s]*:)([^@\s/]+)@"
+)
+
+
+def _masked_dsn(text: str) -> str:
+    """Return *text* with any DSN/conninfo password replaced by '***'."""
+    text = _PASSWORD_KW_RE.sub(r"\1***", text)
+    text = _PASSWORD_URL_RE.sub(r"\1***@", text)
+    return text
+
+
+def _safe_error(e: BaseException) -> str:
+    """str(e) with any embedded DSN/conninfo password masked."""
+    return _masked_dsn(str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +73,7 @@ class _PsycopgPool:
             self._real_pool.open(wait=True)
             logger.info("Using psycopg_pool.ConnectionPool")
         except (ImportError, Exception) as e:
-            logger.info(f"psycopg_pool not available, using per-connection fallback: {e}")
+            logger.info(f"psycopg_pool not available, using per-connection fallback: {_safe_error(e)}")
 
     def connection(self):
         if self._real_pool is not None:
@@ -102,7 +134,8 @@ class PostgresSqlStore:
     """
     SqlStore backed by PostgreSQL.
 
-    Provides: CRUD, dedup via text_hash, full-text search via pg_trgm,
+    Provides: CRUD, dedup via text_hash, full-text search via pg_trgm
+    (degrading to ILIKE substring match when the extension is unavailable),
     metrics, decay, and migration support (iter_all / bulk_upsert).
     """
 
@@ -110,6 +143,10 @@ class PostgresSqlStore:
         self._dsn = dsn
         self._pool: Any = None
         self.is_available: bool = False
+        # Feature-scoped pg_trgm availability (HIGH-14): set during schema
+        # init, consulted by search_text. Never blocks initialization.
+        self._trgm_available: bool = False
+        self._trgm_degrade_warned: bool = False
         self._init_lock = threading.Lock()
         self._connect()
 
@@ -137,13 +174,19 @@ class PostgresSqlStore:
                 logger.warning("psycopg not installed, using Qdrant-only mode")
                 return False
             except Exception as e:
-                logger.warning(f"PostgresSqlStore init failed: {e}")
+                logger.warning(f"PostgresSqlStore init failed: {_safe_error(e)}")
                 self._pool = None
                 self.is_available = False
                 return False
 
     def _ensure_schema(self, conn) -> None:
-        """Create tables and indexes if they don't exist."""
+        """Create tables and indexes if they don't exist.
+
+        pg_trgm is feature-scoped (HIGH-14): the core schema DDL never depends
+        on it. We attempt the extension + trigram GIN index as an optional
+        feature and record availability; a failure (e.g. non-superuser role)
+        only disables similarity ranking, never schema init.
+        """
         conn.execute(_SCHEMA_DDL)
 
         try:
@@ -152,8 +195,14 @@ class PostgresSqlStore:
                 "CREATE INDEX IF NOT EXISTS idx_memories_text_trgm "
                 "ON memories USING gin (text gin_trgm_ops)"
             )
+            self._trgm_available = True
+            logger.info("pg_trgm available: trigram full-text search enabled")
         except Exception as e:
-            logger.warning(f"pg_trgm extension not available (full-text search disabled): {e}")
+            self._trgm_available = False
+            logger.warning(
+                "pg_trgm extension not available (similarity search will "
+                f"degrade to substring match): {_safe_error(e)}"
+            )
 
     # ------------------------------------------------------------------
     # CRUD
@@ -224,7 +273,7 @@ class PostgresSqlStore:
                     return actual_id
 
         except Exception as e:
-            logger.error(f"PG upsert failed: {e}")
+            logger.error(f"PG upsert failed: {_safe_error(e)}")
             return memory_id
 
     def get_memory(self, memory_id: str) -> dict | None:
@@ -245,7 +294,7 @@ class PostgresSqlStore:
                 """, (memory_id,))
                 return dict(row)
         except Exception as e:
-            logger.error(f"PG get failed: {e}")
+            logger.error(f"PG get failed: {_safe_error(e)}")
             return None
 
     def delete_memory(self, memory_id: str) -> bool:
@@ -258,7 +307,7 @@ class PostgresSqlStore:
                 result = conn.execute("DELETE FROM memories WHERE id = %s", (memory_id,))
                 return result.rowcount > 0
         except Exception as e:
-            logger.error(f"PG delete failed: {e}")
+            logger.error(f"PG delete failed: {_safe_error(e)}")
             return False
 
     # ------------------------------------------------------------------
@@ -274,7 +323,13 @@ class PostgresSqlStore:
         tags: list[str] | None = None,
         agent_id: str | None = None,
     ) -> list[dict]:
-        """Full-text search using pg_trgm similarity."""
+        """Full-text search.
+
+        Uses pg_trgm similarity when the extension is available (HIGH-14);
+        otherwise degrades to an ILIKE substring match ordered by usage and
+        recency instead of failing on the missing similarity() function.
+        Results keep the same shape (sim_score is 0.0 in the degraded path).
+        """
         if not self.is_available:
             return []
 
@@ -294,26 +349,39 @@ class PostgresSqlStore:
                         conditions.append("tags @> %s::jsonb")
                         params.append(json.dumps([tag]))
 
-                conditions.append("similarity(text, %s) > 0.1")
-                params.append(query)
+                if self._trgm_available:
+                    conditions.append("similarity(text, %s) > 0.1")
+                    params.append(query)
+                    sim_select = "similarity(text, %s) AS sim_score"
+                    sim_params = [query]
+                    order_by = "sim_score DESC"
+                else:
+                    if not self._trgm_degrade_warned:
+                        logger.warning(
+                            "pg_trgm unavailable: search_text degrading to "
+                            "ILIKE substring match (no similarity ranking)"
+                        )
+                        self._trgm_degrade_warned = True
+                    conditions.append("text ILIKE %s")
+                    params.append(f"%{query}%")
+                    sim_select = "0.0 AS sim_score"
+                    sim_params = []
+                    order_by = "usage_count DESC, created_at DESC"
 
                 where = " AND ".join(conditions)
 
-                params.append(query)
-                params.append(limit)
-
                 rows = conn.execute(f"""
                     SELECT id, text, memory_type, tags, source, created_at, last_accessed, usage_count,
-                           similarity(text, %s) AS sim_score
+                           {sim_select}
                     FROM memories
                     WHERE {where}
-                    ORDER BY sim_score DESC
+                    ORDER BY {order_by}
                     LIMIT %s
-                """, params).fetchall()
+                """, [*params, *sim_params, limit]).fetchall()
 
                 return [dict(r) for r in rows]
         except Exception as e:
-            logger.error(f"PG search failed: {e}")
+            logger.error(f"PG search failed: {_safe_error(e)}")
             return []
 
     # ------------------------------------------------------------------
@@ -343,7 +411,7 @@ class PostgresSqlStore:
                     "total_usage": total_usage["cnt"] if total_usage and total_usage["cnt"] else 0,
                 }
         except Exception as e:
-            logger.error(f"PG metrics failed: {e}")
+            logger.error(f"PG metrics failed: {_safe_error(e)}")
             return {}
 
     def decay_memories(
@@ -376,7 +444,7 @@ class PostgresSqlStore:
                 result = conn.execute(f"DELETE FROM memories WHERE {where}", params)
                 return result.rowcount
         except Exception as e:
-            logger.error(f"PG decay failed: {e}")
+            logger.error(f"PG decay failed: {_safe_error(e)}")
             return 0
 
     def get_all_memory_ids(self) -> list[str]:
@@ -389,7 +457,7 @@ class PostgresSqlStore:
                 rows = conn.execute("SELECT id FROM memories").fetchall()
                 return [str(r["id"]) for r in rows]
         except Exception as e:
-            logger.error(f"PG get_all_ids failed: {e}")
+            logger.error(f"PG get_all_ids failed: {_safe_error(e)}")
             return []
 
     # ------------------------------------------------------------------
@@ -412,7 +480,7 @@ class PostgresSqlStore:
                     for row in batch:
                         yield dict(row) if not isinstance(row, dict) else row
         except Exception as e:
-            logger.error(f"PG iter_all failed: {e}")
+            logger.error(f"PG iter_all failed: {_safe_error(e)}")
 
     def bulk_upsert(self, rows) -> int:
         """Bulk upsert memory records. Returns count inserted."""
