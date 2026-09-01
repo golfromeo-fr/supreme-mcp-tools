@@ -4,29 +4,27 @@
 
 **Status**: Tested as single user server (not yet tested as multi-user)
 
-**Available Tools**: `simplemcp` `webmcp` `ragmcp` `convertermcp` `oraclemcp`
+**Available Tools**: `oraclemcp` `webmcp` `simplemcp` `convertermcp` `ragmcp` `memorymcp`
 
 A unified launcher system for running multiple MCP (Model Context Protocol) tools in a single Python process.
 This reduces memory usage by approximately 50% compared to running each tool as a separate process.
+
+There are two entry points: `python -m launcher` is the primary one; `python launchmcp.py` is the
+legacy interface (still maintained, with extra flags like `--list-tools`, `--dry-run`, and `--verbose`
+that the primary CLI doesn't expose).
 
 ---
 
 ## ✅ WORKING
 
-| Tool | Description |
-|------|-------------|
-| `simplemcp` | Simple test tools (double, square, greet) |
-| `webmcp` | Web search (Brave Search, Google API), URL fetch, HTTP POST |
-
----
-
-## 🚧 NOT WORKING Yet
-
-| Tool | Description |
-|------|-------------|
-| `ragmcp` | RAG-like codebase indexing using local or API embeddings |
-| `convertermcp` | Document conversion (DOCX to TXT) |
-| `oraclemcp` | Oracle database tools to feed the LLM |
+| Tool | Port | Description |
+|------|------|-------------|
+| `oraclemcp` | 8000 | Oracle database tools to feed the LLM |
+| `webmcp` | 8001 | Web search (Brave Search, Google API), URL fetch, HTTP POST |
+| `simplemcp` | 8002 | Simple test tools (double, square, greet) |
+| `convertermcp` | 8003 | Document conversion (DOCX to TXT) |
+| `ragmcp` | 8004 | RAG-like codebase indexing using local or API embeddings |
+| `memorymcp` | 8005 | Persistent memory store with knowledge graph and semantic search |
 
 ---
 
@@ -101,7 +99,21 @@ pip install -r requirements.txt
 
 ## Quick Start
 
-### List Available Tools
+### Launch with the Primary Entry Point
+
+```bash
+python -m launcher --tools webmcp,simplemcp    # start specific tools (comma-separated)
+python -m launcher                             # start all discovered tools
+python -m launcher --management-port 8200     # management API (started by default)
+python -m launcher --no-management            # skip the central management server
+python -m launcher --debug                    # DEBUG logging
+```
+
+The `python -m launcher` CLI takes a comma-separated `--tools` list; the legacy entry point below
+takes tool names as positional arguments and has additional flags
+(`--list-tools`, `--dry-run`, `--verbose`, `--no-sync-tools`, `--health-check-logs`, `--health-check-interval`).
+
+### List Available Tools (legacy entry point)
 
 ```bash
 python launchmcp.py --list-tools
@@ -137,9 +149,28 @@ python launchmcp.py --verbose webmcp oraclemcp
 python launchmcp.py --dry-run webmcp oraclemcp
 ```
 
+## Ports and Management
+
+Port ranges and tool assignments live in `config/ports.json`:
+
+| Range | Purpose |
+|-------|---------|
+| 8000-8099 | MCP tool endpoints (mcp) |
+| 8100-8199 | Tool management servers (mgmt) |
+| 8200-8299 | System (central management: 8200) |
+| 8300-8399 | Metrics (metrics_server: 8300) |
+| 8400-8499 | UI (management_ui: 8400) |
+
+Tool ports: oraclemcp 8000, webmcp 8001, simplemcp 8002, convertermcp 8003, ragmcp 8004, memorymcp 8005.
+
+The launcher starts the central management API (port 8200) by default — disable with `--no-management`.
+The NiceGUI management UI is a separate process: `python -m mcp_ui` (port 8400).
+
 ## Configuration
 
-The launcher uses a JSON configuration file (`config.json`) for settings. You can override configuration values using environment variables or CLI arguments.
+The launcher uses a JSON configuration file (`config/launcher_config.json` is the checked-in default;
+pass a custom file with `--config`). Port ranges and tool→port assignments live in `config/ports.json`.
+You can override configuration values using environment variables or CLI arguments.
 
 ### Configuration Options
 
@@ -228,14 +259,23 @@ python launchmcp.py webmcp oraclemcp
 
 ## CLI Arguments
 
+Legacy entry point (`python launchmcp.py --help`):
+
 ```
-usage: launchmcp.py [-h] [--config CONFIG] [--list-tools] [--verbose] [--dry-run]
-                    [--host HOST] [--log-level {debug,info,warning,error,critical}]
+usage: launchmcp.py [-h] [--config CONFIG] [--list-tools] [--verbose]
+                    [--dry-run] [--host HOST]
+                    [--log-level {debug,info,warning,error,critical}]
+                    [--no-management] [--management-port MANAGEMENT_PORT]
+                    [--no-sync-tools] [--transport {streamable-http,sse}]
+                    [--health-check-logs {enable,disable,errors-only}]
+                    [--health-check-interval HEALTH_CHECK_INTERVAL]
                     [tools ...]
 
+Launch multiple MCP tools in a single process
+
 positional arguments:
-  tools                 Names of tools to launch (if not specified, launches all
-                        discovered tools)
+  tools                 Names of tools to launch (if not specified, launches
+                        all discovered tools)
 
 options:
   -h, --help            show this help message and exit
@@ -246,26 +286,49 @@ options:
   --host HOST           Override server host address
   --log-level {debug,info,warning,error,critical}
                         Override log level
+  --no-management       Disable the centralized management API server (enabled
+                        by default, port from ports.json)
+  --management-port MANAGEMENT_PORT
+                        Port for the management server (default: from
+                        ports.json)
+  --no-sync-tools       Disable automatic tools config sync after server
+                        startup
+  --transport {streamable-http,sse}
+                        Transport protocol for all tools (default: streamable-
+                        http; sse is legacy compatibility for outdated
+                        harnesses)
+  --health-check-logs {enable,disable,errors-only}
+                        Health check logging mode (default: enable)
+  --health-check-interval HEALTH_CHECK_INTERVAL
+                        Health check interval in seconds (default: 30)
 ```
+
+Run `python -m launcher --help` for the primary entry point's flags
+(`--tools`, `--tools-dir`, `--api-key`, `--debug`, ...).
 
 ## MCP Tool Requirements
 
-For a Python module to be recognized as a valid MCP tool, it must export an `app` object — either a
-FastAPI app or (the standard path) a Starlette app built via the shared server factory:
+For a Python module to be recognized as a valid MCP tool, place it at `tools/<name>/<name>_fastmcp.py`
+(the launcher's discovery scans top-level files in each tool directory and derives the tool name from
+the `_fastmcp` suffix). The module must export an `app` object — either a FastAPI app or (the
+standard path) a Starlette app built via the shared server factory:
 
 ```python
 from tools.shared.server_factory import create_fastmcp_server, get_transport_app
 
 mcp = create_fastmcp_server("my_tool")   # registers @mcp.tool() functions
-app = get_transport_app(mcp)             # streamable HTTP at /mcp
+app = get_transport_app(mcp)             # multi-transport app (default)
 ```
 
-SSE-style modules (exporting `server`/`sse_transport`) are no longer supported — the SSE transport
-was removed in August 2026; all tools serve streamable HTTP.
+By default the app serves every client dialect simultaneously from one FastMCP instance —
+`/mcp` (streamable HTTP, stateful), `/mcp-stateless` (streamable HTTP, stateless), and
+`/sse` + `/messages` (legacy SSE). Client selection is by URL, nothing to configure.
+Single-transport pinning remains available as an escape hatch via `--transport`,
+the `MCP_TRANSPORT` env var, or the `"transport"` key in `tools/<name>/config.json`.
 
 ## Available MCP Tools
 
-The launcher currently supports the following MCP tools:
+The launcher currently supports the following six MCP tools:
 
 ### webmcp (Port 8001)
 A web search and URL fetch MCP server that provides:
@@ -297,9 +360,11 @@ A document conversion MCP server that provides:
 
 ### ragmcp (Port 8004)
 A RAG (Retrieval-Augmented Generation) and Code Indexing MCP server that provides:
+- **search**: Unified code search with automatic detection of collection capabilities (dense/sparse/hybrid)
 - **search_code**: Semantic search using vector embeddings with natural language queries
 - **search_code_sparse**: BM25-style lexical search for exact identifiers, table names, and function names
 - **get_copilot_context**: Copilot context injection for GitHub Copilot integration
+- **index_code**: Index code files into Qdrant for semantic search
 - **start_indexing**: Background indexing of code files into Qdrant vector database
 - **check_indexing_progress**: Check indexing status and statistics
 - **clear_index**: Clear indexed code collections
@@ -307,13 +372,25 @@ A RAG (Retrieval-Augmented Generation) and Code Indexing MCP server that provide
 
 **Documentation**: [`tools/ragmcp/README.md`](tools/ragmcp/README.md)
 
+### memorymcp (Port 8005)
+A persistent memory MCP server that provides:
+- **upsertMemory / queryMemory / getMemory / deleteMemory**: Store and retrieve memories with semantic search, recency weighting, and PII redaction
+- **textToGraph / textToSmartGraph**: Convert structured text into LLM-friendly knowledge graphs
+- **createMemoryEdge / getMemoryGraph / exportGraphAsMarkdown**: Knowledge-graph linking, neighborhood queries, and export
+- **getMetaDecisions / mergeDuplicates / decayOrExpire**: Curated architectural-decision lookup, dedup, and TTL cleanup
+- Pluggable SQL + vector storage backends (Postgres, Turso/libSQL, Qdrant, pgvector)
+
+**Documentation**: [`tools/memorymcp/BACKENDS.md`](tools/memorymcp/BACKENDS.md) (backend architecture and migration)
+
 ## Usage Examples
 
 ### Example 1: Launch All Tools
 
 ```bash
-python launchmcp.py webmcp oraclemcp convertermcp ragmcp
+python launchmcp.py oraclemcp webmcp simplemcp convertermcp ragmcp memorymcp
 ```
+
+Or with the primary entry point, just run `python -m launcher` (no args = all discovered tools).
 
 Output:
 ```
@@ -322,8 +399,10 @@ MCP Launcher Running
 ============================================================
   oraclemcp: http://0.0.0.0:8000
   webmcp: http://0.0.0.0:8001
+  simplemcp: http://0.0.0.0:8002
   convertermcp: http://0.0.0.0:8003
   ragmcp: http://0.0.0.0:8004
+  memorymcp: http://0.0.0.0:8005
 ============================================================
 Press Ctrl+C to stop all servers
 ```
@@ -365,6 +444,8 @@ python launchmcp.py webmcp oraclemcp convertermcp ragmcp
 
 The launcher will automatically allocate ports 8000, 8001, 8003, 8004.
 
+By default (no custom config), tool ports come from the fixed assignments in `config/ports.json`.
+
 ### Example 4: Custom Host and Log Level
 
 ```bash
@@ -377,11 +458,13 @@ The launcher includes a built-in monitoring system for collecting metrics.
 
 ### Enable Monitoring
 
-1. Copy the example config:
+A `config/monitoring_config.json` is already checked in with monitoring enabled. To customize it:
+
+1. Copy the example config (if starting fresh):
    ```bash
-   cp config/monitoring_config.example.json config/monitoring.json
+   cp config/monitoring_config.example.json config/monitoring_config.json
    ```
-2. Edit `config/monitoring.json` and set `"enabled": true`
+2. Edit `config/monitoring_config.json` and set `"enabled": true`
 
 ### Available Metrics
 
@@ -459,9 +542,9 @@ To add a new MCP tool:
 
 1. Create your tool following the MCP tool pattern (see MCP Tool Requirements above)
 2. Export an `app` built via `create_fastmcp_server()` + `get_transport_app()`
-3. Place the tool file in a configured directory
+3. Place it at `tools/<name>/<name>_fastmcp.py` (the `_fastmcp` suffix is what discovery looks for)
 4. Run `python launchmcp.py --list-tools` to verify discovery
-5. Launch with `python launchmcp.py your_tool_name`
+5. Launch with `python -m launcher --tools your_tool_name` (or `python launchmcp.py your_tool_name`)
 
 ## License
 
