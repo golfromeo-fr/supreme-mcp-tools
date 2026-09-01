@@ -5,6 +5,7 @@ Each test verifies a specific fix. Tests are self-contained and don't require
 external services (Qdrant, PostgreSQL, S3, etc.).
 """
 
+import asyncio
 import os
 import sys
 import time
@@ -18,6 +19,22 @@ from unittest.mock import patch, MagicMock
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _run(coro):
+    """Run a coroutine on a LOCAL event loop, never touching the global state.
+
+    Why not `asyncio.run(coro)`? Because `asyncio.run` calls
+    `asyncio.set_event_loop(None)` on exit, and in Python 3.13+
+    subsequent tests that call `asyncio.get_event_loop()` then raise
+    `RuntimeError: There is no current event loop in thread 'MainThread'`.
+    (Prior art: tests/test_memory_autouse.py::_run.)
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class TestMED1ScoringWeightsGamma(unittest.TestCase):
@@ -266,13 +283,44 @@ class TestMED15OAuthExpiration(unittest.TestCase):
 
 
 class TestMED16LRUCacheEviction(unittest.TestCase):
-    """MED-16: Cache eviction is FIFO, not LRU."""
+    """MED-16: Cache eviction is FIFO, not LRU — fixed as a true LRU."""
 
     def test_reinsert_on_overwrite(self):
         source = (PROJECT_ROOT / "launcher/distributed_registry.py").read_text()
         func = source[source.find("async def set(self, key"):]
         chunk = func[:500]
         self.assertIn("del self.cache[key]", chunk)
+
+    def test_true_lru_structures_in_source(self):
+        source = (PROJECT_ROOT / "launcher/distributed_registry.py").read_text()
+        self.assertIn("OrderedDict", source)
+        get_chunk = source[source.find("async def get(self, key"):source.find("async def set(self, key")]
+        self.assertIn("move_to_end", get_chunk)
+        set_chunk = source[source.find("async def set(self, key"):]
+        self.assertIn("popitem(last=False)", set_chunk)
+
+    def test_lru_eviction_order(self):
+        from launcher.distributed_registry import CacheManager
+
+        async def scenario():
+            cache = CacheManager(max_size=3)
+            # (a) Fill to capacity.
+            await cache.set("k1", "v1", ttl=60)
+            await cache.set("k2", "v2", ttl=60)
+            await cache.set("k3", "v3", ttl=60)
+            self.assertEqual(len(cache.cache), 3)
+            # (b) Access the oldest-inserted key — it becomes most-recently-used.
+            self.assertEqual(await cache.get("k1"), "v1")
+            # (c) Overflow: the LEAST-recently-used key (k2) is evicted,
+            # not the oldest-inserted key (k1).
+            await cache.set("k4", "v4", ttl=60)
+            self.assertEqual(len(cache.cache), 3)
+            self.assertIsNone(await cache.get("k2"))
+            self.assertEqual(await cache.get("k1"), "v1")
+            self.assertEqual(await cache.get("k3"), "v3")
+            self.assertEqual(await cache.get("k4"), "v4")
+
+        _run(scenario())
 
 
 class TestMED17LockDuringIteration(unittest.TestCase):

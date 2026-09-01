@@ -12,6 +12,7 @@ import time
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 
 import aiohttp
@@ -191,7 +192,7 @@ class CacheManager:
             max_size: Maximum number of cache entries
         """
         self.max_size = max_size
-        self.cache: dict[str, dict] = {}
+        self.cache: OrderedDict[str, dict] = OrderedDict()
         self._lock = asyncio.Lock()
     
     async def get(self, key: str) -> Any | None:
@@ -208,6 +209,7 @@ class CacheManager:
             if key in self.cache:
                 entry = self.cache[key]
                 if entry["expires_at"] > time.time():
+                    self.cache.move_to_end(key)
                     return entry["value"]
                 else:
                     del self.cache[key]
@@ -218,8 +220,7 @@ class CacheManager:
             if key in self.cache:
                 del self.cache[key]
             elif len(self.cache) >= self.max_size:
-                oldest_key = next(iter(self.cache))
-                del self.cache[oldest_key]
+                self.cache.popitem(last=False)  # evict least-recently-used
             self.cache[key] = {
                 "value": value,
                 "expires_at": time.time() + ttl
