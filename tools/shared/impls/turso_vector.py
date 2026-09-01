@@ -9,7 +9,10 @@ Hybrid query: run query_dense + query_sparse, fuse with Python RRF.
 
 Phase 3 of the backend abstraction plan.
 
-S2 note: libSQL accepts vectors with or without spaces, so json.dumps works.
+S2 note: vectors serialize in the tight format "[0.1,0.2,0.3]" (no spaces —
+json.dumps would emit "[0.1, 0.2, 0.3]", which some libSQL VECTOR parsers
+reject). _parse_vector reads BOTH formats, so rows written before S2 (spaced)
+keep working.
 S3 note: query_sparse requires FTS query syntax — see _sparse_to_fts_query.
 S4 note: bm25() returns negative scores — we negate so ScoredPoint.score is "higher = better" (S5 contract).
 """
@@ -38,8 +41,31 @@ _BAREWORD_KEY = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 
 
 def _serialize_vector(vec: list[float]) -> str:
-    """Serialize a vector for libSQL's VECTOR type (S2)."""
-    return "[" + ",".join(repr(x) for x in vec) + "]"
+    """Serialize a vector for libSQL's VECTOR type (S2 — tight, no spaces).
+
+    json.dumps would produce "[0.1, 0.2, 0.3]" (space after each comma);
+    libSQL's VECTOR parser expects "[0.1,0.2,0.3]" and may reject the spaced
+    form depending on the libSQL build. Elements are coerced via float() so
+    ints and numpy scalars serialize with canonical Python-float repr.
+    """
+    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+
+
+def _parse_vector(text: Any) -> list[float]:
+    """Parse a stored VECTOR string back to list[float].
+
+    Format-agnostic (S2 backward compat): accepts BOTH the tight format
+    written by _serialize_vector ("[0.1,0.2,0.3]") and the legacy spaced
+    format written by the original json.dumps-based writer
+    ("[0.1, 0.2, 0.3]") — float() tolerates whitespace after the commas,
+    so pre-S2 rows keep working. Returns [] for anything unparseable.
+    """
+    if not isinstance(text, str):
+        return []
+    try:
+        return [float(x) for x in text.strip("[]").split(",") if x.strip()]
+    except ValueError:
+        return []
 
 
 def _s(name: str) -> str:
@@ -431,11 +457,8 @@ class TursoVectorStore:
             payload = json.loads(row[1]) if with_payload and row[1] else None
             vec = None
             if with_vectors and len(row) > 2 and row[2]:
-                # Parse "[0.1,0.2,...]" back to list[float]
-                try:
-                    vec = [float(x) for x in row[2].strip("[]").split(",")]
-                except Exception:
-                    pass
+                # Parse "[0.1,0.2,...]" (tight or legacy spaced) back to list[float]
+                vec = _parse_vector(row[2]) or None
             results.append(PointStruct(id=str(row[0]), vector=vec or [], payload=payload))
         return results
 
@@ -489,8 +512,8 @@ class TursoVectorStore:
                 f"SELECT embedding FROM vec_{_s(name)} WHERE embedding IS NOT NULL LIMIT 1"
             ).fetchone()
             if row and row[0]:
-                # Parse "[0.1, 0.2, ...]" → count commas + 1
-                dim = row[0].strip("[]").count(",") + 1
+                # Parse "[0.1,0.2,...]" (tight or legacy spaced) → count dims
+                dim = len(_parse_vector(row[0])) or None
         except Exception:
             pass
 
@@ -540,11 +563,8 @@ class TursoVectorStore:
                 payload = json.loads(row[1]) if row[1] else {}
                 vec: list[float] = []
                 if with_vectors and len(row) > 2 and row[2]:
-                    # Parse "[0.1,0.2,...]" → list[float]
-                    try:
-                        vec = [float(x) for x in row[2].strip("[]").split(",")]
-                    except Exception:
-                        pass
+                    # Parse "[0.1,0.2,...]" (tight or legacy spaced) → list[float]
+                    vec = _parse_vector(row[2])
                 yield PointStruct(id=str(row[0]), vector=vec, payload=payload)
 
     def bulk_upsert(self, collection: str, points: Iterable[PointStruct]) -> int:

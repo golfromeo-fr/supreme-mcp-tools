@@ -3,8 +3,17 @@ Contract tests for TursoSqlStore and TursoVectorStore.
 
 Uses in-memory libSQL (file::memory:) — no network, no containers, no API keys.
 Skips gracefully if libsql_experimental is not installed.
+
+The pure-function S2 serialization tests (TestVectorSerialization) don't touch
+libSQL at all and always run.
 """
+import json
+import sys
+from pathlib import Path
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 try:
     import libsql_experimental  # noqa: F401
@@ -13,7 +22,9 @@ except ImportError:
     HAS_LIBSQL = False
 
 
-pytestmark = pytest.mark.skipif(not HAS_LIBSQL, reason="libsql_experimental not installed")
+_libsql_required = pytest.mark.skipif(
+    not HAS_LIBSQL, reason="libsql_experimental not installed"
+)
 
 
 @pytest.fixture
@@ -30,6 +41,7 @@ def turso_vector_store():
     yield store
 
 
+@_libsql_required
 class TestTursoSqlStoreContract:
     """Contract tests for TursoSqlStore."""
 
@@ -102,6 +114,7 @@ class TestTursoSqlStoreContract:
         assert len(rows) == 5
 
 
+@_libsql_required
 class TestTursoVectorStoreContract:
     """Contract tests for TursoVectorStore."""
 
@@ -182,3 +195,65 @@ class TestTursoVectorStoreContract:
         assert len(rows) == 1
         # With default with_vectors=False, vector should be empty
         assert rows[0].vector == []
+
+    def test_upsert_roundtrip_vector(self, turso_vector_store):
+        """S2 write/read loop: upsert → retrieve(with_vectors=True) returns floats."""
+        from shared.store_models import PointStruct
+        turso_vector_store.ensure_collection("rt", dense_dim=self.DIM)
+        turso_vector_store.upsert("rt", [
+            PointStruct(id="p1", vector=[0.5, -0.25, 0.75, 1.0], payload={}),
+        ])
+        points = turso_vector_store.retrieve("rt", ["p1"], with_vectors=True)
+        assert len(points) == 1
+        assert points[0].vector == [0.5, -0.25, 0.75, 1.0]
+
+    def test_legacy_spaced_row_still_readable(self, turso_vector_store):
+        """S2 backward compat: rows written by the original json.dumps-based
+        writer (spaces after commas) must still parse on every read path."""
+        turso_vector_store.ensure_collection("legacy", dense_dim=self.DIM)
+        # Write a legacy-format row directly, bypassing _serialize_vector
+        turso_vector_store._conn.execute(
+            "INSERT INTO vec_legacy (id, embedding, payload) VALUES (?, ?, ?)",
+            ("old1", json.dumps([0.1, 0.2, 0.3, 0.4]), "{}"),
+        )
+        points = turso_vector_store.retrieve("legacy", ["old1"], with_vectors=True)
+        assert points[0].vector == [0.1, 0.2, 0.3, 0.4]
+        rows = list(turso_vector_store.iter_all("legacy", with_vectors=True))
+        assert rows[0].vector == [0.1, 0.2, 0.3, 0.4]
+        # get_collection dim detection also works on legacy spaced rows
+        assert turso_vector_store.get_collection("legacy").dim == 4
+
+
+class TestVectorSerialization:
+    """S2: tight vector serialization + format-agnostic parse (pure functions,
+    no libSQL connection needed)."""
+
+    def test_serialize_tight_no_spaces(self):
+        from shared.impls.turso_vector import _serialize_vector
+        out = _serialize_vector([0.1, 0.2, 0.3])
+        assert out == "[0.1,0.2,0.3]"
+        assert " " not in out
+
+    def test_serialize_json_roundtrip(self):
+        from shared.impls.turso_vector import _serialize_vector
+        vec = [0.1, -0.25, 3.5, 1e-7, 42]
+        assert json.loads(_serialize_vector(vec)) == vec
+
+    def test_serialize_int_coerced_to_float(self):
+        from shared.impls.turso_vector import _serialize_vector
+        assert _serialize_vector([1, 2]) == "[1.0,2.0]"
+
+    def test_parse_accepts_tight_format(self):
+        from shared.impls.turso_vector import _parse_vector
+        assert _parse_vector("[0.1,0.2,0.3]") == [0.1, 0.2, 0.3]
+
+    def test_parse_accepts_legacy_spaced_format(self):
+        from shared.impls.turso_vector import _parse_vector
+        # Legacy rows were written with json.dumps (spaces after commas)
+        assert _parse_vector(json.dumps([0.1, 0.2, 0.3])) == [0.1, 0.2, 0.3]
+
+    def test_parse_garbage_returns_empty(self):
+        from shared.impls.turso_vector import _parse_vector
+        assert _parse_vector("not-a-vector") == []
+        assert _parse_vector(None) == []
+        assert _parse_vector("") == []
