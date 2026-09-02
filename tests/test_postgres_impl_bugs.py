@@ -171,9 +171,25 @@ class TestHIGH14TrgmFeatureScoped(unittest.TestCase):
         self.assertIn("similarity(text, %s) > 0.1", sql)
         self.assertIn("similarity(text, %s) AS sim_score", sql)
         self.assertIn("ORDER BY sim_score DESC", sql)
-        # query appears twice (WHERE + SELECT) before the limit param
+        # query appears twice (SELECT + WHERE) before the limit param
         self.assertEqual(conn.params[-1], ["needle", "needle", 10])
         self.assertEqual(len(rows), 1)
+
+    def test_search_trgm_param_order_with_filter(self):
+        """Regression: SELECT similarity placeholder is textual-first.
+
+        The old param order ([*params, *sim_params, limit]) bound the filter
+        value to the SELECT placeholder and the query to memory_type whenever
+        a filter was present — silently wrong results (values coincide only
+        in the no-filter case, which is why the mock test above passed).
+        """
+        conn = _FakeConn(search_rows=[])
+        store = _make_store(conn)
+        store.search_text("needle", memory_type="lesson")
+        # Textual placeholder order: SELECT sim_q, WHERE memory_type, WHERE sim_q, LIMIT
+        self.assertEqual(
+            conn.params[-1], ["needle", "lesson", "needle", 10]
+        )
 
     def test_search_degrades_to_ilike_without_trgm(self):
         conn = _FakeConn(search_rows=[{"id": "u1", "text": "needle", "sim_score": 0.0}])

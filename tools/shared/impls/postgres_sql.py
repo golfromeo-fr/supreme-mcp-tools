@@ -370,6 +370,9 @@ class PostgresSqlStore:
 
                 where = " AND ".join(conditions)
 
+                # Placeholder order is textual: sim_select's %s comes first,
+                # then the WHERE params (which already end with the similarity/
+                # ILIKE argument), then LIMIT.
                 rows = conn.execute(f"""
                     SELECT id, text, memory_type, tags, source, created_at, last_accessed, usage_count,
                            {sim_select}
@@ -377,7 +380,7 @@ class PostgresSqlStore:
                     WHERE {where}
                     ORDER BY {order_by}
                     LIMIT %s
-                """, [*params, *sim_params, limit]).fetchall()
+                """, [*sim_params, *params, limit]).fetchall()
 
                 return [dict(r) for r in rows]
         except Exception as e:
