@@ -240,7 +240,11 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
         with ui.card():
             ui.label("Management UI Login").classes("text-h5 mb-4")
             username = ui.input("Username").on("keydown.enter", try_login).classes("w-full mb-2")
-            password = ui.input("Password", password=True, password_toggle_button=True).on(
+            # NOTE: no password_toggle_button here — NiceGUI 3.16.0's toggle
+            # breaks event wiring for every element after it on the page
+            # (bisected 2026-09-04: with the toggle, the Log in button's
+            # on_click never fires; without it, everything works).
+            password = ui.input("Password", password=True).on(
                 "keydown.enter", try_login
             ).classes("w-full mb-4")
             ui.button("Log in", on_click=try_login).classes("w-full")
