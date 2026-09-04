@@ -29,9 +29,14 @@ python -m tools.shared.migrate_store import --in backup.jsonl --backend turso+tu
 python -m tools.shared.migrate_store verify --left postgres+qdrant --right turso+turso
 
 # Tests
-python -m pytest                             # everything (~540 tests)
-python -m pytest tests/                      # project test suite only (~533)
+python -m pytest                             # everything (~630 tests)
+python -m pytest tests/                      # project test suite only (~625)
 python -m pytest tests/test_memory_text.py -v
+
+# MCP tool testing — the agent itself makes native mcp__<server>__<function>
+# calls; never substitute curl/wget/scripts. Repo skill:
+# .agents/skills/mcp-live-tool-test (procedure, safe-args table,
+# scripts/sweep_all.py + probe_eras.py). Live servers must be up.
 ```
 
 There is no linter, formatter, or typecheck configured — no lint/typecheck step needed.
