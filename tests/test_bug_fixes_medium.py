@@ -116,7 +116,8 @@ class TestMED7GetMemoryOrder(unittest.TestCase):
     """MED-7: get_memory increments usage_count before SELECT."""
 
     def test_select_before_update(self):
-        source = (PROJECT_ROOT / "tools/shared/pg_store.py").read_text()
+        # Phase 5: get_memory moved to impls/postgres_sql.py
+        source = (PROJECT_ROOT / "tools/shared/impls/postgres_sql.py").read_text()
         func = source[source.find("def get_memory"):]
         chunk = func[:800]
         select_pos = chunk.find("SELECT *")

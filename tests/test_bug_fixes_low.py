@@ -6,7 +6,6 @@ Each test verifies a specific fix. Tests are self-contained.
 
 import os
 import sys
-import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -62,26 +61,37 @@ class TestLOW5PasswordInDSN(unittest.TestCase):
     """LOW-5: Password in DSN string."""
 
     def test_dsn_not_logged(self):
-        source = (PROJECT_ROOT / "tools/shared/pg_store.py").read_text()
-        init = source[source.find("def init_pg"):]
+        # Phase 5: pg_store.py removed; the live implementation is
+        # tools/shared/impls/postgres_sql.py. Every log site on the init
+        # path funnels exceptions through _safe_error()/_masked_dsn() so
+        # the DSN password never reaches the logs (behavioural coverage
+        # in tests/test_postgres_impl_bugs.py).
+        source = (PROJECT_ROOT / "tools/shared/impls/postgres_sql.py").read_text()
+        init = source[source.find("def _connect"):]
         chunk = init[:2000]
-        self.assertNotIn("dsn", [line for line in chunk.split("\n")
-                                  if "logger" in line and "dsn" in line.lower()])
+        log_lines = [line for line in chunk.split("\n") if "logger" in line]
+        for line in log_lines:
+            self.assertNotIn("self._dsn", line)
+        self.assertIn("_safe_error(e)", chunk)
 
 
 class TestLOW6InitPgIdempotent(unittest.TestCase):
-    """LOW-6: init_pg not idempotent under concurrent calls."""
+    """LOW-6: init not idempotent under concurrent calls."""
 
     def test_lock_exists(self):
-        from tools.shared.pg_store import _init_lock
-        self.assertIsInstance(_init_lock, type(threading.Lock()))
+        # Phase 5: the lock is a per-instance attribute of PostgresSqlStore.
+        source = (PROJECT_ROOT / "tools/shared/impls/postgres_sql.py").read_text()
+        self.assertIn("self._init_lock = threading.Lock()", source)
 
     def test_double_init_safe(self):
-        source = (PROJECT_ROOT / "tools/shared/pg_store.py").read_text()
-        func = source[source.find("def init_pg"):]
+        source = (PROJECT_ROOT / "tools/shared/impls/postgres_sql.py").read_text()
+        func = source[source.find("def _connect"):]
         chunk = func[:1000]
         self.assertIn("_init_lock", chunk)
-        self.assertIn("with _init_lock", chunk)
+        self.assertIn("with self._init_lock", chunk)
+        # Double-checked locking: availability is re-checked inside the lock.
+        inner = chunk[chunk.find("with self._init_lock"):]
+        self.assertIn("if self.is_available:", inner)
 
 
 class TestLOW7S3DeleteMissing(unittest.TestCase):

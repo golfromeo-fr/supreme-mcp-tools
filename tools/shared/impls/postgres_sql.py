@@ -1,7 +1,8 @@
 """
 PostgresSqlStore — SqlStore implementation backed by PostgreSQL.
 
-Wraps the same logic as pg_store.py but as instance methods.
+Wraps the same logic as the former pg_store.py (removed after Phase 5) as
+instance methods.
 This is used by the get_sql_store() factory when backend="postgres".
 
 Phase 1 of the backend abstraction plan.
@@ -52,7 +53,7 @@ def _safe_error(e: BaseException) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers (same as pg_store.py, kept private)
+# Internal helpers (mirroring the former pg_store.py, kept private)
 # ---------------------------------------------------------------------------
 
 class _PsycopgPool:

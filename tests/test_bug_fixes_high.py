@@ -218,7 +218,8 @@ class TestHIGH13ConnectionPool(unittest.TestCase):
     """HIGH-13: Fake connection pool creates new connection per operation."""
 
     def test_pool_import_attempted(self):
-        source = (PROJECT_ROOT / "tools/shared/pg_store.py").read_text()
+        # Phase 5: pool logic lives in impls/postgres_sql.py (_PsycopgPool)
+        source = (PROJECT_ROOT / "tools/shared/impls/postgres_sql.py").read_text()
         self.assertIn("ConnectionPool", source)
 
 
@@ -226,9 +227,11 @@ class TestHIGH14PgTrgmOptional(unittest.TestCase):
     """HIGH-14: _ensure_schema fails if pg_trgm unavailable."""
 
     def test_pg_trgm_in_try_except(self):
-        source = (PROJECT_ROOT / "tools/shared/pg_store.py").read_text()
+        # Phase 5: pg_trgm handling moved to impls/postgres_sql.py
+        # (behavioural coverage in tests/test_postgres_impl_bugs.py)
+        source = (PROJECT_ROOT / "tools/shared/impls/postgres_sql.py").read_text()
         schema_start = source.find("def _ensure_schema")
-        schema_end = source.find("\ndef ", schema_start + 10)
+        schema_end = source.find("\n    def ", schema_start + 10)
         schema = source[schema_start:schema_end]
         self.assertIn("pg_trgm", schema)
         self.assertIn("try:", schema)
