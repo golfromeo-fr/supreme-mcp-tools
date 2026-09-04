@@ -104,5 +104,10 @@ Rules: ≤3 parallel agents (ZAI limit); one commit per task (`fix:`/`refactor:`
 
 ## Out of scope (noted, not planned)
 
-- Graphify node-id namespacing (`path::name`) to kill the 400 same-label collisions — upstream graphify improvement, not repo code.
-- Launcher config persistence unification (ConfigPersistence/SQLitePersistence/EventStore) — real but needs its own design pass.
+- ~~Graphify node-id namespacing (`path::name`) to kill the 400 same-label collisions~~ — **DONE 2026-09-04**: the id convention lives in the extraction prompt, not the package; both skill copies patched (`relpath_entityname` + a collision-explaining rule line). Existing graph.json unchanged — splitting already-merged nodes requires re-extraction.
+- **Launcher config persistence unification (ConfigPersistence / SQLitePersistence / EventStore)** — flagged by graph semantic pairs; needs a design pass before any code. Planning note:
+  - *Problem:* three persistence shapes with overlapping jobs (launcher config snapshots, SQLite-persisted config, event log) and no shared interface; each has its own schema and write path.
+  - *Design questions for the pass:* (1) one persistence interface with engine adapters, or keep purpose-built stores? (2) single SQLite database vs per-concern files? (3) retention/pruning rules for the event store; (4) migration of existing ports/config state; (5) does the management API need transactional multi-write?
+  - *When:* after C1-C10 settle and the next graphify run confirms the pairs are structural, not incidental.
+
+## Execution order

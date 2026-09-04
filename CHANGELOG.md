@@ -4,6 +4,12 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-04 — codebase improvement batch (plans/codebase-improvement-plan-2026-09-04.md)
+- **Added**: memory texts >8KB offloaded to ArtifactStore with transparent rehydration on all read paths and blob cleanup on delete/decay/merge (C2) · shared-cache test suite (15 tests) · memory pipeline e2e test incl. the redact→store leg (C3) · deterministic live-server tests (skip with reason when the launcher is down, C5)
+- **Changed**: one cache implementation — `TTLCache` core absorbs `CacheManager`'s LRU and webmcp's `SimpleCache` (C1) · `mergeDuplicates` summary reports cosine/jaccard breakdown (C10) · management UI login no longer uses `password_toggle_button` (NiceGUI 3.16.0 event-wiring bug, bisected; C6) · `oauth_fix.py` marked superseded by the FastMCP 4 auth redesign (C9)
+- **Fixed**: upsertMemory crashed on every medium/high-sensitivity text (tuple-unpack of `redact_sensitive_text` — caught by the new e2e test) · management pre-flight read a nonexistent ports.json key (`reserved.central_management` now authoritative, C4) · review-found search_text trgm param-order bug (wrong results with filters, `6ec75fe`)
+- **Removed**: dead `tools/shared/pg_store.py` (superseded by `impls/postgres_sql.py`), local-only `old/` tree and empty `launcher/streamable_http/` husk (C8)
+
 ### Added
 - **Monitoring System**: Built-in metrics collection with Prometheus exporter
   - Request/response metrics (count, duration, status codes)
