@@ -39,6 +39,11 @@ from memory_core import (
 from shared.store_models import Filter, FieldCondition, MatchValue, MatchContains, PointStruct
 from text_utils import similarity_with_fallback
 
+# Artifact store for large-text offloading. Import is side-effect-free:
+# ArtifactStore.__init__ only reads env vars — the S3 client is created
+# lazily on the first save/load/delete, so S3 is never initialized at import.
+from shared.artifact_store import ArtifactStoreError, generate_artifact_key, get_artifact_store
+
 # For FEF V3 extensions
 try:
     from launcher.tool_extensions import Extension, ExtensionType
@@ -48,6 +53,82 @@ try:
     FEF_V3_AVAILABLE = True
 except ImportError:
     FEF_V3_AVAILABLE = False
+
+
+# ============================================================================
+# Artifact Store: large-text offloading
+# ============================================================================
+
+# Texts at or below this size stay inline in the point payload exactly as
+# before; only larger texts move to the ArtifactStore (local filesystem under
+# ~/.memorymcp/artifacts by default, S3/MinIO when S3_ENDPOINT et al. are set).
+ARTIFACT_INLINE_THRESHOLD_BYTES = 8192
+
+
+async def _store_large_text(memory_id: str, text: str, payload: dict) -> str | None:
+    """
+    Offload text above ARTIFACT_INLINE_THRESHOLD_BYTES to the ArtifactStore.
+
+    On success the payload loses its "text" body and gains:
+      - artifact_key:    storage key ("memories/<id>/memory.txt")
+      - text_size_bytes: original UTF-8 size
+    ("text_preview" with the first 200 chars is always present.)
+
+    On save failure the text stays inline (pre-artifact behavior) — a sidecar
+    outage must never lose memory content. Returns the artifact key or None.
+    """
+    size = len(text.encode("utf-8"))
+    if size <= ARTIFACT_INLINE_THRESHOLD_BYTES:
+        return None
+    key = generate_artifact_key(memory_id, "memory", ".txt")
+    try:
+        await get_artifact_store().save(text, key, content_type="text/plain; charset=utf-8")
+    except Exception as e:
+        logger.warning(f"Artifact save failed for {key}, keeping text inline: {e}")
+        return None
+    payload.pop("text", None)
+    payload["artifact_key"] = key
+    payload["text_size_bytes"] = size
+    return key
+
+
+async def _rehydrate_payload_text(payload: dict) -> tuple[str, str | None]:
+    """
+    Return (text, warning) for a memory payload, handling both shapes.
+
+    Payload has "text"         -> legacy/inline shape, returned unchanged.
+    Payload has "artifact_key" -> full text fetched from the ArtifactStore;
+                                  on any fetch failure the stored
+                                  "text_preview" is returned with a warning
+                                  instead of raising (a read must not fail
+                                  because the sidecar blob did).
+    """
+    if "text" in payload:
+        return payload.get("text") or "", None
+    key = payload.get("artifact_key")
+    if not key:
+        return payload.get("text_preview", ""), None
+    try:
+        data = await get_artifact_store().load(key)
+    except (ArtifactStoreError, OSError, ValueError) as e:
+        warning = f"artifact fetch failed for {key}: {e}"
+        logger.warning(f"Rehydrate: {warning}")
+        return payload.get("text_preview", ""), warning
+    if data is None:
+        warning = f"artifact missing from store: {key}"
+        logger.warning(f"Rehydrate: {warning}")
+        return payload.get("text_preview", ""), warning
+    return data.decode("utf-8", errors="replace"), None
+
+
+async def _delete_artifact_key(key: str | None) -> None:
+    """Best-effort delete of an artifact sidecar (no orphaned blobs)."""
+    if not key:
+        return
+    try:
+        await get_artifact_store().delete(key)
+    except Exception as e:
+        logger.warning(f"Artifact delete failed for {key}: {e}")
 
 
 # ============================================================================
@@ -127,6 +208,23 @@ async def upsertMemory(
 
     payload = memory_item_to_payload(item)
     payload["sensitivity"] = sensitivity
+
+    # When updating, read the existing payload so a replaced artifact sidecar
+    # can be cleaned up (no orphaned blobs).
+    old_artifact_key = None
+    if is_update:
+        try:
+            existing = vector_store.retrieve(COLLECTION_NAME, [memory_id], with_payload=True)
+            if existing:
+                old_artifact_key = existing[0].payload.get("artifact_key")
+        except Exception as e:
+            logger.warning(f"Could not read existing payload of {memory_id}: {e}")
+
+    # Large texts move to the ArtifactStore; the payload keeps a light
+    # reference (artifact_key + text_preview + text_size_bytes).
+    artifact_key = await _store_large_text(memory_id, text, payload)
+    if old_artifact_key and old_artifact_key != artifact_key:
+        await _delete_artifact_key(old_artifact_key)
 
     # Upsert to Qdrant
     try:
@@ -231,6 +329,11 @@ async def queryMemory(
             payload = result.payload
             payload["id"] = str(result.id)
 
+            # Artifact-backed payloads: fetch the full text before scoring
+            # and rendering (degrades to text_preview on fetch failure).
+            text, _warning = await _rehydrate_payload_text(payload)
+            payload["text"] = text
+
             relevance = score_relevance(payload, query_embedding, weights, semantic_score=result.score)
 
             hit = payload_to_memory_hit(payload, result.score)
@@ -297,6 +400,11 @@ async def getMemory(memory_id: str) -> str:
         payload = results[0].payload
         payload["id"] = str(results[0].id)
 
+        # Artifact-backed payloads: fetch the full text (falls back to the
+        # stored preview with a warning if the artifact store fails).
+        text, artifact_warning = await _rehydrate_payload_text(payload)
+        payload["text"] = text
+
         # Update usage
         new_usage = (payload.get("usage_count", 0)) + 1
         now_iso = get_now_iso()
@@ -328,6 +436,9 @@ Content:
 
         if payload.get('provenance'):
             output += f"\nProvenance: {json.dumps(payload['provenance'], indent=2)}"
+
+        if artifact_warning:
+            output += f"\nWarning: {artifact_warning} — showing stored preview."
 
         # Show edges (graph links)
         edges = payload.get("edges", [])
@@ -366,12 +477,22 @@ async def deleteMemory(memory_id: str) -> str:
         return "Error: Qdrant client not initialized"
 
     try:
+        # Read the payload first so the artifact sidecar can be removed too.
+        artifact_key = None
+        try:
+            existing = vector_store.retrieve(COLLECTION_NAME, [memory_id], with_payload=True)
+            if existing:
+                artifact_key = existing[0].payload.get("artifact_key")
+        except Exception as e:
+            logger.warning(f"Could not read payload of {memory_id} before delete: {e}")
+
         vector_store.delete(
             COLLECTION_NAME,
             ids=[memory_id],
         )
         if sql_store.is_available:
             sql_store.delete_memory(memory_id)
+        await _delete_artifact_key(artifact_key)
         logger.info(f"Deleted memory {memory_id}")
         return f"Deleted memory: {memory_id}"
 
@@ -486,6 +607,11 @@ async def decayOrExpire(
             return f"Would delete {len(to_delete)} memories (ttl={ttl_days}d, min_usage={min_usage_count})\nIDs: {to_delete[:10]}{'...' if len(to_delete) > 10 else ''}"
         else:
             if to_delete:
+                # Remove artifact sidecars of the doomed memories first
+                # (no orphaned blobs).
+                keys_by_id = {str(p.id): p.payload.get("artifact_key") for p in all_points}
+                for memory_id in to_delete:
+                    await _delete_artifact_key(keys_by_id.get(memory_id))
                 vector_store.delete(
                     COLLECTION_NAME,
                     ids=to_delete,
@@ -808,6 +934,10 @@ async def reindexMemory(
 
             for point in batch:
                 text = point.payload.get("text", "")
+                if not text and point.payload.get("artifact_key"):
+                    # Artifact-backed memory: re-embed from the full text
+                    # (falls back to the preview on fetch failure).
+                    text, _warning = await _rehydrate_payload_text(point.payload)
                 if text:
                     new_embedding = model.encode([text])[0].tolist()
                     # Merge metadata into existing payload to avoid data loss
@@ -935,6 +1065,16 @@ async def mergeDuplicates(
         # word-Jaccard fallback per pair.
         all_points = list(vector_store.iter_all(COLLECTION_NAME, with_vectors=True))
 
+        # Rehydrate texts up front so artifact-backed memories compare on
+        # their full text (falls back to text_preview on fetch failure).
+        texts: dict[str, str] = {}
+        artifact_keys: dict[str, str | None] = {}
+        for point in all_points:
+            pid = str(point.id)
+            text, _warning = await _rehydrate_payload_text(point.payload)
+            texts[pid] = text
+            artifact_keys[pid] = point.payload.get("artifact_key")
+
         # Group by type and compute similarity
         groups = defaultdict(list)
         for point in all_points:
@@ -944,6 +1084,7 @@ async def mergeDuplicates(
         merged_count = 0
         to_delete = []
         already_marked = set()
+        method_counts = defaultdict(int)  # similarity method -> scored pairs
 
         for mtype, points in groups.items():
             for i, p1 in enumerate(points):
@@ -956,15 +1097,16 @@ async def mergeDuplicates(
                     # vectors when both are available, word-level Jaccard
                     # otherwise. Never computes new embeddings.
                     result = similarity_with_fallback(
-                        getattr(p1, "vector", None),
-                        getattr(p2, "vector", None),
-                        p1.payload.get("text", ""),
-                        p2.payload.get("text", ""),
+                        p1.vector,
+                        p2.vector,
+                        texts[str(p1.id)],
+                        texts[str(p2.id)],
                     )
                     if result is None:
                         continue
 
-                    overlap, _similarity_method = result
+                    overlap, method = result
+                    method_counts[method] += 1
 
                     if overlap >= threshold:
                         # Keep the one with more usage
@@ -976,15 +1118,30 @@ async def mergeDuplicates(
                         already_marked.add(loser)
                         merged_count += 1
 
+        # Breakdown of which similarity method scored the compared pairs,
+        # cosine first (preferred), e.g. "12 cosine + 3 jaccard".
+        breakdown = " + ".join(
+            f"{method_counts[m]} {m}" for m in ("cosine", "jaccard") if method_counts[m]
+        )
+        method_line = f"\nSimilarity methods: {breakdown}" if breakdown else ""
+
         if dry_run:
-            return f"Would merge {merged_count} duplicate pairs\nWould delete {len(to_delete)} memories"
+            return (
+                f"Would merge {merged_count} duplicate pairs\n"
+                f"Would delete {len(to_delete)} memories{method_line}"
+            )
         else:
             if to_delete:
+                delete_ids = list(set(to_delete))
+                # Remove artifact sidecars of the merged-away losers first
+                # (no orphaned blobs).
+                for memory_id in delete_ids:
+                    await _delete_artifact_key(artifact_keys.get(memory_id))
                 vector_store.delete(
                     COLLECTION_NAME,
-                    ids=list(set(to_delete)),
+                    ids=delete_ids,
                 )
-            return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories"
+            return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories{method_line}"
 
     except Exception as e:
         logger.error(f"Merge duplicates failed: {e}")

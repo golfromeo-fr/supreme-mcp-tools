@@ -2,6 +2,17 @@
 Artifact Store - S3/MinIO client for storing large memory artifacts.
 
 Provides object storage for raw artifacts like file snapshots, diffs, etc.
+
+Storage selection (resolved lazily per operation, never at import):
+- S3/MinIO when S3_ENDPOINT + S3_ACCESS_KEY + S3_SECRET_KEY are all set
+  (boto3 must be installed).
+- Otherwise the deterministic local fallback: ~/.memorymcp/artifacts,
+  overridable via the ARTIFACT_LOCAL_DIR env var. Keys are relative paths
+  under that directory (e.g. "memories/<uuid>/memory.txt").
+
+Local filesystem fallback is the default path for memorymcp's large-text
+offloading (upsertMemory moves texts above 8192 bytes here and keeps
+artifact_key + text_preview in the point payload).
 """
 
 import os

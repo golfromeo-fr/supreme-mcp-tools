@@ -154,7 +154,8 @@ async def getMemoryGraph(
                 continue
 
             payload = results[0].payload
-            text = payload.get("text", "")[:50].replace('"', "'")
+            # Artifact-backed payloads carry text_preview instead of text.
+            text = (payload.get("text") or payload.get("text_preview", ""))[:50].replace('"', "'")
             mtype = payload.get("memory_type", "unknown")
             nodes[current_id] = {"text": text, "type": mtype}
 
@@ -265,7 +266,8 @@ async def exportGraphAsMarkdown(
             p = point.payload
             mid = str(point.id)[:8]
             mtype = p.get("memory_type", "unknown")
-            text = p.get("text", "")
+            # Artifact-backed payloads carry text_preview instead of text.
+            text = p.get("text") or p.get("text_preview", "")
             tags = p.get("tags", [])
             lines.append(f"### [{mtype}] {mid}...")
             lines.append(f"**Tags**: {', '.join(tags) if tags else 'none'}")
@@ -296,7 +298,8 @@ async def exportGraphAsMarkdown(
         for point in points:
             mid = str(point.id)[:8]
             mtype = point.payload.get("memory_type", "unknown")
-            preview = point.payload.get("text", "")[:30].replace('"', "'")
+            # Artifact-backed payloads carry text_preview instead of text.
+            preview = (point.payload.get("text") or point.payload.get("text_preview", ""))[:30].replace('"', "'")
             lines.append(f'    {mid}["{mid} [{mtype}]\n{preview}"]')
         point_ids = {str(p.id) for p in points}
         for point in points:

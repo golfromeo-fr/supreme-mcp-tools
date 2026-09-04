@@ -191,7 +191,8 @@ def word_jaccard_similarity(text1: str, text2: str) -> float | None:
     set2 = set((text2 or "").lower().split())
     if not set1 or not set2:
         return None
-    return len(set1 & set2) / max(len(set1 | set2), 1)
+    # Both sets are non-empty here, so the union is too — plain division.
+    return len(set1 & set2) / len(set1 | set2)
 
 
 def similarity_with_fallback(vec1, vec2, text1: str, text2: str) -> tuple[float, str] | None:
