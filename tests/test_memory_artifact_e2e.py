@@ -358,6 +358,22 @@ class TestSmallTextInline:
         assert "artifact_key" in tm.vector_store.points[over_id].payload
         assert len(store.blobs) == 1
 
+    def test_upsert_redacts_sensitive_text_before_storage(self, artifact_env):
+        """C3: the redact -> store leg of the pipeline.
+
+        upsertMemory auto-redacts (check_sensitivity/redact_sensitive_text);
+        whatever the storage shape, the PII must never land in the payload
+        or the artifact blob.
+        """
+        tm, store = artifact_env
+        ssn = "123-45-6789"
+        mem_id = _upsert(tm, f"small memory with ssn {ssn} inside")
+
+        payload = tm.vector_store.points[mem_id].payload
+        assert ssn not in payload["text"]
+        assert payload["text"] != f"small memory with ssn {ssn} inside"
+        assert len(payload["text"]) > 20            # still meaningful content
+
 
 # ---------------------------------------------------------------------------
 # 5. Legacy payloads

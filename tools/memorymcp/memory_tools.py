@@ -177,7 +177,10 @@ async def upsertMemory(
     # Check sensitivity and redact if needed
     sensitivity = check_sensitivity(text)
     if sensitivity != "low":
-        text, _ = redact_sensitive_text(text)
+        # redact_sensitive_text returns a plain str unless return_matches=True
+        # (a former tuple-only signature made this unpack crash on every
+        # medium/high-sensitivity upsert — caught by the C3 e2e test)
+        text = redact_sensitive_text(text)
         logger.info(f"Redacted PII from memory, sensitivity={sensitivity}")
 
     # Generate embedding if not provided
