@@ -12,6 +12,10 @@ The streamable-HTTP transport returns Server-Sent Events, so we parse the
 
 import json
 import os
+import socket
+from urllib.parse import urlparse
+
+import pytest
 import requests
 
 BASE_URL = os.environ.get("SIMPLEMCP_URL", "http://127.0.0.1:8002/mcp")
@@ -22,6 +26,38 @@ REQUEST_HEADERS = {
     "Accept": "application/json, text/event-stream",
     "X-API-Key": API_KEY,
 }
+
+
+def _probe_target() -> tuple[str, int]:
+    """Host/port to probe, derived from BASE_URL (honours SIMPLEMCP_URL)."""
+    parsed = urlparse(BASE_URL)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return parsed.hostname or "127.0.0.1", port
+
+
+_PROBE_HOST, _PROBE_PORT = _probe_target()
+_launcher_up: bool | None = None
+
+
+def _launcher_reachable() -> bool:
+    """One-shot TCP probe of the live server, cached for the whole run."""
+    global _launcher_up
+    if _launcher_up is None:
+        try:
+            with socket.create_connection((_PROBE_HOST, _PROBE_PORT), timeout=2):
+                _launcher_up = True
+        except OSError:
+            _launcher_up = False
+    return _launcher_up
+
+
+# Every test in this file drives the live server, so skip them all (with a
+# clear reason) when the launcher isn't running instead of failing on
+# ConnectionError.
+pytestmark = pytest.mark.skipif(
+    not _launcher_reachable(),
+    reason=f"launcher not running on {_PROBE_HOST}:{_PROBE_PORT}",
+)
 
 _session_id: str | None = None
 
