@@ -1,19 +1,27 @@
 """
 OAuth Suppression Fix for FastMCP 2.14+
-========================================
-FastMCP 2.14+ auto-exposes /.well-known/oauth-authorization-server and
+=======================================
+STATUS: SUPERSEDED — kept for reference only. Zero importers since the
+FastMCP 4 auth redesign: no FastMCP instance exposes OAuth discovery routes
+anymore (server_factory attaches the DualHeaderVerifier token-verifier stack
+instead of OAuth endpoints), so there is nothing left to suppress. Do not
+call apply_oauth_fix; if OAuth metadata ever reappears on the well-known
+endpoints, fix it at the server_factory auth wiring, not here.
+
+Historical context: FastMCP 2.14+ auto-exposed
+/.well-known/oauth-authorization-server and
 /.well-known/oauth-protected-resource. VS Code Copilot's MCP client probes
 these endpoints — when it gets a 200 with OAuth metadata, it enters OAuth flow
 and ignores configured headers (X-API-Key, Authorization, etc.) entirely.
 
-This module provides a shared fix that suppresses those endpoints by registering
-custom 404 routes on any FastMCP instance.
+This module provided a shared fix that suppressed those endpoints by
+registering custom 404 routes on any FastMCP instance.
 
-Usage (in each *_fastmcp.py):
+Former usage (in each *_fastmcp.py):
     from tools.shared.oauth_fix import apply_oauth_fix
     apply_oauth_fix(mcp)
 
-Applied to: webmcp, ragmcp, convertermcp, memorymcp, simplemcp, oraclemcp
+Was applied to: webmcp, ragmcp, convertermcp, memorymcp, simplemcp, oraclemcp
 """
 
 from starlette.requests import Request
