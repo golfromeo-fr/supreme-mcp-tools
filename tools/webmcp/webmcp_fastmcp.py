@@ -8,8 +8,6 @@ import logging
 import time
 import asyncio
 import re
-import hashlib
-import threading
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -82,57 +80,30 @@ from tools.shared.utils import is_internal_url as _is_internal_url
 # URL is checked after redirects, but per-redirect validation requires a custom
 # transport which is not yet implemented.
 
-class SimpleCache:
+from tools.shared.cache import TTLCache, generate_cache_key
+
+class SimpleCache(TTLCache):
+    """Fetch cache: thin subclass of the shared LRU+TTL core.
+
+    All cache logic lives once in tools/shared/cache.py:TTLCache — locking
+    (a single threading.RLock(), every method running under "with self.lock:"),
+    true-LRU eviction, TTL expiry and size bounds.  This subclass only pins
+    the webmcp size bound; MAX_SIZE is honored dynamically by the core, so
+    instance-level overrides resize the cache after construction.
+    """
+
     MAX_SIZE = 1000
 
     def __init__(self, default_ttl: int = 3600):
-        self.cache: dict[str, tuple[str, float]] = {}
-        self.lock = threading.RLock()
-        self.default_ttl = default_ttl
-
-    def get(self, key: str) -> str | None:
-        with self.lock:
-            if key in self.cache:
-                content, expiry = self.cache[key]
-                if time.time() < expiry:
-                    return content
-                else:
-                    del self.cache[key]
-        return None
-
-    def set(self, key: str, value: str, ttl: int | None = None) -> None:
-        with self.lock:
-            if len(self.cache) >= self.MAX_SIZE:
-                expired_keys = [k for k, (_, exp) in self.cache.items() if time.time() >= exp]
-                if expired_keys:
-                    for k in expired_keys:
-                        del self.cache[k]
-                else:
-                    oldest_key = next(iter(self.cache))
-                    del self.cache[oldest_key]
-            expiry = time.time() + (ttl if ttl is not None else self.default_ttl)
-            self.cache[key] = (value, expiry)
-    
-    def clear(self) -> None:
-        with self.lock:
-            self.cache.clear()
-    
-    def cleanup_expired(self) -> None:
-        with self.lock:
-            current_time = time.time()
-            expired_keys = [key for key, (_, expiry) in self.cache.items() if current_time >= expiry]
-            for key in expired_keys:
-                del self.cache[key]
+        super().__init__(default_ttl=default_ttl)
 
 _cache = SimpleCache(default_ttl=3600)
 
 def _generate_cache_key(url: str, params: dict) -> str:
     try:
-        param_str = str(sorted(params.items(), key=lambda x: str(x[0])))
+        return generate_cache_key(url, params)
     except TypeError:
         return "error:mixed-type-keys"
-    combined = f"{url}:{param_str}"
-    return hashlib.sha256(combined.encode()).hexdigest()[:16]
 def _clean_html(html_content: str, include_images: bool = True, include_tables: bool = True, include_links: bool = True) -> str:
     try:
         from bs4 import BeautifulSoup

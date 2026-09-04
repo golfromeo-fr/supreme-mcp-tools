@@ -12,10 +12,11 @@ import time
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 
 import aiohttp
+
+from tools.shared.cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -182,72 +183,81 @@ class CircuitBreaker:
 class CacheManager:
     """
     Async TTL-based cache manager for extension metadata and query results.
+
+    Thin asyncio facade over the shared sync cache core
+    (tools/shared/cache.py:TTLCache) — the OrderedDict-backed LRU/TTL/eviction
+    logic exists exactly once, in that core:
+
+      - a fresh get() refreshes recency via OrderedDict.move_to_end,
+      - overwriting a key does del self.cache[key] + re-insert (marks it
+        most-recently-used),
+      - at capacity the least-recently-used entry is evicted via
+        OrderedDict.popitem(last=False).
     """
-    
+
     def __init__(self, max_size: int = 1000):
         """
         Initialize the cache manager.
-        
+
         Args:
             max_size: Maximum number of cache entries
         """
         self.max_size = max_size
-        self.cache: OrderedDict[str, dict] = OrderedDict()
+        self._core = TTLCache(default_ttl=60, max_size=max_size)
         self._lock = asyncio.Lock()
-    
+
+    @property
+    def cache(self) -> "OrderedDict[str, tuple[Any, float]]":
+        """Raw entry map of the shared core (OrderedDict of (value, expiry))."""
+        return self._core.cache
+
     async def get(self, key: str) -> Any | None:
         """
-        Get cached value if not expired.
-        
+        Get cached value if not expired (recency refresh via move_to_end is
+        applied by the shared core).
+
         Args:
             key: Cache key
-            
+
         Returns:
             Cached value if found and not expired, None otherwise
         """
         async with self._lock:
-            if key in self.cache:
-                entry = self.cache[key]
-                if entry["expires_at"] > time.time():
-                    self.cache.move_to_end(key)
-                    return entry["value"]
-                else:
-                    del self.cache[key]
-        return None
-    
+            return self._core.get(key)
+
     async def set(self, key: str, value: Any, ttl: int = 60) -> None:
+        """
+        Set a value; LRU/TTL/eviction semantics live once in the shared core
+        (overwrite: del self.cache[key] then re-insert; at capacity the
+        least-recently-used entry is evicted via popitem(last=False)).
+        """
         async with self._lock:
-            if key in self.cache:
-                del self.cache[key]
-            elif len(self.cache) >= self.max_size:
-                self.cache.popitem(last=False)  # evict least-recently-used
-            self.cache[key] = {
-                "value": value,
-                "expires_at": time.time() + ttl
-            }
-    
+            self._core.set(key, value, ttl=ttl)
+
     async def invalidate(self, key: str) -> None:
         """
         Invalidate a cache entry.
-        
+
         Args:
             key: Cache key to invalidate
         """
         async with self._lock:
-            if key in self.cache:
-                del self.cache[key]
-    
+            with self._core.lock:
+                if key in self.cache:
+                    del self.cache[key]
+
     async def invalidate_prefix(self, prefix: str) -> None:
         """
         Invalidate all entries with a prefix.
-        
+
         Args:
             prefix: Prefix to match
         """
         async with self._lock:
-            keys_to_remove = [k for k in self.cache.keys() if k.startswith(prefix)]
-            for key in keys_to_remove:
-                del self.cache[key]
+            with self._core.lock:
+                keys_to_remove = [k for k in self.cache.keys() if k.startswith(prefix)]
+                for key in keys_to_remove:
+                    del self.cache[key]
 
 
 class EventAggregator:
