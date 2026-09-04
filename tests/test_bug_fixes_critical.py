@@ -307,6 +307,58 @@ class TestCRIT11BM25StatsIsolation(unittest.TestCase):
         self.assertEqual(gen.doc_count, 2)
 
 
+class TestC4ManagementPreflightKey(unittest.TestCase):
+    """C4: management pre-flight must read reserved.central_management.
+
+    config/ports.json keeps central_management under "reserved"; the old code
+    read assignments.system.central_management, which never existed, so the
+    broad except always swallowed the KeyError and silently used the
+    hardcoded 8200.
+    """
+
+    def test_real_config_resolves_through_reserved_key(self):
+        # The REAL config/ports.json must win over the fallback: point the
+        # fallback constant at a sentinel and still expect 8200 from the config.
+        from launcher import port_manager
+        with patch.object(port_manager, "DEFAULT_CENTRAL_MANAGEMENT_PORT", 99999):
+            self.assertEqual(port_manager._central_management_port(), 8200)
+
+    def test_falls_back_when_key_missing(self):
+        import tempfile
+        from launcher import port_manager
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "ports.json"
+            cfg_path.write_text(json.dumps({
+                "ranges": {"mcp": [8000, 8099]},
+                "assignments": {"mcp": {}},
+            }))
+            self.assertEqual(
+                port_manager._central_management_port(cfg_path),
+                port_manager.DEFAULT_CENTRAL_MANAGEMENT_PORT,
+            )
+        self.assertEqual(port_manager.DEFAULT_CENTRAL_MANAGEMENT_PORT, 8200)
+
+    def test_occupied_check_dials_configured_port(self):
+        # End to end: management_endpoint_occupied() dials the port resolved
+        # from the real config, not the fallback constant.
+        from launcher import port_manager
+
+        dialed = []
+
+        def fake_create_connection(address, timeout=None):
+            dialed.append(address[1])
+            raise OSError("simulated: nothing listening")
+
+        fake_socket = MagicMock()
+        fake_socket.create_connection = fake_create_connection
+        with patch.object(port_manager, "DEFAULT_CENTRAL_MANAGEMENT_PORT", 99999), \
+                patch.object(port_manager, "socket", fake_socket):
+            occupied = port_manager.management_endpoint_occupied()
+
+        self.assertFalse(occupied)
+        self.assertEqual(dialed, [8200])
+
+
 if __name__ == "__main__":
     import importlib.util
     unittest.main()

@@ -12,9 +12,11 @@ Port Types:
     - ui: Web UI services (default range: 8400-8499)
 """
 
+import json
 import logging
 import socket
 import time
+from pathlib import Path
 from typing import Any
 
 from .errors import PortConflictError
@@ -29,6 +31,26 @@ logger = logging.getLogger(__name__)
 PORT_BUSY_RETRY_SECS = 20.0
 PORT_BUSY_RETRY_INTERVAL = 1.5
 
+# Fallback when config/ports.json is unreadable or lacks the key. The real
+# value lives under "reserved"."central_management" in config/ports.json.
+DEFAULT_CENTRAL_MANAGEMENT_PORT = 8200
+
+
+def _central_management_port(config_path: Path | None = None) -> int:
+    """Central management port from config/ports.json, else the hardcoded default.
+
+    ports.json keeps system service ports under "reserved" (the "assignments"
+    section only maps mcp/mgmt tool ports). A missing file or missing key falls
+    back to DEFAULT_CENTRAL_MANAGEMENT_PORT; a malformed value raises.
+    """
+    if config_path is None:
+        config_path = Path(__file__).resolve().parent.parent / "config" / "ports.json"
+    try:
+        cfg = json.loads(config_path.read_text())
+    except OSError:
+        return DEFAULT_CENTRAL_MANAGEMENT_PORT
+    return int(cfg.get("reserved", {}).get("central_management", DEFAULT_CENTRAL_MANAGEMENT_PORT))
+
 
 def management_endpoint_occupied(mgmt_port: int | None = None) -> bool:
     """True if something listens on the central management port — a launcher
@@ -36,15 +58,7 @@ def management_endpoint_occupied(mgmt_port: int | None = None) -> bool:
     fails fast with guidance instead of fighting (and losing) over tool ports.
     """
     if mgmt_port is None:
-        import json
-        from pathlib import Path
-        try:
-            cfg = json.loads(
-                (Path(__file__).resolve().parent.parent / "config" / "ports.json").read_text()
-            )
-            mgmt_port = int(cfg["assignments"]["system"]["central_management"])
-        except Exception:
-            mgmt_port = 8200
+        mgmt_port = _central_management_port()
     try:
         with socket.create_connection(("127.0.0.1", int(mgmt_port)), timeout=1.0):
             return True
