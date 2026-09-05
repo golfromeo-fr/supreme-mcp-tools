@@ -9,6 +9,15 @@ Evidence base: full read-only map of every persistence mechanism (2026-09-05, ex
 
 **Function Masks are not enforced anywhere in the serving path.**
 
+> **UPDATE 2026-09-05: DECIDED + IMPLEMENTED (option A).** User: "my initial
+> intention was the MCP client can not see the masked function, this should be
+> enforced." Enforcement lives in `tools/shared/function_masks.py`; every
+> `<name>_fastmcp.py` calls `apply_function_masks(mcp, TOOL_NAME)` after tool
+> registration — masked tools are disabled on the FastMCP instance (fastmcp 4
+> native disable: hidden from `tools/list`, calls raise "Unknown tool").
+> Effective at next server/launcher start; runtime toggling via the mgmt API
+> is the noted follow-up. Tests: `tests/test_function_masks.py`.
+
 - `disabled_tools` is written by the management API (`launcher/management_server.py:404,414` → `launcher/tools_config.py:79-123`) and by the UI (`mcp_ui/components/tool_settings.py`), displayed in the UI, and pruned by `validate_and_cleanup_config()`.
 - **No code applies it**: `launchmcp.py`, `launcher/tool_discovery.py`, `tools/shared/*`, and every tool server were checked — zero readers. The MCP tools list and execution are unaffected by masks.
 - Consequence: the user's live masks (`webmcp.brave_search_web`, `simplemcp.get_secret` per `~/.config/supreme-mcp-tools/tools_config.json`) are UI-cosmetic only. Any MCP client (Kilo Code, ZCode, Copilot) still sees and can call both tools.

@@ -72,6 +72,9 @@ from memory_tools import setup_fef_v3, setup_extensions  # noqa: F401 - launcher
 # ============================================================================
 
 from tools.shared.server_factory import get_transport_app, DEFAULT_HOST
+from tools.shared.function_masks import apply_function_masks
+
+apply_function_masks(mcp, TOOL_NAME)
 
 app = get_transport_app(mcp)
 

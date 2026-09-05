@@ -172,6 +172,10 @@ A bare top-level `"api_key"` is invisible to the auth system. `tools/<name>/conf
 
 Tools register via `@mcp.tool()` decorators at import time. Submodules register their tools as a side effect of being imported. The entry point (`<name>_fastmcp.py`) imports submodules, then calls `get_transport_app(mcp)`.
 
+### Function masks (server-enforced)
+
+`disabled_tools` in `~/.config/supreme-mcp-tools/tools_config.json` (written by the management API `PUT /api/disabled-tools/...` and the mcp_ui Functions tab) is enforced at the tool-server boundary: every `<name>_fastmcp.py` calls `tools.shared.function_masks.apply_function_masks(mcp, TOOL_NAME)` after tool registration. A masked tool is disabled on the FastMCP instance (fastmcp native disable), so clients cannot see it in `tools/list` and direct calls fail with "Unknown tool". Mask changes take effect at the next server/launcher start (runtime toggling is a follow-up). Missing or corrupt config file means "no masks" — never a startup failure. Tests: `tests/test_function_masks.py`.
+
 ### Side-effect imports
 
 `memory_core.py` and `ragmcp_fastmcp.py` initialize backend connections (via the ABC factories) at import time. Tests that don't need these should import from dependency-free modules like `text_utils.py` instead.

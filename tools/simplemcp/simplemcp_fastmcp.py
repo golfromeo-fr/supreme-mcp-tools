@@ -384,6 +384,9 @@ async def lifespan(app):
 # ============================================================================
 
 from tools.shared.server_factory import get_transport_app
+from tools.shared.function_masks import apply_function_masks
+
+apply_function_masks(mcp, TOOL_NAME)
 
 app = get_transport_app(mcp)
 
