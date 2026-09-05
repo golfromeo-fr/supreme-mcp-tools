@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import logging
 import os
+import threading
 import signal
 import sys
 from pathlib import Path
@@ -931,9 +932,17 @@ async def main() -> int:
         logging.exception(f"Unexpected error: {e}")
         return 1
     
-    # Graceful shutdown
+    # Graceful shutdown — hard deadline (C7 restart race): a dying launcher must
+    # never hold tool ports past the next launcher's 20s port-retry window.
     logging.info("Stopping all servers...")
-    await server_manager.stop_all_servers()
+    try:
+        await asyncio.wait_for(server_manager.stop_all_servers(), timeout=15)
+    except asyncio.TimeoutError:
+        logging.error(
+            "Graceful shutdown exceeded 15s — forcing exit so the OS reclaims "
+            "all tool ports immediately"
+        )
+        os._exit(1)
     port_manager.release_all_ports()
     
     # Print summary
@@ -947,6 +956,12 @@ async def main() -> int:
 if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
+        # Post-run exit guard (C7 restart race): a lingering non-daemon thread
+        # keeps the interpreter (and every tool port fd) alive after main()
+        # has finished — observed 2026-08-30 as ports busy for minutes after
+        # a "clean" shutdown log. Force the process to die within 5s; sys.exit
+        # still wins the race when nothing lingers.
+        threading.Timer(5.0, lambda: os._exit(exit_code), daemon=True).start()
         sys.exit(exit_code)
     except KeyboardInterrupt:
         logging.info("Interrupted by user")

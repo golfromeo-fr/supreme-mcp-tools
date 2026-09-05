@@ -14,7 +14,7 @@ Derived from the graphify analysis (`graphify-out/GRAPH_REPORT.md`, 5,152 nodes 
 - [ ] **C4 — port_manager wrong-key read fix** (15m)
 - [ ] **C5 — Deterministic test suite** (30m)
 - [ ] **C6 — mcp_ui persistent secret + login-redirect fix** (1.5h)
-- [ ] **C7 — Launcher child-shutdown fix** (1-2h, needs launcher-down window)
+- [x] **C7 — Launcher child-shutdown fix** (DONE 2026-09-05: bounded teardown + forcible-exit watchdog)
 - [ ] **C8 — Delete dead modules** (30m)
 - [ ] **C9 — oauth_fix documentation pointers** (5m)
 - [ ] **C10 — text_utils micro-cleanups** (15m)

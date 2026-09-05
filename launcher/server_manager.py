@@ -27,6 +27,13 @@ from .env_manager import load_auth_config
 
 logger = logging.getLogger(__name__)
 
+# C7 (restart race): uvicorn's default graceful shutdown waits forever for open
+# connections (e.g. live SSE streams). One hung connection then holds every tool
+# port past the next launcher's 20s port-retry window → half the tools fail to
+# come back. Every shutdown await below is bounded by these deadlines.
+GRACEFUL_SHUTDOWN_TIMEOUT = 5  # per-server connection drain (uvicorn) / shutdown await
+TASK_CANCEL_TIMEOUT = 3  # wait for cancelled server tasks before forcing shutdown
+
 
 @dataclass
 class ServerInstance:
@@ -115,7 +122,8 @@ class ServerManager:
                 host=self.host,
                 port=port,
                 log_level=self.log_level,
-                access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable"
+                access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable",
+                timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT,
             )
 
             # Create Uvicorn server
@@ -299,14 +307,27 @@ class ServerManager:
                     instance.server.should_exit = True
                     task.cancel()
                     try:
-                        await task
+                        await asyncio.wait_for(task, timeout=TASK_CANCEL_TIMEOUT)
                     except asyncio.CancelledError:
                         pass
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"Task for {tool_name} ignored cancellation for "
+                            f"{TASK_CANCEL_TIMEOUT}s — forcing shutdown"
+                        )
                 del self.tasks[tool_name]
-            
+
             # Shutdown the server only if no task was managing it
             if instance.server.started and tool_name not in self.tasks:
-                await instance.server.shutdown()
+                try:
+                    await asyncio.wait_for(
+                        instance.server.shutdown(), timeout=GRACEFUL_SHUTDOWN_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Server for {tool_name} did not shut down within "
+                        f"{GRACEFUL_SHUTDOWN_TIMEOUT}s — abandoned (port frees on exit)"
+                    )
             
             instance.status = "stopped"
             logger.info(f"Server for {tool_name} stopped")
@@ -319,33 +340,77 @@ class ServerManager:
             return False
     
     async def stop_all_servers(self) -> None:
-        """Stop all running servers."""
+        """Stop all running servers.
+
+        Every await is deadline-bounded (C7): a single stuck server — e.g. a
+        uvicorn instance pinned by a live SSE stream — must not hold the other
+        tools' ports past the next launcher's port-retry window.
+        """
         logger.info("Stopping all servers")
-        
+
         # Cancel all tasks
-        tasks = list(self.tasks.values())
+        tasks = [t for t in self.tasks.values() if not t.done()]
         for task in tasks:
-            if not task.done():
-                task.cancel()
-        
-        # Wait for all tasks to complete
+            task.cancel()
+
+        # Wait for all tasks to complete (bounded)
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Shutdown all servers
-        for instance in self.servers.values():
-            if instance.server.started:
-                try:
-                    await instance.server.shutdown()
-                except Exception as e:
-                    logger.error(f"Error shutting down server for {instance.tool_name}: {e}")
-        
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=TASK_CANCEL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"{len(tasks)} server tasks ignored cancellation for "
+                    f"{TASK_CANCEL_TIMEOUT}s — proceeding to force shutdown"
+                )
+
+        # Shut down all servers concurrently, each with a hard deadline.
+        shut_down = await asyncio.gather(
+            *(
+                self._force_shutdown(instance)
+                for instance in self.servers.values()
+                if instance.server.started
+            ),
+            return_exceptions=True,
+        )
+        for result in shut_down:
+            if isinstance(result, Exception):
+                logger.error(f"Error shutting down server: {result}")
+
+        # Stop management servers (FEF V3) — bounded, concurrent, never fatal
+        mgmt_results = await asyncio.gather(
+            *(
+                asyncio.wait_for(instance.mgmt_server.stop(), GRACEFUL_SHUTDOWN_TIMEOUT)
+                for instance in self.servers.values()
+                if instance.mgmt_server is not None
+            ),
+            return_exceptions=True,
+        )
+        for result in mgmt_results:
+            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                logger.error(f"Error stopping management server: {result}")
+
         # Clear all
         self.tasks.clear()
         for instance in self.servers.values():
             instance.status = "stopped"
-        
+
         logger.info("All servers stopped")
+
+    async def _force_shutdown(self, instance: ServerInstance) -> None:
+        """Shut down one uvicorn server with a hard deadline (C7)."""
+        try:
+            await asyncio.wait_for(
+                instance.server.shutdown(), timeout=GRACEFUL_SHUTDOWN_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Server for {instance.tool_name} did not shut down within "
+                f"{GRACEFUL_SHUTDOWN_TIMEOUT}s — abandoned (port frees on process exit)"
+            )
+            raise
     
     def get_server_status(self, tool_name: str) -> str | None:
         """
