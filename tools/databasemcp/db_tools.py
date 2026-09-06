@@ -21,6 +21,104 @@ from core import (
     setup_tool_extensions, Extension, ExtensionType,
 )
 import connections
+from connections import REGISTRY
+from dialects import DIALECTS, get_dialect
+
+
+# ============================================================================
+# Connection Registry Tools (P2)
+# ============================================================================
+
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+@mcp.tool()
+async def connect_database(name: str, db_type: str, params: dict) -> str:
+    """Connect to a database and register it under a name.
+
+    db_type: oracle | postgres | libsql. params per type:
+    - oracle: user, password, host, port, service_name
+    - postgres: host, dbname, user, password (optional: port, connect_timeout)
+    - libsql: url ("file:/path.db", "file::memory:", or "libsql://..." with
+      optional auth_token). NOTE: a file: URL to a nonexistent path creates
+      an empty database (SQLite semantics).
+    The first connection becomes the active one for query/execute_sql/etc.
+    Params are never echoed back.
+    """
+    start_time = time.perf_counter()
+    if not _NAME_RE.match(name or ""):
+        _timing_update(start_time, "connect_database", False)
+        return "Invalid connection name: use 1-32 chars of letters, digits, '_' or '-'"
+    try:
+        dialect = get_dialect(db_type)
+    except ValueError as e:
+        _timing_update(start_time, "connect_database", False)
+        return f"Error: {e}"
+    missing = [p for p in dialect.REQUIRED_PARAMS if not params.get(p)]
+    if missing:
+        _timing_update(start_time, "connect_database", False)
+        return f"Missing required params for {db_type}: {', '.join(missing)}"
+
+    def _connect():
+        REGISTRY.connect(name, db_type, params)
+
+    try:
+        await asyncio.to_thread(_connect)
+    except Exception as e:
+        _timing_update(start_time, "connect_database", False)
+        logger.error(f"Connect failed for '{name}' ({db_type}): {type(e).__name__}")
+        return f"Connect failed: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
+    _timing_update(start_time, "connect_database", True)
+    active = REGISTRY._active
+    return f"Connected '{name}' ({db_type}). Active: '{active}'"
+
+
+@mcp.tool()
+async def disconnect_database(name: str) -> str:
+    """Disconnect and remove a named database connection."""
+    start_time = time.perf_counter()
+    try:
+        result = await asyncio.to_thread(REGISTRY.disconnect, name)
+    except LookupError as e:
+        _timing_update(start_time, "disconnect_database", False)
+        return f"Error: {e}"
+    _timing_update(start_time, "disconnect_database", True)
+    if result.startswith("Connection '") and "busy" in result:
+        _timing_update(start_time, "disconnect_database", False)
+        return result
+    return f"Disconnected '{name}'. Active now: {result}"
+
+
+@mcp.tool()
+async def list_connections() -> str:
+    """List all registered database connections (never shows credentials)."""
+    start_time = time.perf_counter()
+    conns = REGISTRY.list()
+    if not conns:
+        _timing_update(start_time, "list_connections", True)
+        return "none — use connect_database(name, db_type, params)"
+    lines = []
+    for c in conns:
+        active = " *ACTIVE*" if c["active"] else ""
+        last_err = f" last_error={c['last_error']}" if c["last_error"] else ""
+        lines.append(
+            f"- {c['name']} ({c['dialect']}, {c['state']}, cached={c['cached_tables']}){active}{last_err}"
+        )
+    _timing_update(start_time, "list_connections", True)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def use_database(name: str) -> str:
+    """Switch the active database connection used by query/execute_sql/etc."""
+    start_time = time.perf_counter()
+    try:
+        entry = await asyncio.to_thread(REGISTRY.set_active, name)
+    except LookupError as e:
+        _timing_update(start_time, "use_database", False)
+        return f"Error: {e}"
+    _timing_update(start_time, "use_database", True)
+    return f"Active connection: '{entry.name}' ({entry.dialect})"
 
 
 # ============================================================================

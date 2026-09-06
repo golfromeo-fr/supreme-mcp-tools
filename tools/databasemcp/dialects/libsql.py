@@ -1,0 +1,113 @@
+"""libSQL dialect — local file / in-memory / Turso (libsql://) backends.
+
+Cursor shapes VERIFIED live (2026-09-06 probe, libsql_experimental 0.0.55):
+fetchmany exists; description is 7-tuples; PRAGMA table_info rows are
+(cid, name, type, notnull, dflt_value, pk); PRAGMA foreign_key_list rows
+are (id, seq, table, from, to, on_update, on_delete, match);
+EXPLAIN QUERY PLAN text is the LAST tuple element; multi-statement
+strings execute as-is; PRAGMA on a missing table returns [].
+
+Concurrency: one shared autocommit connection, NO Python lock — the
+libsql_experimental C binding serializes statements via an internal mutex
+(same finding as tools/shared/impls/turso_sql.py:62-71).
+"""
+from typing import Any
+
+from ._base import DbDialect
+
+
+class LibsqlDialect(DbDialect):
+    name = "libsql"
+    REQUIRED_PARAMS = ("url",)
+
+    def connect(self, params: dict) -> Any:
+        import libsql_experimental as libsql
+
+        if params.get("auth_token"):
+            conn = libsql.connect(params["url"], auth_token=params["auth_token"])
+        else:
+            conn = libsql.connect(params["url"])
+        conn.autocommit = True
+        return conn
+
+    def close(self, handle) -> None:
+        close = getattr(handle, "close", None)
+        if close:
+            close()
+
+    def ping(self, handle) -> None:
+        handle.execute("SELECT 1").fetchall()
+
+    def run_select(self, handle, sql: str, max_rows: int) -> tuple[list[dict], bool]:
+        cursor = handle.execute(sql)
+        rows = cursor.fetchmany(max_rows + 1)
+        cols = [c[0] for c in cursor.description]
+        data = [dict(zip(cols, row)) for row in rows]
+        truncated = len(data) > max_rows
+        return data[:max_rows], truncated
+
+    def execute(self, handle, sql: str) -> int:
+        # Multi-statement guard: libsql silently runs only the FIRST
+        # statement of a multi-statement string on file DBs (probe
+        # correction, 2026-09-06). Reject instead of partially executing.
+        body = sql.rstrip().rstrip(";")
+        in_str = False
+        for ch in body:
+            if ch == "'":
+                in_str = not in_str
+            elif ch == ";" and not in_str:
+                raise ValueError(
+                    "Multiple statements detected; execute one statement at a time."
+                )
+        cursor = handle.execute(sql)
+        return cursor.rowcount
+
+    def list_tables(self, handle) -> list[dict]:
+        rows = handle.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        return [{"name": r[0], "comment": ""} for r in rows]
+
+    def describe_table(self, handle, table: str) -> dict:
+        # PRAGMA interpolation guard: reject quote/NUL in table names
+        if '"' in table or "\0" in table:
+            raise ValueError(f"Invalid table name: {table!r}")
+        columns = handle.execute(f'PRAGMA table_info("{table}")').fetchall()
+        fks = handle.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()
+
+        return {
+            "columns": [
+                {
+                    "name": c[1],
+                    "type": c[2] or "",
+                    "nullable": not c[3],
+                    "comment": "",
+                }
+                for c in columns
+            ],
+            "constraints": [
+                {"name": f"pk_{c[1]}", "type": "PRIMARY"} for c in columns if c[5]
+            ],
+            "foreign_keys": [
+                {
+                    "name": f"fk_{f[0]}",
+                    "column": f[3],
+                    "ref_table": f[2],
+                    "ref_column": f[4],
+                }
+                for f in fks
+            ],
+        }
+
+    def explain(self, handle, sql: str) -> str:
+        rows = handle.execute(f"EXPLAIN QUERY PLAN {sql}").fetchall()
+        return "\n".join(str(r[-1]) for r in rows)
+
+    def format_error(self, e: Exception) -> dict:
+        return {
+            "error": "DB_ERROR",
+            "code": None,
+            "message": str(e),
+            "offset": None,
+        }
