@@ -21,7 +21,7 @@ from core import (
     setup_tool_extensions, Extension, ExtensionType,
 )
 import connections
-from connections import REGISTRY
+from connections import REGISTRY, _SECRET_KEYS
 from dialects import DIALECTS, get_dialect
 
 
@@ -67,7 +67,11 @@ async def connect_database(name: str, db_type: str, params: dict) -> str:
     except Exception as e:
         _timing_update(start_time, "connect_database", False)
         logger.error(f"Connect failed for '{name}' ({db_type}): {type(e).__name__}")
-        return f"Connect failed: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
+        msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+        for k, v in (params or {}).items():  # never echo secret values
+            if str(k).lower() in _SECRET_KEYS and v:
+                msg = msg.replace(str(v), "***")
+        return f"Connect failed: {msg}"
     _timing_update(start_time, "connect_database", True)
     active = REGISTRY._active
     return f"Connected '{name}' ({db_type}). Active: '{active}'"
@@ -246,100 +250,250 @@ async def get_schemas(table_name: str | None = None) -> str:
     })
 
 
+# ============================================================================
+# Generic Data Tools (P3) — dialect dispatch over the connection registry
+# ============================================================================
+
+def _with_entry(connection: str | None, fn):
+    """Run fn(entry) under the entry's lock; returns (ok, result_or_error).
+
+    Shared metrics timing + [SQL] logging live with the callers.
+    """
+    entry = REGISTRY.get(connection)
+    if not entry.lock.acquire(timeout=int(os.environ.get("DB_LOCK_WAIT_S", "10"))):
+        raise TimeoutError(f"connection '{entry.name}' is busy")
+    entry.last_used = time.time()
+    try:
+        return fn(entry)
+    except Exception as e:
+        entry.last_error = str(e)[:200]
+        raise
+    finally:
+        entry.lock.release()
+
+
+def _run_entry_select(entry, sql: str, max_rows: int):
+    logger.info(f"[SQL] Executing query: {sql[:200]}{'...' if len(sql) > 200 else ''}")
+    start = time.time()
+    try:
+        rows, truncated = DIALECTS[entry.dialect].run_select(entry.handle, sql, max_rows)
+        metrics["query_count"] += 1
+        return rows, truncated
+    except Exception as e:
+        metrics["query_errors"] += 1
+        raise
+    finally:
+        elapsed_ms = (time.time() - start) * 1000
+        metrics["total_query_time_ms"] += elapsed_ms
+
+
+def _read_guard(sql: str) -> str | None:
+    """Lexical read-only guard for query() (accident prevention, not security:
+    PG CTE-DML 'WITH x AS (DELETE ...)' passes — client holds execute_sql anyway)."""
+    s = sql.strip()
+    while s.startswith("("):
+        s = s[1:].lstrip()
+    first = s.split(None, 1)[0].upper() if s else ""
+    if first not in ("SELECT", "WITH"):
+        return f"query() is read-only (got '{first or 'empty'}'). Use execute_sql for DML/DDL."
+    return None
+
+
 @mcp.tool()
 async def get_valid_languages() -> str:
-    """Get valid language codes from LANGUES table."""
+    """Get valid language codes from the LANGUES table (Oracle work DB only)."""
     start_time = time.perf_counter()
-    sql = """
-        SELECT LANCODE, LANLIBC, LANLIBL, LANUSED
-        FROM LANGUES
-        WHERE ROWNUM <= 10
-        ORDER BY LANCODE
-    """
-    result = connections.execute_query(sql)
-    if not result["success"]:
+    try:
+        def _run(entry):
+            if entry.dialect != "oracle":
+                raise RuntimeError(
+                    f"Oracle-only tool (queries the LANGUES table); active connection is {entry.dialect}."
+                )
+            sql = """
+                SELECT LANCODE, LANLIBC, LANLIBL, LANUSED
+                FROM LANGUES
+                WHERE ROWNUM <= 10
+                ORDER BY LANCODE
+            """
+            return _run_entry_select(entry, sql, max_rows=10)
+
+        rows, _trunc = await asyncio.to_thread(_with_entry, None, _run)
+        _timing_update(start_time, "get_valid_languages", True)
+        return str(rows)
+    except Exception as e:
         _timing_update(start_time, "get_valid_languages", False)
-        return _format_db_error(result["error"])
-    _timing_update(start_time, "get_valid_languages", True)
-    return str(result["data"])
+        err = DIALECTS.get("oracle").format_error(e) if "oracle" in DIALECTS else None
+        if err and err.get("code"):
+            return _format_db_error(err)
+        return f"Error: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
 
 
 @mcp.tool()
-async def query(sql: str, max_rows: int = 100) -> str:
-    """Executes a SQL query and returns the results."""
+async def query(sql: str, max_rows: int = 100, connection: str | None = None) -> str:
+    """Executes a read-only SQL query (SELECT/WITH) on the active connection
+    (or the named one) and returns up to max_rows rows as JSON-ish text."""
     start_time = time.perf_counter()
-    if not sql:
+    if not sql or not sql.strip():
         _timing_update(start_time, "query", False)
         return "Error: sql query is required"
-
-    result = connections.execute_query(sql)
-
-    if not result["success"]:
+    max_rows = max(1, min(int(max_rows), 5000))
+    guard = _read_guard(sql)
+    if guard:
         _timing_update(start_time, "query", False)
-        return _format_db_error(result["error"])
+        return guard
+    try:
+        def _run(entry):
+            return _run_entry_select(entry, sql, max_rows)
 
-    data = result["data"]
-    if len(data) > max_rows:
-        data = data[:max_rows]
-        _timing_update(start_time, "query", True)
-        return f"{str(data)}\n\n[Results truncated - showing {max_rows} of {len(result['data'])} rows]"
+        rows, truncated = await asyncio.to_thread(_with_entry, connection, _run)
+    except Exception as e:
+        _timing_update(start_time, "query", False)
+        return _render_error(e)
     _timing_update(start_time, "query", True)
-    return str(data)
+    out = str(rows)
+    if truncated:
+        out += f"\n\n(Truncated — showing {max_rows} rows)"
+    return out
 
 
 @mcp.tool()
-async def execute_sql(sql: str) -> str:
-    """Executes an SQL statement for INSERT or UPDATE operations."""
+async def execute_sql(sql: str, connection: str | None = None) -> str:
+    """Executes an SQL statement (INSERT/UPDATE/DELETE/DDL) on the active
+    connection (or the named one); commits and reports affected rows."""
     start_time = time.perf_counter()
-    if not sql:
+    if not sql or not sql.strip():
         _timing_update(start_time, "execute_sql", False)
         return "Error: sql statement is required"
-
+    logger.info(f"[SQL] Executing statement: {sql[:200]}{'...' if len(sql) > 200 else ''}")
     try:
-        logger.info(f"[SQL] Executing statement: {sql[:200]}{'...' if len(sql) > 200 else ''}")
-        conn = connections.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(sql)
-        conn.commit()
-        _timing_update(start_time, "execute_sql", True)
-        return "SQL statement executed successfully."
-    except oracledb.DatabaseError as e:
-        _timing_update(start_time, "execute_sql", False)
-        error_details = connections.format_oracle_error(e)
-        logger.error(f"Oracle error executing SQL statement: {error_details}")
-        formatted_error = f"Oracle Error {error_details.get('code', 'Unknown')}: {error_details['message']}"
-        if error_details.get('offset'):
-            formatted_error += f"\nAt position: {error_details['offset']}"
-        return formatted_error
+        def _run(entry):
+            start = time.time()
+            try:
+                rowcount = DIALECTS[entry.dialect].execute(entry.handle, sql)
+                entry.schema_cache.clear()  # DDL staleness guard
+                metrics["query_count"] += 1
+                return rowcount
+            except Exception:
+                metrics["query_errors"] += 1
+                raise
+            finally:
+                elapsed_ms = (time.time() - start) * 1000
+                metrics["total_query_time_ms"] += elapsed_ms
+
+        rowcount = await asyncio.to_thread(_with_entry, connection, _run)
     except Exception as e:
         _timing_update(start_time, "execute_sql", False)
-        logger.error(f"Error executing SQL statement: {e}")
-        return f"Error executing SQL statement: {str(e)}"
+        return _render_error(e)
+    _timing_update(start_time, "execute_sql", True)
+    return f"OK. Rows affected: {rowcount}"
 
 
 @mcp.tool()
-async def list_user_tables_with_descriptions() -> str:
-    """Lists all user tables and their functional descriptions."""
+async def get_schemas(table_name: str, connection: str | None = None) -> str:
+    """Returns columns, constraints and foreign keys for a table on the
+    active connection (or the named one)."""
+    start_time = time.perf_counter()
+    if not table_name or not table_name.strip():
+        _timing_update(start_time, "get_schemas", False)
+        return "Error: table_name is required"
+    try:
+        def _run(entry):
+            name = table_name.strip()
+            if entry.dialect == "oracle":
+                name = name.upper()
+            if name in entry.schema_cache:
+                return entry.schema_cache[name], True
+            desc = DIALECTS[entry.dialect].describe_table(entry.handle, name)
+            metrics["schema_lookups"] += 1
+            entry.schema_cache[name] = desc
+            return desc, False
+
+        desc, cached = await asyncio.to_thread(_with_entry, connection, _run)
+    except Exception as e:
+        _timing_update(start_time, "get_schemas", False)
+        return _render_error(e)
+    if not desc["columns"]:
+        entry_name = connection if connection else (REGISTRY._active or "?")
+        _timing_update(start_time, "get_schemas", False)
+        return f"Table '{table_name.strip()}' not found on connection '{entry_name}'."
+    _timing_update(start_time, "get_schemas", True)
+    label = " (cached)" if cached else ""
+    return str({"table": table_name.strip() + label, **desc})
+
+
+@mcp.tool()
+async def list_tables(connection: str | None = None) -> str:
+    """Lists all tables on the active connection (or the named one) with their comments."""
     start_time = time.perf_counter()
     try:
-        conn = connections.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT table_name, NVL(comments, 'No description available')
-            FROM user_tab_comments
-            ORDER BY table_name
-        """)
-        results = cursor.fetchall()
-        table_list = [
-            {"table_name": row[0], "description": row[1]}
-            for row in results
-        ]
-        _timing_update(start_time, "list_user_tables_with_descriptions", True)
-        return str(table_list)
+        def _run(entry):
+            start = time.time()
+            try:
+                tables = DIALECTS[entry.dialect].list_tables(entry.handle)
+                metrics["query_count"] += 1
+                return tables
+            except Exception:
+                metrics["query_errors"] += 1
+                raise
+            finally:
+                elapsed_ms = (time.time() - start) * 1000
+                metrics["total_query_time_ms"] += elapsed_ms
+
+        tables = await asyncio.to_thread(_with_entry, connection, _run)
     except Exception as e:
-        _timing_update(start_time, "list_user_tables_with_descriptions", False)
-        logger.error(f"Error fetching user tables with descriptions: {e}")
-        return f"Error: {str(e)}"
+        _timing_update(start_time, "list_tables", False)
+        return _render_error(e)
+    _timing_update(start_time, "list_tables", True)
+    return "\n".join(f"{t['name']} — {t['comment']}" for t in tables) if tables else "No tables found."
+
+
+@mcp.tool()
+async def explain_plan(sql: str, connection: str | None = None) -> str:
+    """Returns the execution plan for a SQL statement (dialect-specific)."""
+    start_time = time.perf_counter()
+    if not sql or not sql.strip():
+        _timing_update(start_time, "explain_plan", False)
+        return "Error: sql query is required"
+    try:
+        def _run(entry):
+            start = time.time()
+            try:
+                plan = DIALECTS[entry.dialect].explain(entry.handle, sql)
+                metrics["query_count"] += 1
+                return plan
+            except Exception:
+                metrics["query_errors"] += 1
+                raise
+            finally:
+                elapsed_ms = (time.time() - start) * 1000
+                metrics["total_query_time_ms"] += elapsed_ms
+
+        plan = await asyncio.to_thread(_with_entry, connection, _run)
+    except Exception as e:
+        _timing_update(start_time, "explain_plan", False)
+        return _render_error(e)
+    _timing_update(start_time, "explain_plan", True)
+    return plan
+
+
+def _render_error(e: Exception) -> str:
+    """Render a dialect error like the legacy tool strings; strip internals."""
+    dialect = None
+    try:
+        active_entry = REGISTRY.get(None)
+        dialect = DIALECTS[active_entry.dialect]
+    except Exception:
+        dialect = None
+    if dialect is not None:
+        details = dialect.format_error(e)
+        if details.get("code"):
+            out = f"Oracle Error {details['code']}: {details['message']}" if details["code"].startswith("ORA") \
+                else f"Database Error {details['code']}: {details['message']}"
+            if details.get("offset"):
+                out += f"\nAt position: {details['offset']}"
+            return out
+        return f"Error: {details['message']}"
+    return f"Error: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
 
 
 @mcp.tool()

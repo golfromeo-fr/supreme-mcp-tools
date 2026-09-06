@@ -53,10 +53,18 @@ class PostgresDialect(DbDialect):
             pool.open(wait=True)
             return pool
         except Exception:
-            # Pool unavailable or failed to open — per-connection fallback
+            # Pool unavailable or failed to open — per-connection fallback.
+            # Validate eagerly: "Connected" must mean the DB was reached.
+            import psycopg
             from core import logger
 
-            logger.info("psycopg_pool unavailable/failed; using per-connection fallback")
+            try:
+                with psycopg.connect(**kwargs) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+            except Exception:
+                raise  # connect_database renders it; secret values masked there
+            logger.info("psycopg_pool unavailable; using per-connection fallback")
             return _SingleConnShim(kwargs)
 
     def close(self, handle) -> None:
