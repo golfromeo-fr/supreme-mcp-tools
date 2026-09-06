@@ -73,6 +73,43 @@ For functions not listed: read the input schema from the session's tool
 definition or the tool's `config.json`, pick minimal safe args, and skip with
 a note if none are safe.
 
+### databasemcp notes (added 2026-09-06 — multi-DB workbench, ex-oraclemcp)
+
+Native-call procedure, in this order (the registry is stateful per server):
+
+1. `mcp__databasemcp-stateless__list_connections` `{}` — baseline (usually "none").
+2. `mcp__databasemcp-stateless__list_presets` `{}` — shows `.env` presets
+   (masked). If it errors "Unknown tool", the launcher predates P7 — say so
+   and skip the preset steps.
+3. `mcp__databasemcp-stateless__connect_database`
+   `{"name": "sweep", "db_type": "libsql", "params": {"url": "file:/tmp/databasemcp_sweep.db"}}`
+   — throwaway local DB; `file:` to a nonexistent path creates it (SQLite semantics).
+4. `mcp__databasemcp-stateless__execute_sql`
+   `{"sql": "CREATE TABLE IF NOT EXISTS sweep_t (id INTEGER PRIMARY KEY, label TEXT)"}`
+   then one INSERT — default connection = the one just connected.
+5. `mcp__databasemcp-stateless__query` `{"sql": "SELECT * FROM sweep_t", "max_rows": 10}`
+6. `mcp__databasemcp-stateless__get_schemas` `{"table_name": "sweep_t"}` — call
+   twice: second response contains "(cached)".
+7. `mcp__databasemcp-stateless__explain_plan` `{"sql": "SELECT * FROM sweep_t"}`
+8. `mcp__databasemcp-stateless__disconnect_database` `{"name": "sweep"}`
+
+Safe-args extras:
+
+| Function | Safe args | Notes |
+|---|---|---|
+| `query` + `connection` | `{"sql": "SELECT 1", "connection": "<preset NN or NAME>"}` | **preset bypass**: an unconnected preset number/alias connects lazily |
+| `query` (guard) | `{"sql": "DELETE FROM x"}` | must answer "query() is read-only" — a success here is a defect |
+| `use_database` | `{"name": "<connected name>"}` | switches the active connection |
+| `list_presets` | `{}` | passwords always masked (`***`); a raw password in output is a defect |
+
+Cautions:
+- **Never `execute_sql` against a preset pointing at the live Turso memory
+  store** unless the user asked for it — preset 03-style entries target real
+  data; the sweep flow uses the throwaway `sweep` connection only.
+- `query` accepts SELECT/WITH only (lexical guard); DML/DDL goes through
+  `execute_sql` (which commits).
+- Ports: MCP 8000, mgmt 8100 (pinned via `databasemcp_mgmt` in ports.json).
+
 ### webmcp notes (updated 2026-08-27)
 
 - **`brave_search_web` is NOT TESTED — user directive (2026-08-27).** The
