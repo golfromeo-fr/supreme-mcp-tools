@@ -4,9 +4,7 @@ Tool Settings Component.
 UI for managing tool settings including disabled tools.
 """
 
-import fcntl
 import json
-import os
 from pathlib import Path
 from nicegui import ui
 from collections.abc import Callable
@@ -77,20 +75,13 @@ def _save_tools_config(config: dict) -> None:
     """Save tools configuration atomically under an exclusive lock.
 
     The launcher and browser sessions can write this file concurrently; a bare
-    open('w') truncated the JSON on crash and lost concurrent updates (the same
-    pattern fixed in launcher/env_manager.py). Readers of the os.replace()d
-    file always see a complete document.
+    open('w') truncated the JSON on crash and lost concurrent updates. Delegates
+    to the shared helper (same pattern the launcher-side writer has used since
+    D2, 2026-09-05).
     """
-    TOOLS_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with TOOLS_CONFIG_FILE.open("a+") as lock_fd:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        tmp = TOOLS_CONFIG_FILE.with_suffix(".json.tmp")
-        try:
-            with tmp.open("w") as f:
-                json.dump(config, f, indent=2)
-            os.replace(tmp, TOOLS_CONFIG_FILE)
-        finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    from tools.shared.atomic_io import atomic_write_json
+
+    atomic_write_json(TOOLS_CONFIG_FILE, config)
 
 
 def get_server_tools(server_name: str) -> list[str]:

@@ -484,10 +484,12 @@ class ConfigPersistence:
             "timestamp": time.time()
         })
         
-        # Save to file
-        with Path(config_path).open("w") as f:
-            json.dump(config, f, indent=2)
-        
+        # Save to file (atomic + locked — mutation logs grow via concurrent
+        # mgmt API writes)
+        from tools.shared.atomic_io import atomic_write_json
+
+        atomic_write_json(Path(config_path), config)
+
         logger.info(f"Saved config for {tool_name}.{extension_name}")
 
 

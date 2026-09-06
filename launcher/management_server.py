@@ -551,15 +551,16 @@ class ManagementServer:
                 raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
 
             try:
-                with Path(config_path).open() as f:
+                with config_path.open() as f:
                     config = json.load(f)
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid config.json")
 
             config.setdefault("auth", {})["api_key"] = request.api_key
 
-            with Path(config_path).open("w") as f:
-                json.dump(config, f, indent=2)
+            from tools.shared.atomic_io import atomic_write_json
+
+            atomic_write_json(config_path, config)
 
             return {"success": True}
 

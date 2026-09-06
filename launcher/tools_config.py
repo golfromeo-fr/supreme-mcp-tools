@@ -48,17 +48,18 @@ def load_tools_config(config_path: Path | None = None) -> dict:
 
 def save_tools_config(config: dict, config_path: Path | None = None) -> None:
     """
-    Save tools configuration to JSON file.
+    Save tools configuration to JSON file (atomically, under a lock —
+    the mcp_ui writes the same file concurrently).
 
     Args:
         config: Configuration dictionary to save
         config_path: Optional path to config file
     """
-    path = config_path or _DEFAULT_CONFIG_FILE
-    _ensure_config_dir()
+    from tools.shared.atomic_io import atomic_write_json
 
-    with Path(path).open('w') as f:
-        json.dump(config, f, indent=2)
+    path = Path(config_path or _DEFAULT_CONFIG_FILE)
+    _ensure_config_dir()
+    atomic_write_json(path, config)
 
 
 def get_disabled_tools(server_name: str, config_path: Path | None = None) -> list[str]:
