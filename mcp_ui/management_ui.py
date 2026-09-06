@@ -20,6 +20,7 @@ import asyncio
 import hmac
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -838,6 +839,38 @@ async def _render_auth_tab(state, detail, handlers: dict) -> None:
 logger.info("mcp_ui initialized (standalone ui.run() entry point)")
 
 
+def _session_prune_days() -> int:
+    """Session-file retention in days (F3, 2026-09-06); 0 disables pruning."""
+    try:
+        return max(0, int(os.environ.get("MCP_UI_SESSION_PRUNE_DAYS", "30")))
+    except ValueError:
+        return 30
+
+
+def prune_stale_session_files(days: int, storage_dir: Path | None = None) -> int:
+    """Delete NiceGUI ``storage-user-*.json`` session files idle > ``days``.
+
+    Every browser session creates one file (cookie-session state only —
+    nothing of value inside); 62 accumulated here in six months. Runs once
+    at UI startup. Returns the number of files removed.
+    """
+    if days <= 0:
+        return 0
+    directory = Path(storage_dir) if storage_dir else Path.cwd() / ".nicegui"
+    if not directory.is_dir():
+        return 0
+    cutoff = time.time() - days * 86400
+    removed = 0
+    for f in directory.glob("storage-user-*.json"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        except OSError as e:
+            logger.warning(f"Could not prune session file {f.name}: {e}")
+    return removed
+
+
 def run_ui() -> None:
     """Run the UI server."""
     import signal
@@ -862,6 +895,10 @@ def run_ui() -> None:
         )
 
     logger.info(f"Starting UI server on port {port}, theme={theme}")
+
+    pruned = prune_stale_session_files(days=_session_prune_days())
+    if pruned:
+        logger.info(f"Pruned {pruned} stale NiceGUI session file(s) (>30d idle)")
 
     run_kwargs = {
         "port": port,

@@ -61,3 +61,19 @@ Say e.g. "F1-F3 as recommended, F4 post it, F6 delete" and everything in this ta
 **Suggested order:** F1–F7 (close-out, today) → runtime masks (small, high-visibility win) → graphify re-run → pick the next arc from its evidence.
 
 *All file:line references verified 2026-09-06; suite green at 687.*
+
+---
+
+## 4. Decisions (2026-09-06, user)
+
+| # | Decision | Consequence |
+|---|----------|-------------|
+| F1 | **Keep `.env` history as-is** — "very practical, you can swap configuration in a flash" | The commented old-value history is a deliberate feature (instant config swap-back), not an accident. D3a closed as won't-change. Secret-hygiene note stands on record but the user accepts the trade-off. |
+| F2 | **Mutation logs: keep** — user wants the debugging value; asked for more info | Facts gathered: 2 files, 1.7KB total, 11 mutations, span 2026-03-24 → 04-04 (dormant since). Debug value = "which extension config changed, when, with which params" (cache_config, timeout_config). Real cost: secret-named param values (e.g. `key`) sit plaintext. Remaining option if ever wanted: redact-on-write (mask values of secret-named params, keep names/timing). Decision: keep as-is for now. |
+| F3 | **Session files: prune at 1 month** — implemented | `mcp_ui.management_ui.prune_stale_session_files()` runs at UI startup, removes `storage-user-*.json` idle >30d (`MCP_UI_SESSION_PRUNE_DAYS`, 0 disables). 31 of 62 files eligible on first run. Tests: `tests/test_session_prune.py`. |
+| F4 | **NiceGUI draft: intention clarified, decision pending** | The draft is an upstream bug report for zauberzeug/nicegui: `password_toggle_button=True` breaks click events for later elements on the page (proven by bisection). Intention: contribute the fix knowledge upstream so the trap is fixed for everyone; our workaround is already in place, so this is optional goodwill, not a need. Post or archive whenever. |
+| F5 | **Security follow-ups: clarified, skip for now** | The 4 items are oraclemcp/migration-CLI-scoped hardening from the June audit. oraclemcp is not even in the live tool set, and the migration CLI never ran in production — none touch the serving path. Recorded in TODO; revisit only if oraclemcp goes live. |
+| F6 | **Scratch files: let them live** | Total 440KB — under the user's "not big" bar. Closed. |
+| F7 | **Push: done** | All commits on `origin/main`. |
+
+**Evolutions:** E1 runtime masks + E2 Memory Explorer + E3 multi-user/multi-host → planned in `plans/evolutions-plan-2026-09-06.md`. Graphify re-run postponed (not enough structural change to justify the tokens). Packaging postponed ("too early").
