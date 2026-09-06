@@ -32,6 +32,18 @@ import db_tools  # noqa: F401,E402 - registers MCP tools
 from db_tools import setup_extensions, FEF_V3_AVAILABLE  # noqa: F401,E402 - launcher calls setup_extensions by name
 
 # ============================================================================
+# Startup autoconnect (P7): DB_PRESET_AUTOCONNECT presets connect eagerly,
+# tolerantly — a dead DB logs a warning and never blocks the launcher.
+# ============================================================================
+
+import presets as _presets  # noqa: E402
+from connections import REGISTRY as _REGISTRY  # noqa: E402
+
+_connected, _failed = _presets.apply_autoconnect(_REGISTRY)
+if _connected or _failed:
+    logger.info(f"Preset autoconnect: {_connected} connected, {_failed} failed")
+
+# ============================================================================
 # ASGI App (for launcher) — multi-transport: /mcp, /mcp-stateless, /sse
 # ============================================================================
 

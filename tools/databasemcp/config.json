@@ -14,6 +14,14 @@
   },
   "tools": [
     {
+      "name": "list_presets",
+      "description": "List connection presets defined in .env (dialect, description, autoconnect \u2014 passwords never shown)"
+    },
+    {
+      "name": "connect_preset",
+      "description": "Connect using a preset by number or NAME alias; first connection becomes active"
+    },
+    {
       "name": "connect_database",
       "description": "Connect to a database (oracle|postgres|libsql) and register it under a name; first connection becomes active"
     },

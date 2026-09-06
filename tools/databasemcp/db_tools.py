@@ -24,6 +24,7 @@ import rules
 import connections
 from connections import REGISTRY, _SECRET_KEYS
 from dialects import DIALECTS, get_dialect
+import presets
 
 
 # ============================================================================
@@ -76,6 +77,63 @@ async def connect_database(name: str, db_type: str, params: dict) -> str:
     _timing_update(start_time, "connect_database", True)
     active = REGISTRY._active
     return f"Connected '{name}' ({db_type}). Active: '{active}'"
+
+
+@mcp.tool()
+async def list_presets() -> str:
+    """Lists the connection presets defined in .env (DB_PRESET_<NN>), with
+    dialect, description, autoconnect flag — passwords never shown. A preset
+    can be used directly: pass its number or NAME as `connection` in
+    query/execute_sql/etc. (connects lazily), or via connect_preset."""
+    start_time = time.perf_counter()
+    found = presets.load_presets()
+    if not found:
+        _timing_update(start_time, "list_presets", True)
+        return (
+            "none — add DB_PRESET_<NN>=oracle://user:pass@host:port/service "
+            "(or postgres://..., or file:/path.db) to .env and restart"
+        )
+    lines = []
+    for p_ in found:
+        flags = []
+        if p_.autoconnect:
+            flags.append("autoconnect")
+        label = f" — {p_.desc}" if p_.desc else ""
+        alias = f" (name: {p_.name})" if p_.name else ""
+        lines.append(
+            f"- {p_.number}{alias} [{p_.dialect}]{label} {p_.url_masked}"
+            + (f"  [{', '.join(flags)}]" if flags else "")
+        )
+    _timing_update(start_time, "list_presets", True)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def connect_preset(preset: str) -> str:
+    """Connects using a preset from .env — by number ("01") or NAME alias
+    ("pglocal") — and registers the connection (first one becomes active).
+    Equivalent to connect_database with the preset's params."""
+    start_time = time.perf_counter()
+    try:
+        p_ = presets.get_preset(preset)
+    except LookupError as e:
+        _timing_update(start_time, "connect_preset", False)
+        return f"Error: {e}"
+
+    def _connect():
+        REGISTRY.connect(p_.connection_name, p_.dialect, p_.params)
+
+    try:
+        await asyncio.to_thread(_connect)
+    except Exception as e:
+        _timing_update(start_time, "connect_preset", False)
+        msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+        for k, v in (p_.params or {}).items():
+            if str(k).lower() in _SECRET_KEYS and v:
+                msg = msg.replace(str(v), "***")
+        return f"Connect failed: {msg}"
+    _timing_update(start_time, "connect_preset", True)
+    return f"Connected preset {p_.number} as '{p_.connection_name}' ({p_.dialect}). Active: '{REGISTRY._active}'"
 
 
 @mcp.tool()
@@ -186,6 +244,24 @@ def get_connections_stats(params: dict[str, Any]) -> dict[str, Any]:
              "cached_tables": c["cached_tables"], "last_error": c["last_error"]}
             for c in conns
         ],
+    }
+
+
+def get_connection_presets(params: dict[str, Any]) -> dict[str, Any]:
+    """Data source: connection presets from .env (masked)."""
+    return {
+        "presets": [
+            {
+                "number": p_.number,
+                "dialect": p_.dialect,
+                "name": p_.name,
+                "desc": p_.desc,
+                "url": p_.url_masked,
+                "autoconnect": p_.autoconnect,
+                "connected": p_.connection_name in REGISTRY._entries,
+            }
+            for p_ in presets.load_presets()
+        ]
     }
 
 
@@ -643,6 +719,19 @@ def setup_extensions(registry=None) -> None:
             },
             handler=get_query_stats,
             metadata={"description": "Database query execution statistics", "category": "metrics"}
+        ),
+        Extension(
+            name="connection_presets",
+            ext_type=ExtensionType.DATA_SOURCE,
+            schema={
+                "input": {"type": "object", "properties": {}},
+                "output": {
+                    "type": "object",
+                    "properties": {"presets": {"type": "array"}}
+                }
+            },
+            handler=get_connection_presets,
+            metadata={"description": "Connection presets defined in .env (masked)", "category": "config"}
         ),
         Extension(
             name="connections",

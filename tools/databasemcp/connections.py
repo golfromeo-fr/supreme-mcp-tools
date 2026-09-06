@@ -15,6 +15,7 @@ from typing import Any
 
 from core import logger, metrics
 from dialects import DIALECTS, get_dialect
+import presets as _presets
 
 
 # The legacy single-connection machinery — the global connection/
@@ -108,11 +109,39 @@ class ConnectionRegistry:
     def get(self, name: str | None = None) -> ConnectionEntry:
         if name is not None:
             entry = self._entries.get(name)
-            if entry is None:
-                raise LookupError(
-                    f"Unknown connection '{name}'. Available: {sorted(self._entries) or 'none'}"
-                )
-            return entry
+            if entry is not None:
+                return entry
+            # Preset bypass: an unconnected preset number or NAME alias
+            # connects lazily right here — query(sql, connection="01") or
+            # connection="pglocal" works without an explicit connect step.
+            with self._map_lock:
+                entry = self._entries.get(name)  # double-check under the lock
+                if entry is not None:
+                    return entry
+                try:
+                    preset = _presets.get_preset(name)
+                except LookupError:
+                    preset = None
+                if preset is not None:
+                    if preset.connection_name in self._entries:
+                        return self._entries[preset.connection_name]
+                    handle = DIALECTS[preset.dialect].connect(preset.params)
+                    entry = ConnectionEntry(
+                        name=preset.connection_name,
+                        dialect=preset.dialect,
+                        params=dict(preset.params),
+                        handle=handle,
+                    )
+                    self._entries[entry.name] = entry
+                    if self._active is None:
+                        self._active = entry.name
+                    logger.info(
+                        f"Preset {preset.number} connected lazily as '{entry.name}' ({preset.dialect})."
+                    )
+                    return entry
+            raise LookupError(
+                f"Unknown connection '{name}'. Available: {sorted(self._entries) or 'none'}"
+            )
         # No name: legacy env default (lazy), double-checked under the map
         # lock so two concurrent first calls create exactly one entry.
         with self._map_lock:
