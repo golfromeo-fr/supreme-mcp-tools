@@ -7,7 +7,7 @@ Renames `tools/oraclemcp` → `tools/databasemcp`: a connection registry holding
 ## Decisions (final)
 
 1. **Name: `databasemcp`** (discovery derives the tool name from the `databasemcp_fastmcp.py` file stem).
-2. **Launch: lazy env-default.** If `USERID` + `DB_HOST` env vars are set, a `default` Oracle connection is created lazily on first use — exactly today's semantics (server always starts; unreachable DB never blocks startup; error surfaces on first tool call). All other connections come from the new `connect_database` tool at runtime. No new secrets on disk.
+2. **Launch: lazy env-default, deactivatable.** If `USERID` + `DB_HOST` env vars are set AND `DB_AUTOCONNECT` is not `"0"` (default: enabled), a `default` Oracle connection is created lazily on first use — exactly today's semantics (server always starts; unreachable DB never blocks startup; error surfaces on first tool call). **`DB_AUTOCONNECT=0` (env or `.env`) is the explicit kill-switch**: the lazy default is never created; every DB tool answers with the "use connect_database(...)" instruction until a connection is made. All other connections come from the new `connect_database` tool at runtime. No new secrets on disk.
 3. **The tool joins `startlauncher`** as the 5th live tool.
 4. **Rules files are user-local**: `~/.config/supreme-mcp-tools/databasemcp/{optimization.json,proc_rules.md}`; templates ship in `tools/databasemcp/examples/`.
 
@@ -89,7 +89,8 @@ class ConnectionRegistry:
     def get(self, name: str | None = None) -> ConnectionEntry:
         # name given: self._entries[name] or LookupError("Unknown connection '<n>'. Available: [...]")
         # name None, DOUBLE-CHECKED under _map_lock (edge case 1):
-        #   if not self._entries and env USERID and env DB_HOST:
+        #   if (not self._entries) and os.environ.get("DB_AUTOCONNECT", "1") != "0"
+        #      and env USERID and env DB_HOST:
         #       params = {user, password} from USERID.split("/", 1) (OSError if no "/"),
         #       host=DB_HOST, port=int(env DB_PORT, 1521), service_name=env DB_SERVICE_NAME
         #       handle = DIALECTS["oracle"].connect(params)  -> entry "default" (this replaces get_db_connection 200-232)
@@ -235,7 +236,8 @@ def _with_entry(connection: str | None, fn) -> Any   # runs fn(entry); sync fn c
 12. Duplicate connect name → the ValueError message from connections.connect.
 13. Extra params keys: allowed, stored, masked like required ones.
 14. Passwords with URL-special chars: postgres + oracle use kwargs forms only — NEVER DSN/URL strings.
-15. After disconnecting the last connection WITH legacy env present, the next `REGISTRY.get(None)` lazily recreates `default` (matches today's reconnect semantics).
+15. After disconnecting the last connection WITH legacy env present (and `DB_AUTOCONNECT` enabled), the next `REGISTRY.get(None)` lazily recreates `default` (matches today's reconnect semantics).
+16. **`DB_AUTOCONNECT=0` kill-switch**: `REGISTRY.get(None)` never creates the env default — even with `USERID`/`DB_HOST` set, a query with zero connections returns the connect_database instruction. Test: set env creds + `DB_AUTOCONNECT=0`, call `query` → instruction message; flip to `1` → default connects.
 
 ## PORT-VERBATIM TABLE (current `oraclemcp_fastmcp.py` lines → destination; "verbatim" = copy the SQL/logic, adapt names only)
 
@@ -255,7 +257,7 @@ def _with_entry(connection: str | None, fn) -> Any   # runs fn(entry); sync fn c
 2. `config/ports.json`: `assignments.mcp` key `oraclemcp`→`databasemcp` (keep 8000); `assignments.mgmt` same (keep 8100). VERIFY: `python launchmcp.py --dry-run databasemcp` shows MCP 8000 + mgmt 8100; if mgmt shows a different port, add key `databasemcp_mgmt` (allocation looks up `f"{name}_mgmt"` — launchmcp.py:327).
 3. `config/launcher_config.json` toolDirectories path; `launcher/launcher_config.py` DEFAULT_CONFIG.toolDirectories + legacy `ports`/`managementPorts`/`manualPorts` maps (~lines 103,115,122,133).
 4. `config/monitoring_config.json:~129` tools key rename.
-5. `tools/databasemcp/config.json` (machine-written — PRESERVE structure + auth block): name, script, transports.script, `tools` list = the 13-tool surface above, `environment_variables` = USERID/DB_HOST/DB_PORT/DB_SERVICE_NAME (legacy default) + ORACLE_MIN_CONNECTIONS/ORACLE_MAX_CONNECTIONS/ORACLE_QUERY_TIMEOUT (now real) + DB_QUERY_TIMEOUT_MS (new, default 30000) + DB_LOCK_WAIT_S (new, default 10) + AI_API_KEY + AI_BASE_URL (new).
+5. `tools/databasemcp/config.json` (machine-written — PRESERVE structure + auth block): name, script, transports.script, `tools` list = the 13-tool surface above, `environment_variables` = USERID/DB_HOST/DB_PORT/DB_SERVICE_NAME (legacy default) + **DB_AUTOCONNECT (new, "0" disables the lazy env default; default "1")** + ORACLE_MIN_CONNECTIONS/ORACLE_MAX_CONNECTIONS/ORACLE_QUERY_TIMEOUT (now real) + DB_QUERY_TIMEOUT_MS (new, default 30000) + DB_LOCK_WAIT_S (new, default 10) + AI_API_KEY + AI_BASE_URL (new).
 6. `startlauncher`: append ` databasemcp` to the tool list.
 7. `~/.config/supreme-mcp-tools/tools_config.json` (python -c json edit): `tools.oraclemcp` → `tools.databasemcp` (new list); `disabled_tools.oraclemcp` → `disabled_tools.databasemcp`.
 8. Tests: `tests/test_regression.py` set `oraclemcp`→`databasemcp` (still 6 tools); `tests/test_review_fixes.py` TOOLS list; `tests/test_fastmcp_critical_fixes.py:126-141` → point at `tools/databasemcp/db_tools.py` (KEEP the `[SQL]` + no-legacy-names assertions); DELETE `tests/test_oracle_thread_safety.py` (superseded by test_db_registry/concurrency); `tests/fef_v3/test_runner.py` oraclemcp refs → databasemcp, drop the stale `pool_config` extension expectation.
