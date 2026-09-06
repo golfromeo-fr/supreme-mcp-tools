@@ -13,6 +13,7 @@ Renames `tools/oraclemcp` → `tools/databasemcp`: a connection registry holding
 
 ## Binding implementer rules
 
+- **Branch: work on `feature/databasemcp`** (repo convention: `feature/<topic>`). Step 0: `git checkout main && git pull && git checkout -b feature/databasemcp`. All phase commits land there. **Do NOT merge to main yourself** — after P6 the live sweep passes, the user (or a reviewed PR) merges. If the branch already exists, reuse it (`git checkout feature/databasemcp`).
 - Names/files/signatures EXACTLY as specced. No renaming, no improvements, no extra abstractions.
 - One phase = one commit. Gate every commit: `/home/gr/env_python/bin/python -m pytest tests/ -q` → all green (live-server tests in `tools/simplemcp/test_tools.py` skip themselves when the launcher is down — C5 pattern; never "fix" them by deletion).
 - No new dependencies. Verified installed: `oracledb` 3.4.2, `psycopg` 3.3.3 + `psycopg-pool` 3.3.1 + `psycopg-binary`, `libsql-experimental` 0.0.55.
