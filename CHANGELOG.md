@@ -4,6 +4,14 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-06 — databasemcp: oraclemcp renamed + multi-database overhaul (feature/databasemcp)
+- **Renamed**: `tools/oraclemcp` -> `tools/databasemcp` — a database workbench for Oracle, Postgres, and libSQL (local file / Turso). Ports kept (8000/8100); `databasemcp` joins `startlauncher`.
+- **Added**: connection registry with named connections per dialect (`connect_database`, `disconnect_database`, `list_connections`, `use_database`), per-entry locks (parallel queries on different connections), active-connection switching with graceful fallback, and a lazy env-default Oracle connection (`USERID`/`DB_HOST` env as before) deactivatable with `DB_AUTOCONNECT=0`.
+- **Added**: dialect layer — Oracle (oracledb thin + real `create_pool`, call timeouts), Postgres (psycopg 3 + psycopg_pool, statement timeout), libSQL (local `file:`/Turso; zero-infra test backend). Oracle-only tools guarded (`get_valid_languages`).
+- **Changed**: `query` enforces read-only + real row limiting via fetchmany (old `max_rows` truncated after a full fetch); `execute_sql` invalidates the schema cache; `get_schemas` finally works (the old cache-gate bug made it unable to ever succeed) and includes foreign keys; `list_user_tables_with_descriptions` renamed `list_tables`; `optimize_sql_with_ai` uses `AI_BASE_URL`/`AI_MODEL` env, runs off the event loop, and gets live schema context; rules files (`optimization.json`, `proc_rules.md`) are user-local (`~/.config/supreme-mcp-tools/databasemcp/`, templates in `examples/`).
+- **Fixed**: missing `global connection` in the schema-error path; connections/cursors never closed (registry owns close); no timeouts anywhere; dead `lifespan`/`table_columns_cache`/fake pool config removed; secrets never logged (masked params).
+- **Removed**: `tests/test_oracle_thread_safety.py` (superseded by registry/concurrency suites).
+
 ### 2026-09-05 — launcher shutdown hardening (C7) + Function Mask enforcement (D4)
 - **Added**: server-side Function Mask enforcement — each tool server disables its masked tools (`disabled_tools` in `~/.config/supreme-mcp-tools/tools_config.json`) at startup via `tools/shared/function_masks.py`, so MCP clients can no longer see or call them (`tools/list` hides them, calls return "Unknown tool"). Previously the masks were UI-cosmetic only — zero serving-path readers. Effective at next launcher start; `tests/test_function_masks.py` proves list+call+transport behavior
 - **Added**: `tools/shared/atomic_io.py` — one atomic JSON/text write helper (flock on a stable `.lock` sidecar + tmp + `os.replace`); converted the three unsafe truncate-writers (`tools_config.py`, `distributed_registry.py`, `management_server.py` auth) and the mcp_ui writer now delegates to it (D2). Lock-sidecar design note: flock on the replaced file itself is inode-unsafe (reproduced live)
