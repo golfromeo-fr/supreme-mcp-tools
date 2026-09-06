@@ -1,3 +1,4 @@
+> **✅ EXECUTED 2026-09-04/05** — C1–C10 all done (C7 = 37863a5; C-batch commits 150eea2..ccb263f). Follow-on work lives in plans/launcher-persistence-design-2026-09-05.md (D1–D4) and TODO.md.
 # Codebase Improvement Plan — 2026-09-04
 
 Derived from the graphify analysis (`graphify-out/GRAPH_REPORT.md`, 5,152 nodes / 7,925 edges / 377 communities) cross-checked against live code and this session's code review. Every item names exact files, the exact change, and how to verify it. No vague entries.
@@ -8,16 +9,16 @@ Derived from the graphify analysis (`graphify-out/GRAPH_REPORT.md`, 5,152 nodes 
 
 ## Checklist
 
-- [ ] **C1 — Cache unification** (2-3h)
-- [ ] **C2 — ArtifactStore: wire in or delete** (decision + 1-2h)
-- [ ] **C3 — Memory pipeline end-to-end test** (1h)
-- [ ] **C4 — port_manager wrong-key read fix** (15m)
-- [ ] **C5 — Deterministic test suite** (30m)
-- [ ] **C6 — mcp_ui persistent secret + login-redirect fix** (1.5h)
+- [x] **C1 — Cache unification** (2-3h)
+- [x] **C2 — ArtifactStore: wire in or delete** (decision + 1-2h)
+- [x] **C3 — Memory pipeline end-to-end test** (1h)
+- [x] **C4 — port_manager wrong-key read fix** (15m)
+- [x] **C5 — Deterministic test suite** (30m)
+- [x] **C6 — mcp_ui persistent secret + login-redirect fix** (1.5h)
 - [x] **C7 — Launcher child-shutdown fix** (DONE 2026-09-05: bounded teardown + forcible-exit watchdog)
-- [ ] **C8 — Delete dead modules** (30m)
-- [ ] **C9 — oauth_fix documentation pointers** (5m)
-- [ ] **C10 — text_utils micro-cleanups** (15m)
+- [x] **C8 — Delete dead modules** (30m)
+- [x] **C9 — oauth_fix documentation pointers** (5m)
+- [x] **C10 — text_utils micro-cleanups** (15m)
 
 ---
 

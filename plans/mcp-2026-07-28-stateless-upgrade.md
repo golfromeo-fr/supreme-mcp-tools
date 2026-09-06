@@ -1,3 +1,4 @@
+> **✅ DONE — fastmcp 4.0.0 stable adopted + live 2026-09-02.** The versatile multi-transport default (/mcp + /mcp-stateless + /sse) superseded the per-transport pinning this plan describes; see AGENTS.md "Transport" and CHANGELOG. Kept as reference for the era-negotiation analysis. Live tracker: `TODO.md`.
 # MCP `2026-07-28` Stateless Protocol — FastMCP 4 Upgrade Reference & Plan
 
 *Created 2026-08-11. Reviewed 2026-08-11 against current `pip index versions` and the actual

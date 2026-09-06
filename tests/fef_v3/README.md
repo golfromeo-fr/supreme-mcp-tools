@@ -5,11 +5,11 @@ Comprehensive test suite for the Flexible Extensibility Framework V3 integration
 ## Overview
 
 This test suite validates the FEF V3 implementation for all MCP tools:
-- **webmcp** - Web search and URL fetch capabilities (port 9001)
-- **simplemcp** - Simple demonstration tools (port 9012)
-- **ragmcp** - Retrieval-Augmented Generation (port 9014)
-- **convertermcp** - Document conversion tools (port 9013)
-- **oraclemcp** - Oracle database access (port 9010)
+- **webmcp** - Web search and URL fetch capabilities (mgmt port 8101)
+- **simplemcp** - Simple demonstration tools (mgmt port 8102)
+- **ragmcp** - Retrieval-Augmented Generation (mgmt port 8104)
+- **convertermcp** - Document conversion tools (mgmt port 8103)
+- **oraclemcp** - Oracle database access (mgmt port 8100)
 
 ## Prerequisites
 
@@ -38,9 +38,9 @@ python tools/ragmcp/ragmcp_fastmcp.py &
 Check that management servers are accessible:
 
 ```bash
-curl http://localhost:9001/extensions  # webmcp
-curl http://localhost:9012/extensions  # simplemcp
-curl http://localhost:9014/extensions  # ragmcp
+curl http://localhost:8101/extensions  # webmcp
+curl http://localhost:8102/extensions  # simplemcp
+curl http://localhost:8104/extensions  # ragmcp
 ```
 
 ## Quick Start

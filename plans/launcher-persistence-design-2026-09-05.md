@@ -70,17 +70,17 @@ The 2024-era design anticipated four interchangeable persistence backends for on
 
 ## 3. Recommendation
 
-**Phase D1 — delete the dead persistence layer (subtract first).** Remove `FileConfigPersistence`, `ConfigManager`, `SQLitePersistence`, `EventStore`, DLQ, `AuditLogger`, `HAConfig`/`DistributedConfig` save-load, and the `fef_v3.json` persistence block writer. Update the two `launcher/__init__.py` re-exports and `launcher/config/__init__.py`. Keep `MigrationStatus` only if the migration CLI stays (it does — it's the backend-migration tool). Verify: grep zero importers, suite green. Cost ~1-2h; kills ~1,500 lines that will otherwise rot and mislead.
+**Phase D1 — delete the dead persistence layer (subtract first). — DONE 2026-09-05 (`e55ba2e`)** Remove `FileConfigPersistence`, `ConfigManager`, `SQLitePersistence`, `EventStore`, DLQ, `AuditLogger`, `HAConfig`/`DistributedConfig` save-load, and the `fef_v3.json` persistence block writer. Update the two `launcher/__init__.py` re-exports and `launcher/config/__init__.py`. Keep `MigrationStatus` only if the migration CLI stays (it does — it's the backend-migration tool). Verify: grep zero importers, suite green. Cost ~1-2h; kills ~1,500 lines that will otherwise rot and mislead.
 
-**Phase D2 — one safe-write helper, three call sites.** Extract `atomic_write_json(path, data)` (flock + `.tmp` + `os.replace`, the `tool_settings.py:76` pattern) into `tools/shared/` or `launcher/`; convert `tools_config.py:49`, `distributed_registry.py:481-488`, `management_server.py:561`; make `tool_settings.py` import it (kills the duplicated path constant too). Verify: unit test (concurrent writers, kill-mid-write leaves old file intact). Cost ~1h.
+**Phase D2 — one safe-write helper, three call sites. — DONE 2026-09-05 (`fb48478`; lock is a stable `.lock` sidecar — locking the replaced file itself proved inode-unsafe)** Extract `atomic_write_json(path, data)` (flock + `.tmp` + `os.replace`, the `tool_settings.py:76` pattern) into `tools/shared/` or `launcher/`; convert `tools_config.py:49`, `distributed_registry.py:481-488`, `management_server.py:561`; make `tool_settings.py` import it (kills the duplicated path constant too). Verify: unit test (concurrent writers, kill-mid-write leaves old file intact). Cost ~1h.
 
 **Phase D3 — retention + secrets hygiene (needs user nod on each).**
 - `.env` history comments: drop or cap (secrets persist forever by design today).
 - Mutation logs (`{tool}.json`): decide — (a) delete the feature (nothing reads mutations back; mgmt API `/mutate` endpoints are the only writers), (b) keep as bounded audit with secret redaction. Leans (a).
 - `.nicegui` session files: prune >30d at UI startup.
-- `launcher_config.json`: drop the dead `portAllocation` block (overridden at load since forever).
+- ~~`launcher_config.json`: drop the dead `portAllocation` block~~ — STRUCK 2026-09-05: verified already absent from every config file. *(The unrelated dead `fefV3` block was removed in D1.)*
 
-**Phase D4 — Function Masks enforcement (the P0; design in §P0, user picks A/B).**
+**Phase D4 — Function Masks enforcement — DONE 2026-09-05 (user picked A; `a9a6c41`, live-verified 2026-09-06).**
 
 **Out of scope:** unifying SQLite-vs-JSON backends for the live set — with the dead layer deleted there is exactly one of each, and ports/launcher configs are hand-edited files that should stay that way.
 

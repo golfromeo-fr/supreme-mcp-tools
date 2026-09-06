@@ -3,6 +3,11 @@ MCP Launcher Package
 
 A unified launcher system for running multiple MCP tools in a single process.
 Supports the Flexible Extensibility Framework V3.
+
+(The FEF V3 persistence backends — SQLitePersistence, FileConfigPersistence,
+ConfigManager, EventStore, DeadLetterQueue, AuditLogger, HA/distributed
+config — were deleted 2026-09-05; they never ran in production. Design pass
+D1: plans/launcher-persistence-design-2026-09-05.md.)
 """
 
 from .launcher_config import Config
@@ -41,7 +46,6 @@ from .security import (
     verify_api_key,
     require_permission,
     RateLimiter,
-    AuditLogger,
 )
 
 # FEF V3 - Resilience
@@ -49,16 +53,7 @@ from .resilience import (
     retry_with_backoff,
     RetryConfig,
     RetryExhaustedError,
-    DeadLetterQueue,
 )
-
-# FEF V3 - Configuration
-from .config.persistence import ConfigPersistence as FileConfigPersistence
-from .config.sqlite_persistence import SQLitePersistence
-from .config.manager import ConfigManager
-
-# FEF V3 - Events
-from .events import EventStore, Event
 
 # FEF V3 - Plugins
 from .plugins import PluginLoader
@@ -101,19 +96,10 @@ __all__ = [
     "verify_api_key",
     "require_permission",
     "RateLimiter",
-    "AuditLogger",
     # FEF V3 - Resilience
     "retry_with_backoff",
     "RetryConfig",
     "RetryExhaustedError",
-    "DeadLetterQueue",
-    # FEF V3 - Configuration
-    "ConfigPersistence",
-    "SQLitePersistence",
-    "ConfigManager",
-    # FEF V3 - Events
-    "EventStore",
-    "Event",
     # FEF V3 - Plugins
-    "PluginLoader", "DistributedConfigPersistence", "FileConfigPersistence",
+    "PluginLoader", "DistributedConfigPersistence",
 ]

@@ -1,3 +1,4 @@
+> **✅ DONE.** Per-tool auth is live: `auth.api_key` in `tools/<name>/config.json` (nested under "auth"), read by `tools/shared/env_manager.py:load_auth_config`, written by the management API `PUT /api/tools/{name}/auth`. Live tracker: `TODO.md`.
 # Per-Tool API Key Authentication
 
 ## Context

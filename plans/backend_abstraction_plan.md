@@ -1,3 +1,4 @@
+> **✅ DONE (Phases 0–5, completed 2026-09-05).** Backend abstraction shipped: `tools/shared/sql_store.py` + `vector_store.py` ABCs, `impls/` backends, migration CLI (`python -m tools.shared.migrate_store`), `tools/memorymcp/BACKENDS.md` is the reference. `pg_store.py` deleted (C8). Live tracker: `TODO.md`.
 # Backend Abstraction Plan: SQL + Vector stores with PG / Qdrant / Turso
 
 ## Goals

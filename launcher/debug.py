@@ -184,28 +184,7 @@ class DiagnosticTool:
         if config_dir.exists():
             config_files = list(config_dir.glob("*.json"))
             results["config_files"] = [str(f.name) for f in config_files]
-            
-            # Check FEF V3 config
-            fef_config = config_dir / "fef_v3.json"
-            if fef_config.exists():
-                try:
-                    with Path(fef_config).open("r") as f:
-                        data = json.load(f)
-                    results["fef_v3_config"] = {
-                        "status": "ok",
-                        "version": data.get("version", "unknown")
-                    }
-                except Exception as e:
-                    results["fef_v3_config"] = {
-                        "status": "error",
-                        "error": str(e)
-                    }
-            else:
-                results["fef_v3_config"] = {
-                    "status": "warning",
-                    "message": "FEF V3 config not found"
-                }
-        
+
         results["status"] = "ok" if config_dir.exists() else "warning"
         return results
     

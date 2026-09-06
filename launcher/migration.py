@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config_types import DEFAULT_HOST
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +284,6 @@ class MigrationManager:
             import_block = """
 # FEF V3 Management Server
 from launcher.tool_extensions import ExtensionRegistry, Extension, ExtensionType, ExtensionHTTPServer
-from launcher.config.manager import ConfigManager
 """
             # Add after existing imports
             if "import" in content:
@@ -301,54 +299,29 @@ from launcher.config.manager import ConfigManager
         return True
     
     async def _phase_update_config(self, dry_run: bool) -> dict[str, Any]:
-        """Phase 3: Update configuration files."""
-        config_dir = Path.home() / ".config" / "supreme-mcp-tools"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create FEF V3 config if not exists
-        fef_config = config_dir / "fef_v3.json"
-        
-        if not fef_config.exists():
-            config = {
-                "version": "v3",
-                "management_server": {
-                    "host": DEFAULT_HOST,
-                    # Central management port; keep in sync with config/ports.json
-                    # (reserved.central_management). 9091 was a dead old-scheme port.
-                    "port": 8200
-                },
-                "security": {
-                    "enabled": False
-                },
-                "persistence": {
-                    "type": "json",
-                    "directory": str(config_dir)
-                }
-            }
-            
-            if not dry_run:
-                with Path(fef_config).open("w") as f:
-                    json.dump(config, f, indent=2)
-            
-            return {"success": True, "message": f"Created {fef_config}"}
-        
-        return {"success": True, "message": "Config already exists"}
-    
+        """Phase 3: Update configuration files.
+
+        Since D1 (2026-09-05) this no longer creates fef_v3.json — nothing
+        ever read it (the `persistence.type` switch had zero consumers) and
+        its dead layer has been deleted. Config lives in config/ports.json +
+        config/launcher_config.json; per-tool auth in tools/<name>/config.json.
+        """
+        return {"success": True, "message": "No config changes required (fef_v3.json discontinued, D1)"}
+
     async def _phase_validate(self, dry_run: bool) -> dict[str, Any]:
         """Phase 4: Validate migration."""
         checks = []
-        
+
         # Check imports
         try:
             from launcher.tool_extensions import ExtensionRegistry
             checks.append(("Imports", True, "All imports successful"))
         except ImportError as e:
             checks.append(("Imports", False, f"Import error: {e}"))
-        
-        # Check config
-        config_dir = Path.home() / ".config" / "supreme-mcp-tools"
-        fef_config = config_dir / "fef_v3.json"
-        checks.append(("Config", fef_config.exists(), f"Config file: {fef_config}"))
+
+        # Check config (ports.json is the source of truth)
+        ports_config = Path(__file__).resolve().parent.parent / "config" / "ports.json"
+        checks.append(("Config", ports_config.exists(), f"Config file: {ports_config}"))
         
         # Check tools
         tools = self._discover_tools()

@@ -222,5 +222,5 @@ To test: `python -m pytest tests/test_memory_autouse.py -v`
 - `iter_all` MUST stream (no full materialization) — backends yield one record at a time (R1, R15)
 - The legacy `launchmcp.py` and the new `python -m launcher` have **different** flag sets. Use the legacy entry point when you need `--list-tools` / `--dry-run` / `--verbose`
 - Single-instance rule for the management UI: only one `mcp_ui` process at a time. The user starts it with `startui` (`python -m mcp_ui.management_ui`, port 8400); agents running scratch instances for testing MUST stop them (verify `pgrep -af "mcp_[u]i"` and that 8400/8401 return 000) and may kill a forgotten `startui` when they need the port — with a heads-up
-- The root `README.md` is partially stale (still describes the legacy `launchmcp.py` interface and lists some tools as "NOT WORKING" that are now functional) — trust `python -m launcher --help` and `python launchmcp.py --help` over the README
+- The root `README.md` was refreshed 2026-09-02 (`3ff94c9`) and matches the current interface — still prefer `python -m launcher --help` / `python launchmcp.py --help` for ground truth
 - `tools/memorymcp/POSTGRESQL.md` has been removed (superseded by `BACKENDS.md` covering all 7 backend combos)

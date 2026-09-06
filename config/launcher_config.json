@@ -7,29 +7,6 @@
     "tools/ragmcp",
     "tools/memorymcp"
   ],
-  "fefV3": {
-    "enabled": true,
-    "managementServer": {
-      "host": "0.0.0.0",
-      "cors": {
-        "enabled": true,
-        "allowOrigins": ["*"],
-        "allowMethods": ["GET", "POST", "PUT", "DELETE"],
-        "allowHeaders": ["*"]
-      }
-    },
-    "security": {
-      "apiKeyAuth": false,
-      "rateLimiting": {
-        "enabled": false,
-        "requestsPerMinute": 60
-      }
-    },
-    "monitoring": {
-      "enabled": true,
-      "metricsEndpoint": "/metrics"
-    }
-  },
   "server": {
     "host": "0.0.0.0",
     "logLevel": "info"

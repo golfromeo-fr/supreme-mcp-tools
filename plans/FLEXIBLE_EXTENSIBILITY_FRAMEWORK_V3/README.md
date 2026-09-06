@@ -1,3 +1,4 @@
+> **⚠ PARTIALLY IMPLEMENTED — do not use as a build guide.** Sections 1–7 (extension registry, mgmt servers, per-tool 81xx APIs) shipped as FEF V3; sections 8 (service mesh), 9 (SQLite persistence), 16 (HA/distributed/plugins) were NEVER BUILT — their code skeletons are being deleted (design pass D1, plans/launcher-persistence-design-2026-09-05.md). Live tracker: `TODO.md`.
 # Flexible Extensibility Framework V3
 
 ## Enhanced Two-Way Tool Management System with Distributed Architecture
