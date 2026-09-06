@@ -55,7 +55,8 @@
       "convertermcp": 8103,
       "ragmcp": 8104,
       "memorymcp": 8105,
-      "databasemcp": 8100
+      "databasemcp": 8100,
+      "databasemcp_mgmt": 8100
     }
   }
 }
