@@ -124,21 +124,21 @@ class TestConverterMCPFixes:
         assert ".resolve()" in content
 
 
-class TestOracleMCPFixes:
-    """Verify oraclemcp critical fixes."""
+class TestDatabaseMCPFixes:
+    """Verify databasemcp (ex-oraclemcp) critical fixes."""
 
     def test_sql_query_logging_in_execute_query(self):
-        content = Path("tools/oraclemcp/oraclemcp_fastmcp.py").read_text()
+        content = Path("tools/databasemcp/connections.py").read_text()
         assert "[SQL]" in content
 
     def test_sql_query_logging_in_execute_sql(self):
-        content = Path("tools/oraclemcp/oraclemcp_fastmcp.py").read_text()
+        content = Path("tools/databasemcp/db_tools.py").read_text()
         execute_sql_start = content.find('async def execute_sql(')
         execute_sql_body = content[execute_sql_start:execute_sql_start + 3000]
         assert "[SQL]" in execute_sql_body
 
     def test_no_unused_lifespan_globals(self):
-        content = Path("tools/oraclemcp/oraclemcp_fastmcp.py").read_text()
+        content = Path("tools/databasemcp/db_tools.py").read_text()
         assert "fef_lifespan_manager" not in content
         assert "fef_lifespan_registry" not in content
         assert "fef_lifespan_http_server" not in content

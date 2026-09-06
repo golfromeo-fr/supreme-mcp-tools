@@ -80,7 +80,7 @@ class TestWebmcpTransportSwitching:
 class TestTransportSwitchingAllTools:
     """Non-regression: every _fastmcp.py must build its app via get_transport_app."""
 
-    TOOLS = ["simplemcp", "webmcp", "oraclemcp", "convertermcp", "ragmcp", "memorymcp"]
+    TOOLS = ["simplemcp", "webmcp", "databasemcp", "convertermcp", "ragmcp", "memorymcp"]
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_fastmcp_app_via_factory(self, tool):

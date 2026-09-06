@@ -100,7 +100,7 @@ class Config:
         "toolDirectories": [
             # Relative paths from supreme-mcp-tools root
             "tools/webmcp",
-            "tools/oraclemcp",
+            "tools/databasemcp",
             "tools/simplemcp",
             "tools/convertermcp",
             "tools/ragmcp",
@@ -112,14 +112,14 @@ class Config:
             "basePort": 8000,
             "portRange": [8000, 8099],
             "ports": {
-                "oraclemcp": 8000,
+                "databasemcp": 8000,
                 "webmcp": 8001,
                 "simplemcp": 8002,
                 "convertermcp": 8003,
                 "ragmcp": 8004
             },
             "managementPorts": {
-                "oraclemcp": 8100,
+                "databasemcp": 8100,
                 "webmcp": 8101,
                 "simplemcp": 8102,
                 "convertermcp": 8103,
@@ -130,7 +130,7 @@ class Config:
             "reservedPorts": None,  # Populated by _ensure_port_defaults()
             "manualPorts": {
                 "mcp": {
-                    "oraclemcp": 8000,
+                    "databasemcp": 8000,
                     "webmcp": 8001,
                     "simplemcp": 8002,
                     "convertermcp": 8003,

@@ -179,7 +179,7 @@
         }
       }
     },
-    "oraclemcp": {
+    "databasemcp": {
       "enabled": true,
       "mcp_port": 8000,
       "mgmt_port": 9000,

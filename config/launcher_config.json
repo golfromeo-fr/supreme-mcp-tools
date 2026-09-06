@@ -1,7 +1,7 @@
 {
   "toolDirectories": [
     "tools/webmcp",
-    "tools/oraclemcp",
+    "tools/databasemcp",
     "tools/simplemcp",
     "tools/convertermcp",
     "tools/ragmcp",

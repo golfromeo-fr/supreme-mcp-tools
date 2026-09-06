@@ -1,11 +1,11 @@
 {
-  "name": "oraclemcp",
+  "name": "databasemcp",
   "version": "1.0.0",
   "description": "Oracle MCP Server - Provides access to Oracle databases with query execution, schema introspection, and AI-powered SQL optimization",
   "transports": {
     "streamable-http": {
       "enabled": true,
-      "script": "oraclemcp_fastmcp.py",
+      "script": "databasemcp_fastmcp.py",
       "port": 8000,
       "endpoint": "/mcp",
       "framing_format": "newline-delimited"
