@@ -128,7 +128,7 @@ class TestDatabaseMCPFixes:
     """Verify databasemcp (ex-oraclemcp) critical fixes."""
 
     def test_sql_query_logging_in_execute_query(self):
-        content = Path("tools/databasemcp/connections.py").read_text()
+        content = Path("tools/databasemcp/db_tools.py").read_text()
         assert "[SQL]" in content
 
     def test_sql_query_logging_in_execute_sql(self):

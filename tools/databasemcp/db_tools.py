@@ -16,10 +16,11 @@ import oracledb
 import openai
 
 from core import (
-    mcp, logger, metrics, SCRIPT_DIR, TOOL_NAME,
+    mcp, logger, metrics, TOOL_NAME,
     FEF_V3_AVAILABLE, ToolExtensionManager, register_common_extensions,
     setup_tool_extensions, Extension, ExtensionType,
 )
+import rules
 import connections
 from connections import REGISTRY, _SECRET_KEYS
 from dialects import DIALECTS, get_dialect
@@ -174,43 +175,51 @@ def get_query_stats(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_connection_pool_stats(params: dict[str, Any]) -> dict[str, Any]:
-    """Data source: Get connection pool statistics."""
+def get_connections_stats(params: dict[str, Any]) -> dict[str, Any]:
+    """Data source: connection registry statistics."""
+    conns = REGISTRY.list()
     return {
-        "active_connections": metrics["connection_count"],
-        "connection_errors": metrics["connection_errors"],
-        "config": connections.get_pool_config()
+        "active_connection": next((c["name"] for c in conns if c["active"]), None),
+        "total_connections": len(conns),
+        "connections": [
+            {"name": c["name"], "dialect": c["dialect"], "state": c["state"],
+             "cached_tables": c["cached_tables"], "last_error": c["last_error"]}
+            for c in conns
+        ],
     }
 
 
 def get_schema_cache_stats(params: dict[str, Any]) -> dict[str, Any]:
-    """Data source: Get schema cache statistics."""
+    """Data source: per-connection schema cache statistics."""
+    conns = REGISTRY.list()
     return {
-        "cached_tables": len(connections.table_columns_cache),
-        "schema_lookups": metrics["schema_lookups"]
+        "cached_tables": sum(c["cached_tables"] for c in conns),
+        "schema_lookups": metrics["schema_lookups"],
+        "per_connection": {c["name"]: c["cached_tables"] for c in conns},
     }
 
 
 def reset_connections(params: dict[str, Any]) -> dict[str, Any]:
-    """Action: Reset database connections."""
-    metrics["connection_count"] = 0
-    metrics["connection_errors"] = 0
-    logger.info("[databasemcp] Connection counters reset")
+    """Action: close all connections (lazy reconnect on next use)."""
+    closed, skipped = REGISTRY.close_all()
+    logger.info(f"[databasemcp] reset_connections: closed {closed}, skipped {skipped} busy")
     return {
         "success": True,
-        "message": "Connection counters have been reset"
+        "message": f"Closed {closed} connection(s); skipped {skipped} busy. They reconnect lazily on next use.",
     }
 
 
 def clear_cache(params: dict[str, Any]) -> dict[str, Any]:
-    """Action: Clear schema cache."""
-    with connections._db_lock:
-        connections.table_columns_cache = {}
-        connections.schema_cache = {}
-    logger.info("[databasemcp] Schema cache cleared")
+    """Action: clear every connection's schema cache."""
+    cleared = 0
+    for entry in REGISTRY._entries.values():
+        with entry.lock:
+            entry.schema_cache.clear()
+            cleared += 1
+    logger.info(f"[databasemcp] Schema cache cleared on {cleared} connection(s)")
     return {
         "success": True,
-        "message": "Schema cache cleared"
+        "message": f"Schema cache cleared on {cleared} connection(s)",
     }
 
 
@@ -498,87 +507,59 @@ def _render_error(e: Exception) -> str:
 
 @mcp.tool()
 async def get_sql_optimization_rules() -> str:
-    """Returns the list of rules for optimization of SQL queries from optimization.json."""
+    """Returns the SQL optimization rules from the user-local optimization.json."""
     start_time = time.perf_counter()
     try:
-        optimization_path = SCRIPT_DIR / "optimization.json"
-        with Path(optimization_path).open("r", encoding="utf-8") as f:
-            rules = json.load(f)
+        text = rules.load("optimization.json")
         _timing_update(start_time, "get_sql_optimization_rules", True)
-        return json.dumps(rules, ensure_ascii=False, indent=2)
-    except Exception as e:
+        return text
+    except FileNotFoundError as e:
         _timing_update(start_time, "get_sql_optimization_rules", False)
-        logger.error(f"Error reading optimization.json: {e}")
-        return f"Error: {str(e)}"
-
-
-@mcp.tool()
-async def explain_plan(sql: str) -> str:
-    """Sends an EXPLAIN PLAN query to Oracle and returns the execution plan for the provided SQL query."""
-    start_time = time.perf_counter()
-    if not sql:
-        _timing_update(start_time, "explain_plan", False)
-        return "Error: sql query is required"
-
-    try:
-        conn = connections.get_db_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute("DELETE FROM PLAN_TABLE")
-        except Exception:
-            pass
-
-        cursor.execute(f"EXPLAIN PLAN FOR {sql}")
-
-        try:
-            cursor.execute("SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY())")
-            plan_rows = cursor.fetchall()
-            plan_text = "\n".join(row[0] for row in plan_rows)
-        except Exception:
-            cursor.execute("SELECT * FROM PLAN_TABLE")
-            plan_rows = cursor.fetchall()
-            plan_text = str(plan_rows)
-        _timing_update(start_time, "explain_plan", True)
-        return plan_text
-    except Exception as e:
-        _timing_update(start_time, "explain_plan", False)
-        logger.error(f"Error executing EXPLAIN PLAN: {e}")
-        return f"Error: {str(e)}"
+        return f"Error: {e}"
 
 
 @mcp.tool()
 async def optimize_sql_with_ai(sql: str) -> str:
-    """Accepts a SQL query, references optimization rules from optimization.json, and calls an AI to suggest or apply optimizations."""
+    """Accepts a SQL query, references the user-local optimization rules, and
+    calls an AI (via AI_BASE_URL + AI_API_KEY) to suggest optimizations."""
     start_time = time.perf_counter()
     if not sql:
         _timing_update(start_time, "optimize_sql_with_ai", False)
         return "Error: sql query is required"
+
+    api_key = os.getenv('AI_API_KEY')
+    base_url = os.getenv('AI_BASE_URL')
+    if not api_key or api_key == "put_your_api_key_here":
+        _timing_update(start_time, "optimize_sql_with_ai", False)
+        logger.error("AI_API_KEY environment variable not properly configured")
+        return "Error: The AI optimization feature requires a valid API key. Please update the AI_API_KEY environment variable."
+    if not base_url:
+        _timing_update(start_time, "optimize_sql_with_ai", False)
+        return "Error: The AI optimization feature requires AI_BASE_URL (your OpenAI-compatible gateway URL) in the environment."
 
     try:
         def extract_table_names_from_sql(sql_query):
             pattern = r"(?:from|join|into|update|with)\s+([a-zA-Z0-9_]+)"
             return list(set(re.findall(pattern, sql_query, re.IGNORECASE)))
 
-        table_names = extract_table_names_from_sql(sql)
+        # Live schema context via the registry (cached describe; any dialect)
         table_descriptions = None
-        if table_names:
-            try:
-                schemas_result = {}
-                for table_name in table_names:
-                    schema = connections.fetch_schema_from_cache(table_name.upper())
-                    if schema and isinstance(schema, dict):
-                        schemas_result[table_name] = {
-                            "columns": schema["columns"],
-                            "constraints": schema["constraints"]
-                        }
-                if schemas_result:
-                    table_descriptions = str(schemas_result)
-            except Exception as e:
-                logger.error(f"Error fetching table schemas for AI optimization: {e}")
+        try:
+            entry = REGISTRY.get(None)
+            schemas_result = {}
+            for table_name in extract_table_names_from_sql(sql):
+                name = table_name.upper() if entry.dialect == "oracle" else table_name
+                if name not in entry.schema_cache:
+                    entry.schema_cache[name] = DIALECTS[entry.dialect].describe_table(entry.handle, name)
+                desc = entry.schema_cache[name]
+                if desc.get("columns"):
+                    schemas_result[table_name] = desc
+            if schemas_result:
+                table_descriptions = str(schemas_result)
+        except Exception as e:
+            logger.error(f"Error fetching table schemas for AI optimization: {e}")
 
-        optimization_path = SCRIPT_DIR / "optimization.json"
-        with Path(optimization_path).open("r", encoding="utf-8") as f:
-            rules = json.load(f)
+        rules_text = rules.load("optimization.json")
 
         prompt = "You are an expert SQL query optimizer."
         if table_descriptions:
@@ -588,28 +569,23 @@ async def optimize_sql_with_ai(sql: str) -> str:
             "\nGiven the following SQL query and a set of optimization rules, "
             "suggest improvements or rewrite the query to be as efficient as possible.\n\n"
             "Optimization Rules:\n"
-            f"{json.dumps(rules, ensure_ascii=False, indent=2)}\n\n"
+            f"{rules_text}\n\n"
             "SQL Query:\n"
             f"{sql}\n\n"
             "Optimized SQL and/or suggestions (include comments explaining optimizations):"
         )
 
-        api_key = os.getenv('AI_API_KEY')
-        if not api_key or api_key == "put_your_api_key_here":
-            _timing_update(start_time, "optimize_sql_with_ai", False)
-            logger.error("AI_API_KEY environment variable not properly configured")
-            return "Error: The AI optimization feature requires a valid API key. Please update the AI_API_KEY environment variable."
+        import openai
 
-        client = openai.OpenAI(
-            api_key=api_key,
-            base_url="https://put.your.API.gateway.ai/"
-        )
-        response = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+        def _call():
+            return client.chat.completions.create(
+                model=os.getenv("AI_MODEL", "gpt-4.1"),
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+        response = await asyncio.to_thread(_call)
         _timing_update(start_time, "optimize_sql_with_ai", True)
         return response.choices[0].message.content
     except Exception as e:
@@ -620,18 +596,16 @@ async def optimize_sql_with_ai(sql: str) -> str:
 
 @mcp.tool()
 async def get_proc_rules() -> str:
-    """Returns the Pro*C coding rules from proc_rules.md."""
+    """Returns the Pro*C coding rules from the user-local proc_rules.md."""
     start_time = time.perf_counter()
     try:
-        proc_rules_path = SCRIPT_DIR / "proc_rules.md"
-        with Path(proc_rules_path).open("r", encoding="utf-8") as f:
-            rules = f.read()
+        text = rules.load("proc_rules.md")
         _timing_update(start_time, "get_proc_rules", True)
-        return rules
-    except Exception as e:
+        return text
+    except FileNotFoundError as e:
         _timing_update(start_time, "get_proc_rules", False)
-        logger.error(f"Error reading proc_rules.md: {e}")
-        return f"Error: {str(e)}"
+        return f"Error: {e}"
+
 
 
 # ============================================================================
@@ -671,7 +645,7 @@ def setup_extensions(registry=None) -> None:
             metadata={"description": "Database query execution statistics", "category": "metrics"}
         ),
         Extension(
-            name="connection_pool",
+            name="connections",
             ext_type=ExtensionType.DATA_SOURCE,
             schema={
                 "input": {"type": "object", "properties": {}},
@@ -684,8 +658,8 @@ def setup_extensions(registry=None) -> None:
                     }
                 }
             },
-            handler=get_connection_pool_stats,
-            metadata={"description": "Connection pool statistics", "category": "metrics"}
+            handler=get_connections_stats,
+            metadata={"description": "Connection registry statistics", "category": "metrics"}
         ),
         Extension(
             name="schema_cache",
@@ -701,7 +675,7 @@ def setup_extensions(registry=None) -> None:
                 }
             },
             handler=get_schema_cache_stats,
-            metadata={"description": "Schema cache statistics", "category": "metrics"}
+            metadata={"description": "Per-connection schema cache statistics", "category": "metrics"}
         ),
         Extension(
             name="reset_connections",
@@ -717,7 +691,7 @@ def setup_extensions(registry=None) -> None:
                 }
             },
             handler=reset_connections,
-            metadata={"description": "Reset database connection counters", "category": "maintenance"}
+            metadata={"description": "Close all connections (lazy reconnect on next use)", "category": "maintenance"}
         ),
         Extension(
             name="clear_cache",
@@ -733,7 +707,7 @@ def setup_extensions(registry=None) -> None:
                 }
             },
             handler=clear_cache,
-            metadata={"description": "Clear schema cache", "category": "maintenance"}
+            metadata={"description": "Clear every connection's schema cache", "category": "maintenance"}
         ),
     ]
 
