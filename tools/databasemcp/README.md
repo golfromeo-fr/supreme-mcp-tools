@@ -52,5 +52,5 @@ zero containers. Note: a `file:` path that doesn't exist is created empty.
 ## Run
 
 Discovered by the launcher from `tools/databasemcp/databasemcp_fastmcp.py`
-(ports 8000/8100 from `config/ports.json`), or standalone:
+(ports 8000/8110 from `config/ports.json`), or standalone:
 `python tools/databasemcp/databasemcp_fastmcp.py`.

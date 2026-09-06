@@ -108,7 +108,7 @@ Cautions:
   data; the sweep flow uses the throwaway `sweep` connection only.
 - `query` accepts SELECT/WITH only (lexical guard); DML/DDL goes through
   `execute_sql` (which commits).
-- Ports: MCP 8000, mgmt 8100 (pinned via `databasemcp_mgmt` in ports.json).
+- Ports: MCP 8000, mgmt 8110 (pinned via `databasemcp_mgmt` in ports.json — ABOVE the auto-allocation corridor; a pin at 8100 collided with simplemcp's floor grab, 2026-09-07).
 
 ### webmcp notes (updated 2026-08-27)
 

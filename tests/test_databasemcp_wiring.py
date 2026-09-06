@@ -18,7 +18,7 @@ class TestWiring:
     def test_ports_json_assignments(self):
         ports = json.loads((PROJECT_ROOT / "config" / "ports.json").read_text())
         assert ports["assignments"]["mcp"]["databasemcp"] == 8000
-        assert ports["assignments"]["mgmt"]["databasemcp"] == 8100
+        assert ports["assignments"]["mgmt"]["databasemcp"] == 8110
 
     def test_tracked_configs_have_no_oraclemcp(self):
         # Intentional historical references excluded (rename spec, P1 gate)
@@ -38,7 +38,7 @@ class TestWiring:
         import databasemcp_fastmcp as m
 
         assert m.TOOL_NAME == "databasemcp"
-        assert m.MCP_PORT == 8000 and m.MGMT_PORT == 8100
+        assert m.MCP_PORT == 8000 and m.MGMT_PORT == 8110
 
     def test_function_mask_hides_tool(self, tmp_path, monkeypatch):
         from fastmcp import Client
