@@ -953,15 +953,24 @@ async def main() -> int:
     return 0
 
 
+def _arm_exit_guard(exit_code: int, delay: float = 5.0) -> None:
+    """Post-run exit guard (C7 restart race): a lingering non-daemon thread
+    keeps the interpreter (and every tool port fd) alive after main()
+    has finished — observed 2026-08-30 as ports busy for minutes after
+    a "clean" shutdown log. Force the process to die within `delay`;
+    sys.exit still wins the race when nothing lingers. Returns the armed
+    timer (tests cancel it instead of dying).
+    """
+    timer = threading.Timer(delay, lambda: os._exit(exit_code))
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
-        # Post-run exit guard (C7 restart race): a lingering non-daemon thread
-        # keeps the interpreter (and every tool port fd) alive after main()
-        # has finished — observed 2026-08-30 as ports busy for minutes after
-        # a "clean" shutdown log. Force the process to die within 5s; sys.exit
-        # still wins the race when nothing lingers.
-        threading.Timer(5.0, lambda: os._exit(exit_code), daemon=True).start()
+        _arm_exit_guard(exit_code)
         sys.exit(exit_code)
     except KeyboardInterrupt:
         logging.info("Interrupted by user")

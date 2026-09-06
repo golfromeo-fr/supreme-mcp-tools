@@ -159,3 +159,24 @@ class TestC7DeadlinesWired:
         # stay under launchmcp's 15s watchdog and the next launcher's 20s
         # port-retry window.
         assert TASK_CANCEL_TIMEOUT + GRACEFUL_SHUTDOWN_TIMEOUT < 15
+
+
+class TestC7PostRunExitGuard:
+    """Regression: threading.Timer takes no ``daemon`` kwarg — the 2026-09-06
+    version raised TypeError on every clean shutdown ("Fatal error: "
+    "Timer.__init__() got an unexpected keyword argument 'daemon'"), so the
+    guard never armed."""
+
+    def test_guard_arms_a_daemon_timer(self):
+        import threading
+
+        import launchmcp
+
+        timer = launchmcp._arm_exit_guard(0, delay=120)
+        try:
+            assert isinstance(timer, threading.Timer)
+            assert timer.daemon is True
+            assert timer.interval == 120
+            assert timer.is_alive()
+        finally:
+            timer.cancel()
