@@ -77,6 +77,10 @@ User goal: several humans/agents use the same deployment; **each has their own k
 
 **Suggested sequencing:** E1 (half day) → M1 spike (half day) → E2 Memory Explorer (a day, independent — can interleave) → M2 → M3 → M4 doc.
 
+## E3 implementation plan (2026-09-07)
+
+Full spec-grade plan: **`plans/e3-multiuser-overhaul-2026-09-07.md`** — whole-project scope per the user's clarification (mcp_ui logins, keys, roles; 12-surface inventory in the spike doc). Phases P0→M3 on `feature/e3-multiuser`; E4 tx_owner binding included (F7: identity visible inside tools).
+
 ## E4 — databasemcp transaction management (planned 2026-09-07)
 
 Full plan: **`plans/databasemcp-transactions-2026-09-07.md`** (spec-grade, implementer probes included). Two tiers: atomic multi-statement batches (`execute_sql statements=[]`) and interactive transactions (`begin_transaction` → `tx_id` → `commit`/`rollback`, idle reaper mandatory). 15 → 18 tools. Load-bearing probe fact (2026-09-07, live): the libsql shared connection already carries explicit BEGIN/ROLLBACK across MCP calls — capability proven, hazard proven (no lock ⇒ other callers join the open tx) — so Tier 2 pins a dedicated per-tx connection on every dialect. **Sequencing: strictly after the `feature/databasemcp` merge**, as branch `feature/db-transactions` off merged main (~1–1.5 days). Note for E3: a `tx_id` is a bearer capability — when M2/M3 add identities, transactions should bind to the caller's identity.
