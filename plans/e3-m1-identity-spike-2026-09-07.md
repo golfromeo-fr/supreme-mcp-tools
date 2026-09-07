@@ -124,6 +124,43 @@ already makes horizontal scaling possible; identity composes on top.
   request; rotation is atomic-swap of the dict reference (same pattern as E1
   runtime masks).
 
+## Full-surface scope (user clarification, 2026-09-07)
+
+> "Multi user implies every aspect of the project like mcp_ui secret keys to
+> auth etc." — E3 is a WHOLE-PROJECT identity layer, not just tool-server
+> middleware. Inventory of every auth/secret surface, verified 2026-09-07:
+
+| # | Surface | Auth today (verified) | Multi-user target | Role gate |
+|---|---------|----------------------|-------------------|-----------|
+| 1 | Tool MCP endpoints (8000-8005, all transports) | ONE shared api_key per tool (`config.json auth.api_key`), `client_id` = tool name | **Per-user keys**: multi-token `DualHeaderVerifier` from the user store (F6) + `IdentityGateMiddleware` (M1 deliverable) | user |
+| 2 | Central management API (8200) | **OPEN — `ManagementServer(api_key=None)` → `_verify_api_key` returns True unconditionally** (probe: extension queries return 200 with no header) | **P0 quick win NOW**: set a system admin key (env `MCP_MANAGEMENT_API_KEY`) independent of multi-user. Later: per-user tokens, admin role for writes, read-only for users | admin |
+| 3 | Per-tool mgmt servers (81xx) incl. E1 `/admin/function-masks`, presets actions | X-API-Key = the SAME tool key as (1) (`load_auth_config`) | Accepts any valid user token, but mgmt actions are admin operations → **role check in the endpoint** (identity middleware exposes client_id) | admin |
+| 4 | `/admin/flush-sessions` (tool port) | Tool key | Destructive → admin role once identities land | admin |
+| 5 | mcp_ui login (8400) | Single shared `MCP_UI_USERNAME`/`MCP_UI_PASSWORD`; sessions signed by `MCP_UI_SECRET` (system-level, keep) | **Per-user login against the user store** (username + password hash); role-gated tabs: Users/Function Masks/Env/Auth = admin; Memory Explorer + Functions view = any user, scoped to their allowed tools | mixed |
+| 6 | mcp_ui → backends | UI reads tool keys from `config.json`; talks to 8200 unauthenticated (see #2) | UI holds the LOGGED-IN user's token (or the system key for admin); memory_client calls memorymcp AS the acting user → per-user visibility for free | user |
+| 7 | Harness/client bindings (ZCode `config.json`, Kilo, Copilot) | Copies of the shared per-tool keys | Each user's client config carries **their** key | user |
+| 8 | Metrics server (8300) | **No auth** (`/metrics`, `/health`, `/stats` open; FastAPI app in `monitoring/exporters.py`) | System-level: optional key or bind/firewall; NOT per-user | system |
+| 9 | Backend creds in `.env` (PG/Qdrant/Turso DSNs, `AI_API_KEY`, `SIMPLEMCP_SECRET`) | System-level secrets | Stay system-level — never per-user | system |
+| 10 | `DB_PRESET_<NN>` (.env) | System-level connection presets | System-level; PRESET BYPASS runs as the server, not the caller (documented limit; per-user DB creds = explicit non-goal v1) | system |
+| 11 | memorymcp DATA (whose memories) | No owner concept (single-user) | **Separate, harder problem** — tag-by-owner or partitioned collections; stays out of scope until someone needs it (unchanged E3 stance) | — |
+| 12 | `MCP_UI_SECRET` (session signing) | System-level env | Stays system-level (signs cookies; not an identity) | system |
+
+**Consequences for the plan's phases:**
+- **P0 (do first, independent, ~1h):** set `MCP_MANAGEMENT_API_KEY` on the
+  central server + same for metrics if desired — closes today's open
+  surfaces regardless of multi-user timing. (Found by this inventory; the
+  8200 openness predates E3.)
+- **M2 grows**: the user store is the single source for (a) per-user MCP
+  tokens (surface 1/3/4/7), (b) mcp_ui login credentials (surface 5), and
+  (c) role + per-user allowed-tools. Store shape gains `username`,
+  `password_hash` (stdlib `hashlib.pbkdf2_hmac` — no new deps), `role`,
+  `mcp_key`, `allowed_tools`, `enabled`.
+- **M3 grows**: role enforcement on 81xx actions, flush endpoint, and the
+  mcp_ui tab set; the mcp_ui login flow swaps env-creds → store.
+- E4 note stands: `tx_id` binds to the caller's `client_id` when M2 lands.
+
+
+
 ## Bridge to M2–M4 (pointers, not scope)
 
 - **M2**: user store (`~/.config/supreme-mcp-tools/users.json`, hashed keys,
