@@ -43,6 +43,19 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
+async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool) -> dict:
+    """E1: push a just-persisted mask to the RUNNING server (same process —
+    the per-tool registry holds its FastMCP instance). File-first already
+    happened; a failed push still converges at the tool's next restart."""
+    from .tool_extensions.registry import get_registry_for_tool
+    from tools.shared.function_masks import apply_mask_at_runtime
+
+    registry = await get_registry_for_tool(server_name)
+    mcp = getattr(registry, "mcp_instance", None) if registry else None
+    result = apply_mask_at_runtime(mcp, server_name, tool_name, masked)
+    return {"runtime_applied": result["applied"], "runtime_note": result["reason"]}
+
+
 # Request/Response Models
 class QueryRequest(BaseModel):
     """Request model for querying data sources."""
@@ -400,9 +413,21 @@ class ManagementServer:
             disabled_list: list[str],
             _: bool = Depends(self._verify_api_key)
         ):
-            """Set disabled tools for a specific server."""
+            """Set disabled tools for a server (persist, then push the DIFF to
+            the running server — E1 runtime masks)."""
+            before = set(get_disabled_tools(server_name))
             set_disabled_tools(server_name, disabled_list)
-            return {"server": server_name, "disabled": disabled_list}
+            after = set(disabled_list)
+            runtime_results = {}
+            for tool_name in sorted(after - before):
+                runtime_results[tool_name] = await _push_runtime_mask(server_name, tool_name, True)
+            for tool_name in sorted(before - after):
+                runtime_results[tool_name] = await _push_runtime_mask(server_name, tool_name, False)
+            return {
+                "server": server_name,
+                "disabled": disabled_list,
+                "runtime": runtime_results,
+            }
 
         @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/disable")
         async def disable_tool_endpoint(
@@ -410,9 +435,11 @@ class ManagementServer:
             tool_name: str,
             _: bool = Depends(self._verify_api_key)
         ):
-            """Disable a specific tool for a server."""
+            """Disable a specific tool for a server (persist + push to the
+            running server — E1 runtime masks)."""
             disable_tool(tool_name, server_name)
-            return {"server": server_name, "tool": tool_name, "disabled": True}
+            runtime = await _push_runtime_mask(server_name, tool_name, True)
+            return {"server": server_name, "tool": tool_name, "disabled": True, **runtime}
 
         @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/enable")
         async def enable_tool_endpoint(
@@ -420,9 +447,11 @@ class ManagementServer:
             tool_name: str,
             _: bool = Depends(self._verify_api_key)
         ):
-            """Enable a specific tool for a server."""
+            """Enable a specific tool for a server (persist + push to the
+            running server — E1 runtime masks)."""
             enable_tool(tool_name, server_name)
-            return {"server": server_name, "tool": tool_name, "disabled": False}
+            runtime = await _push_runtime_mask(server_name, tool_name, False)
+            return {"server": server_name, "tool": tool_name, "disabled": False, **runtime}
 
         # === Environment Variable Management ===
 
