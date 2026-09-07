@@ -383,9 +383,20 @@ async def main_page() -> None:
             )
 
     async def rebuild_content():
-        content_container.clear()
-        with content_container:
-            await _render_content_area(state, handlers)
+        """Rebuild the content area, serialized: overlapping rebuilds (tool
+        selection + a status poll, say) used to interleave clear→await→build
+        and APPEND a second copy of the whole tab structure (duplicated
+        Memory Explorer, 2026-09-07). A rebuild that was superseded while
+        waiting for the lock exits without rendering."""
+        nonlocal _rebuild_generation
+        _rebuild_generation += 1
+        my_generation = _rebuild_generation
+        async with _rebuild_lock:
+            if my_generation != _rebuild_generation:
+                return  # a newer rebuild is queued — ours would be stale
+            content_container.clear()
+            with content_container:
+                await _render_content_area(state, handlers)
 
     def schedule_content_rebuild() -> None:
         """Content rebuild is async (env/auth fetches); schedule from sync handlers."""
@@ -598,6 +609,8 @@ async def main_page() -> None:
     with ui.column().classes("w-full p-4 gap-2"):
         banner_container = ui.column().classes("w-full")
         content_container = ui.column().classes("w-full")
+    _rebuild_lock = asyncio.Lock()
+    _rebuild_generation = 0
 
     rebuild_status_chip()
     rebuild_error_banner()

@@ -232,4 +232,8 @@ def render_memory_tab(container) -> None:
         ui.label("Results appear as queryMemory formats them (scored list).")\
             .classes("text-caption text-grey")
 
-    _build()
+    # Inside the container's slot context — WITHOUT this, _build() attaches to
+    # the ambient slot (the tab panel), and the first _rebuild() then adds a
+    # SECOND copy into the container (duplicate Memory Explorer, 2026-09-07).
+    with container:
+        _build()
