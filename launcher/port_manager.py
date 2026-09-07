@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 PORT_BUSY_RETRY_SECS = 20.0
 PORT_BUSY_RETRY_INTERVAL = 1.5
 
+# E1-era lesson (2026-09-07): a pinned MGMT port whose stale holder outlives
+# the retry window must not kill the tool — mgmt URLs are consumed via the
+# service registry (dynamic), unlike MCP ports which clients pin by URL.
+# A timed-out pinned mgmt port degrades to corridor auto-allocation.
+PORT_BUSY_MGMT_FALLBACK = True
+
 # Fallback when config/ports.json is unreadable or lacks the key. The real
 # value lives under "reserved"."central_management" in config/ports.json.
 DEFAULT_CENTRAL_MANAGEMENT_PORT = 8200
@@ -345,13 +351,30 @@ class PortManager:
                         if self._is_port_available(manual_port, port_type):
                             break
                     else:
-                        raise PortConflictError(
-                            f"Manual port {manual_port} for {name} is still not available "
-                            f"after {PORT_BUSY_RETRY_SECS:.0f}s",
-                            port=manual_port,
-                            tool_name=name
-                        )
-                port = manual_port
+                        # Timed out. MCP ports must fail loudly (clients pin them
+                        # by URL), but a pinned MGMT port is only a preference —
+                        # its URL reaches consumers via the service registry.
+                        # Degrade to corridor allocation instead of losing the
+                        # whole tool for the run (databasemcp, 2026-09-07: a
+                        # stale holder on 8110 made the FIRST launcher run start
+                        # without databasemcp every time).
+                        if port_type == PortType.MANAGEMENT and PORT_BUSY_MGMT_FALLBACK:
+                            logger.error(
+                                f"Manual mgmt port {manual_port} for {name} still busy after "
+                                f"{PORT_BUSY_RETRY_SECS:.0f}s — DEGRADING to auto-allocated "
+                                f"mgmt port (stale holder on {manual_port}). The tool starts "
+                                f"normally; consumers follow the service registry."
+                            )
+                            manual_port = None  # fall through to auto allocation
+                        else:
+                            raise PortConflictError(
+                                f"Manual port {manual_port} for {name} is still not available "
+                                f"after {PORT_BUSY_RETRY_SECS:.0f}s",
+                                port=manual_port,
+                                tool_name=name
+                            )
+                if manual_port is not None:
+                    port = manual_port
             else:
                 logger.debug(f"No manual port configured for {name} in {port_type} type, using auto allocation")
         

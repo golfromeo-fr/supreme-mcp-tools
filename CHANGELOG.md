@@ -4,6 +4,9 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-07 — fix: pinned mgmt port no longer kills a tool's run (databasemcp first-run failure)
+- **Fixed**: the recurring "first `./startlauncher` run starts without databasemcp, second run is fine" — databasemcp is the only tool with a **pinned mgmt port** (8110); every other tool self-heals a stale holder by auto-allocating the next free mgmt port. A pinned mgmt port whose holder outlives the 20s busy-retry window now **degrades to corridor auto-allocation** with a loud WARNING instead of failing the tool; consumers follow the service registry, so nothing breaks. Pinned **MCP** ports still raise (clients hardcode them). `tests/test_port_fallback.py` (3) reproduces the failure with a real socket holder on a synthetic range.
+
 ### 2026-09-07 — E1: runtime Function-Mask toggling (feature/e1-runtime-masks)
 - **Added**: mask changes now apply to the RUNNING tool server — no restart. The central disable/enable endpoints (and `PUT /api/disabled-tools/{server}`, diff-pushed) persist **file-first**, then push to the tool's FastMCP instance; the per-tool 81xx mgmt server gains `POST /admin/function-masks` (`{"tool", "masked"}`, same API-key auth). Wiring: `server_manager` hands each tool's registry its `mcp_instance` (`_wire_mcp_instance`); responses carry `runtime_applied`/`runtime_note` so the mcp_ui Functions tab can say honestly whether the push happened (unreachable/pre-E1 server = file still wins at next start). All transports covered at once (disable is instance-level).
 - **Tests**: `tests/test_e1_runtime_masks.py` (9): runtime helper disable/enable round trip, masked-call rejection, 81xx endpoint persist+apply over TestClient with auth check, central push, wiring, and a boot-sync regression (`validate_and_cleanup_config` prunes only stale mask names, never live ones).
