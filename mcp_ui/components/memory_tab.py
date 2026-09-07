@@ -18,8 +18,10 @@ from ..memory_client import get_memory_client, MemoryMcpError
 PAGE_SIZE = 20
 
 
-async def render_memory_tab(container) -> None:
-    """Entry point: (re)build the whole tab into `container`."""
+def render_memory_tab(container) -> None:
+    """Entry point: (re)build the whole tab into `container`. Sync on purpose —
+    the management_ui tab builder calls it directly; async data loads are
+    scheduled with asyncio.create_task inside."""
     client = get_memory_client()
     state: dict[str, Any] = {
         "mode": "browse",       # browse | search | detail
