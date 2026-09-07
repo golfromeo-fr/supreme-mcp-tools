@@ -113,12 +113,14 @@ class IdentityGateMiddleware(Middleware):
         masked = self._masked(entry)
         if not masked:
             return result
-        if isinstance(result, dict):  # legacy dict shape
-            return result
-        try:
-            return [t for t in result if t.name not in masked]
-        except TypeError:
-            return result
+        # fastmcp 4 DiscoverResult may arrive as a bare list OR a tuple whose
+        # first element is the tools list — filter only a recognizable list
+        if isinstance(result, (list, tuple)) and result:
+            first = result[0]
+            if isinstance(first, list) and all(hasattr(t, "name") for t in first):
+                filtered = [t for t in first if t.name not in masked]
+                return (filtered, *result[1:]) if isinstance(result, tuple) else filtered
+        return result
 
     async def on_call_tool(self, context, call_next):
         entry = self._entry(context)

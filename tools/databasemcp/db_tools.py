@@ -218,8 +218,23 @@ async def begin_transaction(connection: str | None = None) -> str:
     back automatically after DB_TX_IDLE_TIMEOUT seconds (default 300)."""
     start_time = time.perf_counter()
     _ensure_reaper()
+    # E3: attribute the transaction to the caller (F7 — identity visible
+    # inside tool functions). Unknown owner (in-memory/mono-legacy) is fine.
+    owner = None
     try:
-        entry, tx_id = await asyncio.to_thread(REGISTRY.begin_tx, connection)
+        from fastmcp.server.dependencies import get_http_request
+        from tools.shared.identity import resolve_identity
+
+        auth_verifier = getattr(mcp, "auth", None)
+        if auth_verifier is not None and hasattr(auth_verifier, "tokens"):
+            ident = resolve_identity(
+                get_http_request(), lambda: auth_verifier.tokens()
+            )
+            owner = ident[0] if ident else None
+    except Exception:
+        owner = None
+    try:
+        entry, tx_id = await asyncio.to_thread(REGISTRY.begin_tx, connection, owner)
     except Exception as e:
         _timing_update(start_time, "begin_transaction", False)
         return _render_error(e)

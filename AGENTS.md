@@ -172,6 +172,24 @@ A bare top-level `"api_key"` is invisible to the auth system. `tools/<name>/conf
 
 Tools register via `@mcp.tool()` decorators at import time. Submodules register their tools as a side effect of being imported. The entry point (`<name>_fastmcp.py`) imports submodules, then calls `get_transport_app(mcp)`.
 
+### Multi-user auth (E3)
+
+`MCP_AUTH_MODE=mono|multi` (default `mono` = exactly today's behavior). In
+`multi`, identity comes from the user store
+(`~/.config/supreme-mcp-tools/users.json`, path override `MCP_USERS_STORE`):
+per-user `mcp_key`s + roles + per-user `servers` reachability +
+`masked_functions` (per-user deny-lists). Each tool's verifier map =
+`{system key → admin username (current mono user)} ∪ {user keys}` (mtime-
+cached, hot-reloads without restarts; `revoke_system_key` optional).
+`IdentityGateMiddleware` filters `tools/list` and rejects `tools/call`
+("Unknown tool" semantics); `mcp.access` lines append `user=<client_id>`.
+The central API (8200) requires `MCP_MANAGEMENT_API_KEY` (P0); 81xx action
+routes and `/admin/flush-sessions` require the admin role; mcp_ui logs in
+against the store (ENV admin pair bootstraps the store admin once).
+Plan: `plans/e3-multiuser-overhaul-2026-09-07.md`; tests:
+`tests/test_e3_integration.py`, `tests/test_users_store.py`,
+`tests/test_identity_middleware.py`.
+
 ### Function masks (server-enforced)
 
 `disabled_tools` in `~/.config/supreme-mcp-tools/tools_config.json` (written by the management API `PUT /api/disabled-tools/...` and the mcp_ui Functions tab) is enforced at the tool-server boundary: every `<name>_fastmcp.py` calls `tools.shared.function_masks.apply_function_masks(mcp, TOOL_NAME)` after tool registration. A masked tool is disabled on the FastMCP instance (fastmcp native disable), so clients cannot see it in `tools/list` and direct calls fail with "Unknown tool". Since E1 (2026-09-07) mask changes apply to the RUNNING server too: the central disable/enable endpoints persist file-first, then push to the tool's FastMCP instance via its registry (`mcp_instance`, wired by `server_manager`); each 81xx mgmt server also exposes `POST /admin/function-masks` (`{"tool", "masked"}`). If the target server is down or pre-E1, the file still wins at its next start. Missing or corrupt config file means "no masks" — never a startup failure. Tests: `tests/test_function_masks.py`, `tests/test_e1_runtime_masks.py`.

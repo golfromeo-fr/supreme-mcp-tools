@@ -123,6 +123,39 @@ class DualHeaderVerifier(TokenVerifier):
         )
 
 
+class UserStoreVerifier(DualHeaderVerifier):
+    """E3 (MCP_AUTH_MODE=multi): token map built per-verify from the user
+    store — {system key → admin username} ∪ {user keys → usernames}. One
+    map read PER VERIFY = the per-request snapshot rule (failure playbook):
+    store edits (rotate/disable/create) apply to the next request."""
+
+    def __init__(self, tool_name: str, system_key: str) -> None:
+        super().__init__({})  # base map unused — tokens() builds fresh
+        self._tool_name = tool_name
+        self._system_key = system_key
+
+    def tokens(self) -> dict[str, dict[str, Any]]:
+        from tools.shared import users_store
+
+        return users_store.tokens_map_for_tool(self._tool_name, self._system_key)
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        tokens = self.tokens()
+        found = None
+        for key, val in tokens.items():
+            if hmac.compare_digest(token, key):
+                found = val
+                break
+        if found is None:
+            return None
+        return AccessToken(
+            token=token,
+            client_id=found.get("client_id", "unknown"),
+            scopes=found.get("scopes", ["mcp"]),
+            claims=found,
+        )
+
+
 def _jsonrpc_failure_marker(body: bytes) -> str | None:
     """Best-effort failure marker from a JSON-RPC response body (JSON or SSE).
 
@@ -462,12 +495,13 @@ def get_transport_app(mcp, transport: str | None = None):
     if not hasattr(mcp, "http_app"):
         raise RuntimeError(f"FastMCP server has no http_app method: {type(mcp)}")
 
+    auth_provider = getattr(mcp, "auth", None)
     if transport == "multi":
         app = _build_multi_app(mcp)
     else:
         app = _build_http_app(mcp, transport)
         if transport == "streamable-http":
-            _wire_session_management(app)
+            _wire_session_management(app, auth_provider)
     # User middleware runs outside the router, so the normalizer executes
     # before FastMCP's per-route RequireAuthMiddleware on every route.
     app.add_middleware(ApiKeyFallbackMiddleware)
@@ -505,7 +539,7 @@ def _build_multi_app(mcp):
     before flattening, and the idle TTL applies to it.
     """
     stateful = _build_http_app(mcp, "streamable-http")
-    _wire_session_management(stateful)
+    _wire_session_management(stateful, getattr(mcp, "auth", None))
     stateless = mcp.http_app(transport="http", stateless_http=True, path="/mcp-stateless")
     sse = mcp.http_app(transport="sse", path="/sse")
 
@@ -562,7 +596,7 @@ def _build_http_app(mcp, transport: str):
     return mcp.http_app(transport="http")
 
 
-def _wire_session_management(app) -> None:
+def _wire_session_management(app, auth_provider=None) -> None:
     """Attach the flush-sessions admin route.
 
     The session idle TTL is applied at app construction (see _build_http_app).
@@ -589,6 +623,23 @@ def _wire_session_management(app) -> None:
                 {"error": "unauthorized"}, status_code=401,
                 headers={"www-authenticate": 'Bearer error="invalid_token"'},
             )
+        # E3-M3: flush is destructive — admin role only. In mono mode the
+        # single map entry has no role field and defaults to admin (same
+        # owner as today). A user key here gets 403.
+        try:
+            from fastmcp.server.dependencies import get_http_request
+            req = get_http_request()
+            auth = (req.headers.get("authorization", "") or "")
+            token = auth[7:] if auth.lower().startswith("bearer ") else None
+            entry = (auth_provider.tokens() or {}).get(token) \
+                if (token and auth_provider is not None) else None
+            role = (entry or {}).get("role", "admin")  # legacy mono map = admin
+            if role != "admin":
+                return JSONResponse(
+                    {"error": "admin role required"}, status_code=403,
+                )
+        except Exception:
+            pass  # gate must never break the endpoint; auth already ran
         # Find the /mcp route's endpoint — it holds the session_manager singleton.
         sm = _get_session_manager(app)
         if sm is None:

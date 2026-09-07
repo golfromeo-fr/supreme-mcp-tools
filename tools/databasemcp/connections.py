@@ -60,6 +60,7 @@ class ConnectionEntry:
     tx_handle: Any = None
     tx_opened_at: float | None = None    # monotonic()
     tx_last_used: float | None = None    # monotonic()
+    tx_owner: str | None = None          # E3: client_id of the opener
     tx_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -256,9 +257,11 @@ class ConnectionRegistry:
     # Transactions (E4) — at most ONE active tx per entry.
     # ------------------------------------------------------------------
 
-    def begin_tx(self, name: str | None = None) -> tuple[ConnectionEntry, str]:
+    def begin_tx(self, name: str | None = None,
+                 owner: str | None = None) -> tuple[ConnectionEntry, str]:
         """Open a transaction on the named (or active) connection; the
-        preset bypass applies. Returns (entry, tx_id)."""
+        preset bypass applies. owner = the caller's client_id (E3) — stamped
+        for attribution. Returns (entry, tx_id)."""
         entry = self.get(name)
         with entry.tx_lock:
             if entry.tx_id:
@@ -272,9 +275,11 @@ class ConnectionRegistry:
             entry.tx_handle = tx_handle
             entry.tx_opened_at = _time.monotonic()
             entry.tx_last_used = entry.tx_opened_at
+            entry.tx_owner = owner
             metrics["transactions_begun"] += 1
             logger.info(
-                f"[databasemcp] tx {entry.tx_id[:8]}… opened on '{entry.name}' ({entry.dialect})"
+                f"[databasemcp] tx {entry.tx_id[:8]}… opened on '{entry.name}' "
+                f"({entry.dialect}) by {owner or 'unknown'}"
             )
             return entry, entry.tx_id
 
