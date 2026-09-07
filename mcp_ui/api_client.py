@@ -112,7 +112,10 @@ class APIClient:
         self.base_url = (_get_default_base_url() if base_url is None else base_url).rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout if timeout is not None else _get_api_timeout())
         self._session: aiohttp.ClientSession | None = None
-        self.api_key = os.environ.get("MCP_API_KEY")
+        # E3-P0: the central API key moved to MCP_MANAGEMENT_API_KEY (auth for
+        # the privileged 8200 surface); MCP_API_KEY remains a fallback so
+        # deployments configured the old way keep authenticating.
+        self.api_key = os.environ.get("MCP_MANAGEMENT_API_KEY") or os.environ.get("MCP_API_KEY")
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session (lazy initialization)."""
