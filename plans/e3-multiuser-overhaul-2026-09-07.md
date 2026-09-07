@@ -166,19 +166,24 @@ def rotate_key(username) -> dict                  # new mcp_key, returns it ONCE
 def revoke_system_key(tool_name) -> None          # OPTIONAL (round 2): retire one tool's system key
 def set_servers(username, servers: list) -> None
 def set_masked_functions(username, masks: dict) -> None   # per-user function masks
+def set_password(username, password: str) -> None         # Users tab (round 4)
 def authenticate(username, password) -> dict | None   # constant-time verify
 def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
-    # {system_key: {"client_id": <ADMIN_USERNAME>, "role": "admin", "allowed": "*"}} ∪
+    # UNIFIED entry shape: {"client_id", "role", "masked"} —
+    # {system_key: {"client_id": <ADMIN_USERNAME>, "role": "admin", "masked": []}} ∪
     # (round 2: system keys are ATTRIBUTED TO THE ADMIN — the current mono
     #  user — so logs attribute them from day one; toolname no longer used)
     # {u.mcp_key: {"client_id": u.username, "role": u.role,
     #              "masked": u.masked_functions.get(tool_name, [])}}
+    # GATE RULE: role=="admin" bypasses USER masks ONLY — E1 GLOBAL masks
+    # (disabled_tools) always apply, admin included. Admin entries never
+    # need a servers list (role check comes first).
     # mtime-cached internally (stat per call; reload on change)
 ```
 
 Username rules: `^[a-z0-9_-]{2,32}$` (lowercased on create); collisions
-rejected. `create_user` refuses usernames equal to an existing tool name
-(`client_id` namespace clash with system keys).
+rejected. `create_user` refuses RESERVED names: every existing tool name
+(`client_id` namespace clash with system keys) plus the literal `system`.
 
 ### M2 — factory wiring (`tools/shared/server_factory.py`)
 
@@ -328,6 +333,137 @@ No new ports. Metrics 8300: P0 documents bind/firewall guidance only.
    collide with any system key or another user's key (regenerate on the
    astronomically unlikely collision; test the guard).
 8. Out of scope, noted: per-user rate limits/quotas; per-user memory data.
+
+## Flash-implementation addendum (round 4, 2026-09-08 — pre-coding detail dig)
+
+Implementation-precision notes for GLM-5.3-flash. These supplement, never
+contradict, the sections above.
+
+### A. Exact subclass shapes (the two load-bearing classes)
+
+```python
+# tools/shared/server_factory.py (multi mode only)
+class UserStoreVerifier(DualHeaderVerifier):
+    """Per-request token map from the user store (mtime-cached inside
+    users_store.tokens_map_for_tool). One map read PER VERIFY = the
+    per-request snapshot rule from the failure playbook."""
+    def __init__(self, tool_name: str, system_key: str):
+        super().__init__({})                    # base stores an empty map
+        self._tool_name, self._system_key = tool_name, system_key
+
+    async def verify_token(self, token: str):   # same body as base, but the
+        from tools.shared import users_store    # map comes fresh each call
+        tokens = users_store.tokens_map_for_tool(self._tool_name, self._system_key)
+        found = None
+        for key, val in tokens.items():
+            if hmac.compare_digest(token, key):
+                found = val; break
+        if found is None: return None
+        return AccessToken(token=token, client_id=found["client_id"],
+                           scopes=found.get("scopes", ["mcp"]), claims=found)
+```
+
+```python
+# tools/shared/identity.py — resolve_identity + gate (signatures in M1 §)
+# resolve: Bearer (fallback X-API-Key) -> tokens_map_fn() lookup ->
+# (client_id, role, masked) tuple or None. get_http_request() Exception
+# (non-HTTP scope) -> None. NEVER raises.
+# gate decision order: identity None -> fail-open (or deny when
+# MCP_REQUIRE_IDENTITY and an HTTP scope existed); role admin -> PASS
+# (user-mask bypass; global E1 masks are enforced by fastmcp disable,
+# separately); else name in entry.masked -> ToolError("Unknown tool").
+# on_list_tools/on_discover filter with the SAME predicate.
+```
+
+**Verifier/middleware double-read race (documented, accepted):** verifier
+and gate each take their own map snapshot; a store edit landing between the
+two reads can let ONE request through with identity=None (fail-open+log).
+One-request staleness, not a security hole (next request sees the new map).
+
+### B. mtime cache (inside users_store, module-level)
+
+```python
+_CACHE = {"mtime": None, "store": None}          # stat() per call
+def _cached_store() -> dict:                     # reload when mtime changes
+```
+`tokens_map_for_tool` builds its dict per call over `_cached_store()` (a
+comprehension — cheap); only the FILE read is cached. Corrupt reload keeps
+the last-good store + WARNING (same shape as edge case 1).
+
+### C. mcp_ui / client auth matrix per phase (exact key sources)
+
+| Caller | P0 | M2 | M3 |
+|---|---|---|---|
+| `APIClient` (central) | `MCP_MANAGEMENT_API_KEY` (fallback `MCP_API_KEY`, today's env — one-line change where `self.api_key` is set) | same | accepts system key (admin) OR user key; central GETs any-valid-key, writes admin-only |
+| `MemoryMcpClient` (tools) | tool config key (today) | acting user's `mcp_key` when logged in via store, else tool key | same |
+| `MemoryGateMiddleware` | — | active in multi mode | + `MCP_REQUIRE_IDENTITY` fail-closed knob |
+
+### D. Attribution line format (grep-stable)
+
+`mcp.access` gains ` user=<client_id>` appended AFTER the existing fields
+(`user=-` when identity absent). Example:
+`[databasemcp] POST /mcp from 127.0.0.1 v=2026-07-28 session=NEW user=golfromeo -> 200 in 3ms tools/call query`.
+Central mutation logs (tools_config writes) gain `actor=<client_id>` using
+the verified bearer of the request. Do NOT reorder existing fields — the
+log-forensics notes in AGENTS.md parse positionally.
+
+### E. `/api/users` routes (M2, exact)
+
+| Method+Path | Body | Response | Guard |
+|---|---|---|---|
+| `GET /api/users` | — | `{"users": [ {username, role, enabled, servers, masked_functions, created_at} ]}` (NEVER mcp_key/password_hash) | admin |
+| `POST /api/users` | `{username, password, role, servers?, masked_functions?}` | `201 {user, mcp_key}` — mcp_key shown ONCE | admin |
+| `DELETE /api/users/{username}` | — | `{deleted: true}`; refuse deleting the LAST enabled admin | admin |
+| `POST /api/users/{username}/rotate-key` | — | `{mcp_key}` ONCE | admin |
+| `PUT /api/users/{username}/password` | `{password}` | `{ok: true}` | admin |
+| `PUT /api/users/{username}/servers` | `{servers: [...]}` | `{ok}` | admin |
+| `PUT /api/users/{username}/masked-functions` | `{masked_functions: {...}}` | `{ok}` | admin |
+| `POST /api/users/{username}/enabled` | `{enabled: bool}` | `{ok}` | admin |
+| `POST /api/tools/{tool}/revoke-system-key` | — | `{ok}` (optional feature, round 2 #4) | admin |
+
+Admin guard pre-M3 = the P0 system key only; M3 adds user-key+role.
+
+### F. Users tab outline (mcp_ui/components/users_tab.py, M2)
+
+Card list per user: username, role badge, enabled badge, server chips,
+"masked N functions". Expand → row of actions: [Rotate key] [Set password]
+[Enable/Disable] [Delete (confirm dialog)] and the matrix:
+server CHECKBOX row (all tools discovered from the sidebar state) + per
+server a function-mask grid (functions from tools_config inventory —
+the same source the Functions tab uses; global-masked functions shown
+greyed with a "global" chip). [Add user] dialog: username, password, role
+select → success dialog shows the mcp_key ONCE with a copy button and the
+warning "store it now — it will not be shown again". Tab hidden unless
+session role==admin. NiceGUI rules: container.clear() rebuilds,
+asyncio.create_task for loads, dialogs awaited in async handlers.
+
+### G. Per-phase verification commands (run these, in order)
+
+- P0: `python -m pytest tests/test_management_auth.py -q` (new: set/unset
+  `_verify_api_key` behavior); live: `curl -s -o /dev/null -w '%{http_code}'
+  http://127.0.0.1:8200/api/tools` → 401 without header, 200 with.
+- M1: `python -m pytest tests/test_identity_middleware.py -q`; live probe =
+  re-run the spike scenarios against a scratch multi app.
+- M2: `python -m pytest tests/test_users_store.py tests/test_e3_integration.py -q`;
+  live: create alice via UI, alice's key sees only her servers.
+- M3: `python -m pytest tests/test_e3_integration.py -q` (role cases) +
+  full suite `python -m pytest -q`.
+- Every phase ends: `python -m pytest -q` full suite green, then ONE commit.
+
+### H. Flash guardrails (hard-won lessons, obey)
+
+1. Edit surgically — NO scripted whole-region slice rewrites (the P3
+   duplicate-def bug class). After any edit to a >200-line file, grep for
+   duplicate `def <name>` / `async def <name>` in that file.
+2. Import-time side effects: `users_store` must be importable with NO file
+   present and NO I/O at import (lazy `_cached_store` only).
+3. `MCP_AUTH_MODE=mono` path must remain byte-identical: the factory reads
+   the env ONCE at call time; when mono, users_store is never imported by
+   the factory (import inside the multi branch).
+4. Secrets never logged: mcp_key/password_hash filtered in every list/get
+   path; tests assert their absence in `list_users()` output and API bodies.
+5. Unanswered design question → implement the plan's default, mark it in
+   the commit message as veto-able.
 
 ## Edge-case catalogue (prescribe a test or an explicit note each)
 
