@@ -181,6 +181,7 @@ from .components.data_sources_box import DataSourcesBox
 from .components.actions_box import ActionsBox
 from .components.auth_box import AuthBox
 from .components.env_var_editor import EnvVarEditor, parse_env_vars_from_api
+from .components.presets_panel import PresetsPanel
 from .components.loading import loading_spinner
 
 
@@ -634,7 +635,7 @@ async def _render_content_area(state, handlers: dict) -> None:
 
     with ui.tab_panels(tabs, value=state.active_tab).classes("w-full"):
         with ui.tab_panel("overview"):
-            await _render_overview_tab(state, detail)
+            await _render_overview_tab(state, detail, handlers)
         with ui.tab_panel("functions"):
             _render_functions_tab(state, detail, handlers)
         with ui.tab_panel("extensions"):
@@ -736,7 +737,7 @@ def _render_functions_tab(state, detail, handlers: dict) -> None:
                 )
 
 
-async def _render_overview_tab(state, detail) -> None:
+async def _render_overview_tab(state, detail, handlers: dict | None = None) -> None:
     """Overview tab: identity, status, special panels."""
     if detail is None:
         if state.loading_detail:
@@ -746,6 +747,48 @@ async def _render_overview_tab(state, detail) -> None:
         return
 
     ToolOverview(tool=detail)
+
+    if detail.name == "databasemcp":
+        await _render_presets_section(handlers or {})
+
+
+async def _render_presets_section(handlers: dict) -> None:
+    """databasemcp Overview: DB connection presets — always fetched fresh
+    (same pattern as the Env Vars tab), with Connect/Disconnect actions."""
+    client = get_api_client()
+    response = await client.query_extension("databasemcp", "connection_presets")
+    presets_list: list[dict] = []
+    if response.success and isinstance(response.data, dict):
+        presets_list = response.data.get("presets", [])
+    elif not response.success:
+        show_error(f"Presets unavailable: {response.error}")
+
+    async def _run_preset_action(ext_name: str, params: dict) -> None:
+        action = await client.execute_extension("databasemcp", ext_name, params)
+        if not action.success:
+            show_error(f"{ext_name} failed: {action.error}")
+        else:
+            data = action.data if isinstance(action.data, dict) else {}
+            if data.get("success", True):
+                show_success(data.get("message", "Action executed"))
+            else:
+                show_error(data.get("message", "Action failed"))
+        rebuild = handlers.get("schedule_content_rebuild")
+        if rebuild:
+            rebuild()
+
+    async def _connect(number: str) -> None:
+        await _run_preset_action("connect_preset", {"preset": number})
+
+    async def _disconnect(name: str) -> None:
+        await _run_preset_action("disconnect_connection", {"name": name})
+
+    PresetsPanel(
+        presets=presets_list,
+        on_connect=_connect,
+        on_disconnect=_disconnect,
+        on_refresh=handlers.get("schedule_content_rebuild"),
+    )
 
 
 def _render_extensions_tab(state, detail, handlers: dict) -> None:

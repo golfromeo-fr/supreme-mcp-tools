@@ -4,6 +4,11 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-07 — databasemcp presets in mcp_ui (panel + mgmt actions)
+- **Added**: mcp_ui databasemcp Overview tab now renders a **DB Connection Presets** panel — numbered `.env` presets with dialect badge, `_DESC` label, masked URL, live connected state, and per-preset **Connect / Disconnect** buttons (`mcp_ui/components/presets_panel.py`; data fetched fresh from the `connection_presets` data source at render time).
+- **Added**: two databasemcp mgmt action extensions backing the buttons — `connect_preset` (by number/NAME alias, idempotent when already connected, secret-masking on failure) and `disconnect_connection`; `tests/test_db_ui_actions.py`.
+- **Doc**: transaction-management plan (`plans/databasemcp-transactions-2026-09-07.md`, E4) + native transaction-testing procedures in `.agents/skills/mcp-live-tool-test/SKILL.md` (libsql cross-call BEGIN/ROLLBACK verified; PG BEGIN-discarded verified).
+
 ### 2026-09-06 — databasemcp: oraclemcp renamed + multi-database overhaul (feature/databasemcp)
 - **Renamed**: `tools/oraclemcp` -> `tools/databasemcp` — a database workbench for Oracle, Postgres, and libSQL (local file / Turso). Ports kept (MCP 8000; mgmt pinned 8110 via `databasemcp_mgmt` — 8100 collides with the auto-allocation floor); `databasemcp` joins `startlauncher`.
 - **Added**: connection registry with named connections per dialect (`connect_database`, `disconnect_database`, `list_connections`, `use_database`), per-entry locks (parallel queries on different connections), active-connection switching with graceful fallback, and a lazy env-default Oracle connection (`USERID`/`DB_HOST` env as before) deactivatable with `DB_AUTOCONNECT=0`.

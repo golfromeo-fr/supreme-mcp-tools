@@ -299,6 +299,53 @@ def clear_cache(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def connect_preset_action(params: dict[str, Any]) -> dict[str, Any]:
+    """Action: connect a .env preset by number/NAME alias (mgmt UI path).
+    Idempotent: an already-connected preset reports success without reconnecting."""
+    key = str(params.get("preset", "")).strip()
+    if not key:
+        return {"success": False,
+                "message": "Provide 'preset': the preset number (e.g. '02') or NAME alias."}
+    try:
+        preset = presets.get_preset(key)
+    except LookupError as e:
+        return {"success": False, "message": str(e)}
+    name = preset.connection_name
+    if name in REGISTRY._entries:
+        return {"success": True,
+                "message": f"'{name}' ({preset.dialect}) is already connected."}
+    try:
+        REGISTRY.connect(name, preset.dialect, preset.params)
+    except Exception as e:
+        msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+        for k, v in (preset.params or {}).items():
+            if str(k).lower() in _SECRET_KEYS and v:
+                msg = msg.replace(str(v), "***")
+        logger.warning(f"[databasemcp] UI preset connect {preset.number} failed: {type(e).__name__}")
+        return {"success": False, "message": f"Connect failed: {msg}"}
+    logger.info(f"[databasemcp] preset {preset.number} connected via mgmt action as '{name}'")
+    return {"success": True,
+            "message": f"Connected preset {preset.number} as '{name}' ({preset.dialect}). "
+                       f"Active: '{REGISTRY._active}'"}
+
+
+def disconnect_connection_action(params: dict[str, Any]) -> dict[str, Any]:
+    """Action: disconnect a named connection (mgmt UI path)."""
+    name = str(params.get("name", "")).strip()
+    if not name:
+        return {"success": False, "message": "Provide 'name': the connection to disconnect."}
+    try:
+        result = REGISTRY.disconnect(name)
+    except LookupError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        return {"success": False, "message": f"{type(e).__name__}: {e}"}
+    if "busy" in result:
+        return {"success": False, "message": result}
+    logger.info(f"[databasemcp] '{name}' disconnected via mgmt action")
+    return {"success": True, "message": f"Disconnected '{name}'. Active now: {result}"}
+
+
 # ============================================================================
 # MCP Tools (ported verbatim; error rendering identical)
 # ============================================================================
@@ -797,6 +844,46 @@ def setup_extensions(registry=None) -> None:
             },
             handler=clear_cache,
             metadata={"description": "Clear every connection's schema cache", "category": "maintenance"}
+        ),
+        Extension(
+            name="connect_preset",
+            ext_type=ExtensionType.ACTION,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {"preset": {"type": "string"}},
+                    "required": ["preset"],
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "message": {"type": "string"}
+                    }
+                }
+            },
+            handler=connect_preset_action,
+            metadata={"description": "Connect a .env preset by number or NAME alias", "category": "connections"}
+        ),
+        Extension(
+            name="disconnect_connection",
+            ext_type=ExtensionType.ACTION,
+            schema={
+                "input": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "message": {"type": "string"}
+                    }
+                }
+            },
+            handler=disconnect_connection_action,
+            metadata={"description": "Disconnect a named connection", "category": "connections"}
         ),
     ]
 
