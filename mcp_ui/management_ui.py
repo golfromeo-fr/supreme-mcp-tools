@@ -182,6 +182,7 @@ from .components.actions_box import ActionsBox
 from .components.auth_box import AuthBox
 from .components.env_var_editor import EnvVarEditor, parse_env_vars_from_api
 from .components.presets_panel import PresetsPanel
+from .components.memory_tab import render_memory_tab
 from .components.loading import loading_spinner
 
 
@@ -626,8 +627,11 @@ async def _render_content_area(state, handlers: dict) -> None:
         return
 
     detail = state.selected_tool_detail
+    is_memory = detail is not None and detail.name == "memorymcp"
     with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
         ui.tab("overview", icon="dashboard", label="Overview")
+        if is_memory:
+            ui.tab("memory", icon="memory", label="Memory")
         ui.tab("functions", icon="checklist", label="Functions")
         ui.tab("extensions", icon="extension", label="Extensions")
         ui.tab("env", icon="tune", label="Env Vars")
@@ -636,6 +640,10 @@ async def _render_content_area(state, handlers: dict) -> None:
     with ui.tab_panels(tabs, value=state.active_tab).classes("w-full"):
         with ui.tab_panel("overview"):
             await _render_overview_tab(state, detail, handlers)
+        if is_memory:
+            with ui.tab_panel("memory"):
+                _memory_panel = ui.column().classes("w-full")
+                render_memory_tab(_memory_panel)
         with ui.tab_panel("functions"):
             _render_functions_tab(state, detail, handlers)
         with ui.tab_panel("extensions"):
