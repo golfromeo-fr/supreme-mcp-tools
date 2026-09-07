@@ -4,6 +4,13 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-07 — databasemcp transaction management (E4, feature/db-transactions)
+- **Added**: interactive transactions — `begin_transaction` (returns `tx_id`; one per connection; preset bypass applies), `commit_transaction`/`rollback_transaction`; `query`/`execute_sql` accept `tx_id` to run inside the open transaction with **no implicit commit**. Each transaction pins a **dedicated** connection (libSQL: second connection to the same DB; Postgres: standalone connection outside the pool; Oracle: held session from the pool) — ordinary traffic never blocks (15 → **18** tools).
+- **Added**: atomic batches — `execute_sql statements=[...]` (max 50, mutually exclusive with `sql`) runs all statements in one all-or-nothing transaction; failures report the failing index and the undone rowcounts.
+- **Added**: idle-transaction reaper — sweeps every 60s, rolls back transactions idle longer than `DB_TX_IDLE_TIMEOUT` (default 300s; `0` disables with a warning); starts lazily on the first `begin_transaction`. `disconnect_database` refuses while a transaction is open; `reset_connections` force-rolls-back; Oracle DDL inside a transaction warns about the implicit commit.
+- **Tests**: `tests/test_db_transactions.py` (30: scripted-fake registry lifecycle, real libsql + real PG round trips incl. cross-connection isolation, batch, guards, reaper) + 4 gated live tests in `test_databasemcp_live.py`.
+- **Plan**: `plans/databasemcp-transactions-2026-09-07.md` (P0 probes run before coding; deviations logged in its Deviations section).
+
 ### 2026-09-07 — databasemcp presets in mcp_ui (panel + mgmt actions)
 - **Added**: mcp_ui databasemcp Overview tab now renders a **DB Connection Presets** panel — numbered `.env` presets with dialect badge, `_DESC` label, masked URL, live connected state, and per-preset **Connect / Disconnect** buttons (`mcp_ui/components/presets_panel.py`; data fetched fresh from the `connection_presets` data source at render time).
 - **Added**: two databasemcp mgmt action extensions backing the buttons — `connect_preset` (by number/NAME alias, idempotent when already connected, secret-masking on failure) and `disconnect_connection`; `tests/test_db_ui_actions.py`.
