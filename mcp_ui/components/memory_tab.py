@@ -13,7 +13,7 @@ from typing import Any
 
 import asyncio
 
-from .memory_client import get_memory_client, MemoryMcpError
+from ..memory_client import get_memory_client, MemoryMcpError
 
 PAGE_SIZE = 20
 

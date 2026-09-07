@@ -4,6 +4,10 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-07 — E2: Memory Explorer (feature/e2-memory-explorer)
+- **Added**: memorymcp `listMemories(limit, offset, tag, sort="recent")` — paged browse over the vector store's scroll contract (bounded scan, newest-first paging, tag filter; no embedding, no usage-count side effects). 15 → **16** memorymcp tools. `tests/test_memory_list.py` (7, contract-faithful fake).
+- **Added**: mcp_ui **Memory tab** (memorymcp only) — browse cards (preview, type/tags/sensitivity badges, usage, date) with Prev/Next + tag filter, semantic search via `queryMemory`, detail view (`getMemory` + `auditTrail`), delete with confirm (`deleteMemory`). The UI consumes memorymcp **through its MCP surface only** (`mcp_ui/memory_client.py`, fastmcp Client + tool-config key) — no backend credentials in the UI, and every Explorer action is something an MCP client could do.
+
 ### 2026-09-07 — fix: pinned mgmt port no longer kills a tool's run (databasemcp first-run failure)
 - **Fixed**: the recurring "first `./startlauncher` run starts without databasemcp, second run is fine" — databasemcp is the only tool with a **pinned mgmt port** (8110); every other tool self-heals a stale holder by auto-allocating the next free mgmt port. A pinned mgmt port whose holder outlives the 20s busy-retry window now **degrades to corridor auto-allocation** with a loud WARNING instead of failing the tool; consumers follow the service registry, so nothing breaks. Pinned **MCP** ports still raise (clients hardcode them). `tests/test_port_fallback.py` (3) reproduces the failure with a real socket holder on a synthetic range.
 
