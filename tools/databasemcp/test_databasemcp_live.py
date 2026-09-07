@@ -201,7 +201,13 @@ class TestPresets:
         first_line = next(l for l in presets_available.splitlines() if l.startswith("- "))
         number = first_line.split()[1]
         out = _run(_call("connect_preset", {"preset": number}))
-        assert out.startswith("Connected preset"), out
+        # idempotent: a server that already has this preset connected
+        # (e.g. the UI panel connected it) must not fail the test
+        assert (
+            out.startswith("Connected preset")
+            or "already connected" in out
+            or "already exists" in out
+        ), out
         # the bypass: address the preset directly in a generic tool
         out = _run(_call("query", {"sql": "SELECT 1", "connection": number}))
         assert "Unknown connection" not in out and "Connect failed" not in out, out
