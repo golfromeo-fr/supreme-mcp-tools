@@ -336,5 +336,28 @@ class ConnectionRegistry:
             metrics["transactions_reaped"] += 1
             logger.info(f"[databasemcp] tx {tx_id[:8]}… {reason} on '{entry.name}'")
 
+    def reap_idle_txs(self, idle_timeout: float) -> int:
+        """Roll back transactions idle longer than idle_timeout (monotonic
+        seconds). Non-blocking per entry — a tx with an in-flight statement
+        is skipped and reaped on a later sweep. Returns the count reaped."""
+        reaped = 0
+        with self._map_lock:
+            candidates = [e for e in self._entries.values() if e.tx_id]
+        for entry in candidates:
+            if not entry.tx_lock.acquire(blocking=False):
+                continue  # statement in flight — next sweep
+            try:
+                if entry.tx_id is None:
+                    continue  # finished while we waited
+                now = _time.monotonic()
+                idle = now - (entry.tx_last_used or entry.tx_opened_at or now)
+                if idle < idle_timeout:
+                    continue
+                self._abort_tx(entry, reason=f"reaped (idle {int(idle)}s)")
+                reaped += 1
+            finally:
+                entry.tx_lock.release()
+        return reaped
+
 
 REGISTRY = ConnectionRegistry()

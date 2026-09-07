@@ -313,3 +313,247 @@ def test_postgres_close_tx_is_idempotent_after_commit(pg_dialect):
         dialect.close_tx(handle, tx)  # rollback-after-commit must not raise
     finally:
         dialect.close(handle)
+
+
+# ============================================================================
+# Tool surface (T2/T3) — in-memory MCP client over the shared mcp instance
+# ============================================================================
+
+@pytest.fixture()
+def clean_registry():
+    """Isolate the module-global REGISTRY per test (unique names + teardown)."""
+    from connections import REGISTRY
+
+    yield REGISTRY
+    REGISTRY.close_all()
+
+
+@pytest.fixture()
+def sweep_db(clean_registry):
+    """A uniquely-named libsql connection to a throwaway file DB."""
+    from connections import REGISTRY
+
+    name = f"txsweep{uuid.uuid4().hex[:6]}"
+    db_file = Path("/tmp") / f"dbmcp_tx_tool_{uuid.uuid4().hex[:8]}.db"
+    REGISTRY.connect(name, "libsql", {"url": f"file:{db_file}"})
+    REGISTRY.get(name).params  # params stored
+    yield name, f"file:{db_file}"
+    for suf in ("", "-wal", "-shm", "-journal"):
+        try:
+            os.unlink(str(db_file) + suf)
+        except FileNotFoundError:
+            pass
+
+
+def _call_tool(tool: str, arguments: dict) -> str:
+    """Call a tool on the shared in-process MCP instance."""
+    import asyncio
+
+    from fastmcp import Client
+
+    import db_tools
+
+    async def _run():
+        async with Client(db_tools.mcp) as client:
+            result = await client.call_tool(tool, arguments)
+            if getattr(result, "content", None):
+                return result.content[0].text
+            return ""
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
+
+
+class TestAtomicBatch:
+    def test_batch_commit_via_registry(self, sweep_db):
+        from db_tools import _run_batch
+
+        name, _url = sweep_db
+        note = _run_batch(name, [
+            "CREATE TABLE bt (id INTEGER PRIMARY KEY, v TEXT)",
+            "INSERT INTO bt VALUES (1, 'a')",
+            "INSERT INTO bt VALUES (2, 'b')",
+        ])
+        assert note.startswith("OK. Batch committed: 3 statement(s)"), note
+        assert "rowcounts" in note
+
+    def test_batch_commit_visible_afterwards(self, sweep_db):
+        from connections import REGISTRY
+
+        name, _url = sweep_db
+        _call_tool("execute_sql", {"statements": [
+            f"CREATE TABLE bt_{name} (id INTEGER PRIMARY KEY)",
+            f"INSERT INTO bt_{name} VALUES (1)",
+        ]})
+        out = _call_tool("query", {"sql": f"SELECT count(*) AS n FROM bt_{name}", "connection": name})
+        assert "'n': 1" in out, out
+
+    def test_batch_rollback_on_failure(self, sweep_db):
+        name, _url = sweep_db
+        _call_tool("execute_sql", {"statements": [
+            "CREATE TABLE brk (id INTEGER PRIMARY KEY, v TEXT)",
+            "INSERT INTO brk VALUES (1, 'kept-then-undone')",
+            "INSERT INTO brk VALUES (2)",  # wrong column count -> fails
+        ]})
+        out = _call_tool("query", {"sql": "SELECT count(*) AS n FROM brk", "connection": name})
+        # the CREATE TABLE succeeded pre-failure (SQLite DDL is non-transactional
+        # on some engines) — the ROWS must be gone; that is the all-or-nothing part
+        assert "'n': 0" in out, out
+
+    def test_batch_failure_reports_failing_index(self, sweep_db):
+        name, _url = sweep_db
+        out = _call_tool("execute_sql", {"statements": [
+            f"CREATE TABLE brk2_{name} (id INTEGER PRIMARY KEY)",
+            f"INSERT INTO brk2_{name} VALUES ('not-an-int')",
+        ]})
+        assert "ROLLED BACK at statement 1" in out, out
+
+    def test_batch_param_guards(self):
+        out = _call_tool("execute_sql", {"sql": "SELECT 1", "statements": ["SELECT 1"]})
+        assert "either sql or statements" in out
+        out = _call_tool("execute_sql", {"statements": []})
+        assert "at least one statement" in out
+        out = _call_tool("execute_sql", {"statements": ["SELECT 1"] * 51})
+        assert "at most 50" in out
+
+
+class TestInteractiveTransactions:
+    def test_full_rollback_round_trip(self, sweep_db):
+        name, _url = sweep_db
+        _call_tool("execute_sql", {"sql": "CREATE TABLE it (id INTEGER PRIMARY KEY, v TEXT)", "connection": name})
+        begin = _call_tool("begin_transaction", {"connection": name})
+        assert "Transaction " in begin and "opened on" in begin, begin
+        tx_id = begin.split("Transaction ")[1].split(" ")[0]
+
+        out = _call_tool("execute_sql", {
+            "sql": "INSERT INTO it VALUES (1, 'in-tx')", "connection": name, "tx_id": tx_id,
+        })
+        assert "not committed" in out, out
+
+        # visible inside the tx, invisible outside
+        inside = _call_tool("query", {"sql": "SELECT count(*) AS n FROM it", "tx_id": tx_id})
+        assert "'n': 1" in inside, inside
+        outside = _call_tool("query", {"sql": "SELECT count(*) AS n FROM it", "connection": name})
+        assert "'n': 0" in outside, outside
+
+        rb = _call_tool("rollback_transaction", {"tx_id": tx_id})
+        assert "rolled back" in rb, rb
+        after = _call_tool("query", {"sql": "SELECT count(*) AS n FROM it", "connection": name})
+        assert "'n': 0" in after, after
+
+    def test_full_commit_round_trip(self, sweep_db):
+        name, _url = sweep_db
+        _call_tool("execute_sql", {"sql": "CREATE TABLE ct (id INTEGER PRIMARY KEY)", "connection": name})
+        begin = _call_tool("begin_transaction", {})
+        assert "opened on" in begin, begin
+        tx_id = begin.split("Transaction ")[1].split(" ")[0]
+
+        _call_tool("execute_sql", {"sql": "INSERT INTO ct VALUES (1)", "connection": name, "tx_id": tx_id})
+        cm = _call_tool("commit_transaction", {"tx_id": tx_id})
+        assert "committed" in cm, cm
+        after = _call_tool("query", {"sql": "SELECT count(*) AS n FROM ct", "connection": name})
+        assert "'n': 1" in after, after
+
+    def test_query_read_guard_inside_tx(self, sweep_db):
+        name, _url = sweep_db
+        begin = _call_tool("begin_transaction", {"connection": name})
+        tx_id = begin.split("Transaction ")[1].split(" ")[0]
+        out = _call_tool("query", {"sql": "DELETE FROM nothing", "tx_id": tx_id})
+        assert "query() is read-only" in out, out
+        _call_tool("rollback_transaction", {"tx_id": tx_id})
+
+    def test_second_begin_rejected(self, sweep_db):
+        name, _url = sweep_db
+        first = _call_tool("begin_transaction", {"connection": name})
+        tx_id = first.split("Transaction ")[1].split(" ")[0]
+        second = _call_tool("begin_transaction", {"connection": name})
+        assert "already has an active transaction" in second, second
+        _call_tool("rollback_transaction", {"tx_id": tx_id})
+
+    def test_tx_connection_mismatch_rejected(self, sweep_db):
+        name, _url = sweep_db
+        other = f"other{uuid.uuid4().hex[:4]}"
+        from connections import REGISTRY
+
+        REGISTRY.connect(other, "libsql", {"url": f"file:/tmp/dbmcp_other_{uuid.uuid4().hex[:6]}.db"})
+        begin = _call_tool("begin_transaction", {"connection": name})
+        tx_id = begin.split("Transaction ")[1].split(" ")[0]
+        out = _call_tool("query", {"sql": "SELECT 1", "tx_id": tx_id, "connection": other})
+        assert "belongs to connection" in out, out
+        _call_tool("rollback_transaction", {"tx_id": tx_id})
+
+    def test_commit_unknown_and_replayed_id(self, sweep_db):
+        out = _call_tool("commit_transaction", {"tx_id": "deadbeef" * 4})
+        assert "Unknown or already-finished" in out, out
+        begin = _call_tool("begin_transaction", {"connection": None})
+        tx_id = begin.split("Transaction ")[1].split(" ")[0]
+        _call_tool("commit_transaction", {"tx_id": tx_id})
+        replay = _call_tool("commit_transaction", {"tx_id": tx_id})
+        assert "Unknown or already-finished" in replay, replay
+
+    def test_disconnect_refused_with_active_tx(self, sweep_db):
+        name, _url = sweep_db
+        begin = _call_tool("begin_transaction", {"connection": name})
+        tx_id = begin.split("Transaction ")[1].split(" ")[0]
+        out = _call_tool("disconnect_database", {"name": name})
+        assert "active transaction" in out, out
+        _call_tool("rollback_transaction", {"tx_id": tx_id})
+        out = _call_tool("disconnect_database", {"name": name})
+        assert "Disconnected" in out, out
+
+
+class TestReaper:
+    def test_reap_idle_transactions(self, clean_registry):
+        import time
+
+        from connections import REGISTRY
+
+        a = f"reap{uuid.uuid4().hex[:4]}"
+        b = f"keep{uuid.uuid4().hex[:4]}"
+        db = f"file:/tmp/dbmcp_reap_{uuid.uuid4().hex[:6]}.db"
+        REGISTRY.connect(a, "libsql", {"url": db})
+        REGISTRY.connect(b, "libsql", {"url": db})
+        _entry_a, tx_a = REGISTRY.begin_tx(a)
+        _entry_b, tx_b = REGISTRY.begin_tx(b)
+
+        ea = REGISTRY.get(a)
+        ea.tx_last_used = time.monotonic() - 999  # artificially idle
+
+        reaped = REGISTRY.reap_idle_txs(60)
+        assert reaped == 1
+        assert ea.tx_id is None                      # reaped
+        assert REGISTRY.get(b).tx_id == tx_b         # still active
+        REGISTRY.finish_tx(tx_b, commit=False)
+
+    def test_reaper_disabled_with_zero_timeout(self, monkeypatch):
+        monkeypatch.setenv("DB_TX_IDLE_TIMEOUT", "0")
+        import db_tools
+
+        assert db_tools.start_tx_reaper() is None  # disabled, no task
+
+    def test_begin_starts_reaper_once(self, sweep_db, monkeypatch):
+        monkeypatch.setenv("DB_TX_IDLE_TIMEOUT", "300")
+        import db_tools
+
+        name, _url = sweep_db
+        db_tools._reaper_started = False  # reset module flag for this test
+        db_tools._reaper_task = None
+        try:
+            begin = _call_tool("begin_transaction", {"connection": name})
+            assert "opened on" in begin, begin
+            # the reaper was created exactly once (bound to the call's loop)
+            assert db_tools._reaper_started is True
+            assert db_tools._reaper_task is not None
+            tx_id = begin.split("Transaction ")[1].split(" ")[0]
+            _call_tool("rollback_transaction", {"tx_id": tx_id})
+        finally:
+            if db_tools._reaper_task is not None:
+                try:
+                    db_tools._reaper_task.cancel()
+                except RuntimeError:
+                    pass  # task's loop already closed (in-memory-client artifact)
+            db_tools._reaper_started = False
+            db_tools._reaper_task = None
