@@ -150,11 +150,14 @@ def list_users() -> list[dict]                    # never returns mcp_key/passwo
 def create_user(username, password, role="user", allowed_tools=None) -> dict  # returns mcp_key ONCE
 def delete_user(username) -> None
 def set_enabled(username, enabled: bool) -> None
-def rotate_key(username) -> dict                  # new mcp_key, returns it ONCE
+def rotate_key(username) -> dict                  # new mcp_key, returns it ONCE (globally unique)
+def revoke_system_key(tool_name) -> None          # OPTIONAL (round 2): retire one tool's system key
 def set_allowed_tools(username, allowed: dict) -> None
 def authenticate(username, password) -> dict | None   # constant-time verify
 def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
-    # {system_key: {"client_id": tool_name, "role": "admin", "allowed": "*"}} ∪
+    # {system_key: {"client_id": <ADMIN_USERNAME>, "role": "admin", "allowed": "*"}} ∪
+    # (round 2: system keys are ATTRIBUTED TO THE ADMIN — the current mono
+    #  user — so logs attribute them from day one; toolname no longer used)
     # {u.mcp_key: {"client_id": u.username, "role": u.role,
     #              "allowed": u.allowed_tools.get(tool_name, [])}}
     # mtime-cached internally (stat per call; reload on change)
@@ -166,9 +169,9 @@ rejected. `create_user` refuses usernames equal to an existing tool name
 
 ### M2 — factory wiring (`tools/shared/server_factory.py`)
 
-`create_fastmcp_server(name, api_key=None, ..., enable_users: bool | None = None)`:
-when users store exists (and `enable_users` not false; env
-`MCP_USERS_STORE_DISABLE=1` kill-switch), the verifier becomes a thin
+`create_fastmcp_server(name, api_key=None, ...)` — NO new param: the factory
+reads `MCP_AUTH_MODE` (round 2; `multi` AND a readable store activate the
+user layer; `mono` = exactly today). When active, the verifier becomes a thin
 `UserStoreVerifier(DualHeaderVerifier)` whose `_tokens` property reads
 `tokens_map_for_tool(name, system_key)`; `IdentityGateMiddleware` is added
 with the same callable. Store absent → EXACTLY today's behavior (single key,
@@ -237,13 +240,51 @@ tests/test_e3_integration.py             NEW  M2/M3 (two users over real app)
 
 | Var | Default | Purpose |
 |---|---|---|
+| `MCP_AUTH_MODE` | `mono` | `mono` = exactly today (single key per tool, no identity layer — zero risk). `multi` = store-driven (user round 2) |
 | `MCP_MANAGEMENT_API_KEY` | unset (=open, loud startup WARNING until set) | P0 central 8200 bearer |
 | `MCP_USERS_STORE` | `~/.config/supreme-mcp-tools/users.json` | store path |
-| `MCP_USERS_STORE_DISABLE` | unset | kill-switch: ignore store, today's behavior |
 | `MCP_UI_LEGACY_LOGIN` | unset | force env-cred login (break-glass) |
 | `MCP_REQUIRE_IDENTITY` | unset | fail-closed identity gate (M3) |
 
 No new ports. Metrics 8300: P0 documents bind/firewall guidance only.
+
+## Design decisions — round 2 (user input, 2026-09-07)
+
+1. **Mode flag `MCP_AUTH_MODE=mono|multi`** (absorbs the earlier
+   `MCP_USERS_STORE_DISABLE` kill-switch — mono IS the kill-switch). `mono`
+   must be behavior-identical to today (no middleware, no store reads, env
+   login). `multi` activates the store; **the current mono user becomes the
+   admin**: each tool's EXISTING system key is attributed to the ADMIN'S
+   USERNAME (client_id = admin username, role admin — not "system"), so
+   attribution in logs is correct from the first request and the admin's
+   clients keep working unchanged. Admin bootstrap password = the current
+   `MCP_UI_USERNAME`/`MCP_UI_PASSWORD` (write-through on first login).
+2. **One key per user (v1).** The key asserts WHO you are; WHAT you can reach
+   is `allowed_tools` (the store's job). One rotation, one revoke, one Users
+   row; cutting a user off from one server is a checkbox, which is the same
+   protection per-server keys buy. Per-server keys (`mcp_keys: {server: key}`
+   map, schema v2) remain a compatible LATER extension if blast-radius
+   isolation is ever needed.
+3. **Store stays a JSON file in v1 — no Turso/DB.** Deliberate: the file is
+   tiny, all processes share the filesystem, atomic-write + mtime hot-reload
+   are proven (D2/E1), and a DB would put connection management into every
+   tool process (the side-effect-import trap) plus migration/backup surface.
+   `users_store.py`'s function set IS the interface — M4 (multi-host) is
+   where a central auth service earns its keep and gets designed.
+4. **`revoke_system_key(tool)` — OPTIONAL admin action, off by default.**
+   Retires ONE tool's system key from its map (only user keys remain valid
+   there). Existing keys keep working until explicitly revoked.
+5. **Attribution in logs (promoted into M1).** `mcp.access` lines and the
+   mutation logs gain the resolved `client_id` (username) wherever identity
+   is available — the daily payoff of multi-user ("who ran that
+   execute_sql?"). Identity is resolvable exactly where those lines emit.
+6. **UI login = username + password (pbkdf2).** Key-as-login (paste the
+   mcp_key, zero passwords) stays possible later — verification is a lookup
+   either way; default follows the explicit mcp_ui-secret-keys requirement.
+7. **Global key uniqueness** enforced at create/rotate: a user key must not
+   collide with any system key or another user's key (regenerate on the
+   astronomically unlikely collision; test the guard).
+8. Out of scope, noted: per-user rate limits/quotas; per-user memory data.
 
 ## Edge-case catalogue (prescribe a test or an explicit note each)
 
@@ -301,7 +342,7 @@ No new ports. Metrics 8300: P0 documents bind/firewall guidance only.
   keep open but log a loud startup warning; .env gets a generated key (user
   informed); README security note. Tests: set/unset behavior of
   `_verify_api_key`.
-- **M1 (~half day)** `identity.py` + factory hook + `tests/test_identity_
+- **M1 (~half day)** `identity.py` + factory hook + client_id attribution in `mcp.access` lines (round 2 #5) + `tests/test_identity_
   middleware.py` (re-encode F1-F4: two identities over the real multi app,
   list filter, call gate, 401, fail-open).
 - **M2 (~1 day)** `users_store.py` (+tests: hashing, CRUD, tolerant load,
