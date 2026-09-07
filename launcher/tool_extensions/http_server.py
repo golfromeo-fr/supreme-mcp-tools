@@ -38,6 +38,12 @@ class ExecuteRequest(BaseModel):
     params: dict[str, Any] | None = None
 
 
+class FunctionMaskRequest(BaseModel):
+    """E1: runtime function-mask toggle request."""
+    tool: str
+    masked: bool
+
+
 # API Key header for authentication
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -253,6 +259,35 @@ class ExtensionHTTPServer:
             except Exception as e:
                 logger.error(f"Error executing extension: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
+
+        @self.app.post("/admin/function-masks")
+        async def set_function_mask(request: FunctionMaskRequest, _: bool = Depends(self._verify_api_key)):
+            """E1: toggle a function mask on this LIVE tool server.
+
+            File-first: persist to tools_config.json, then apply on the
+            FastMCP instance — a restart converges to the persisted intent."""
+            from launcher.tools_config import disable_tool, enable_tool, get_disabled_tools
+            from tools.shared.function_masks import apply_mask_at_runtime
+
+            try:
+                if request.masked:
+                    disable_tool(request.tool, self.tool_name)
+                else:
+                    enable_tool(request.tool, self.tool_name)
+            except Exception as e:
+                logger.error(f"Mask persistence failed for {request.tool}: {e}")
+                raise HTTPException(status_code=500, detail=f"persist failed: {e}")
+            result = apply_mask_at_runtime(
+                self.registry.mcp_instance, self.tool_name, request.tool, request.masked
+            )
+            return {
+                "server": self.tool_name,
+                "tool": request.tool,
+                "masked": request.masked,
+                "runtime_applied": result["applied"],
+                "runtime_note": result["reason"],
+                "disabled": get_disabled_tools(self.tool_name),
+            }
 
         @self.app.websocket("/extensions/{extension_name}/events")
         async def websocket_events(websocket: WebSocket, extension_name: str, _: bool = Depends(self._verify_api_key)):

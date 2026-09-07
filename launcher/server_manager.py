@@ -35,6 +35,13 @@ GRACEFUL_SHUTDOWN_TIMEOUT = 5  # per-server connection drain (uvicorn) / shutdow
 TASK_CANCEL_TIMEOUT = 3  # wait for cancelled server tasks before forcing shutdown
 
 
+def _wire_mcp_instance(registry: ExtensionRegistry, tool_module: Any) -> None:
+    """E1 (runtime masks): give the per-tool mgmt registry a handle on the
+    tool's FastMCP instance so /admin/function-masks can toggle masks on the
+    LIVE server without a restart. Tolerant: modules without `mcp` stay None."""
+    registry.mcp_instance = getattr(tool_module, "mcp", None)
+
+
 @dataclass
 class ServerInstance:
     """Instance of a running MCP tool server."""
@@ -161,6 +168,7 @@ class ServerManager:
                         tool_module.setup_extensions(registry=extension_registry)
                     except Exception as e:
                         logger.warning(f"Failed to call {tool_name}.setup_extensions(): {e}")
+                _wire_mcp_instance(extension_registry, tool_module)
             
             # Create server instance
             instance = ServerInstance(

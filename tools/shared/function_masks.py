@@ -63,3 +63,32 @@ def apply_function_masks(mcp, server_name: str, config_path: Path | None = None)
     mcp.disable(names=set(masks))
     logger.info(f"[{server_name}] Function masks enforced: {', '.join(sorted(masks))}")
     return masks
+
+
+def apply_mask_at_runtime(mcp, server_name: str, tool_name: str, masked: bool) -> dict:
+    """E1: toggle ONE mask on a LIVE FastMCP instance (boot-time enforcement
+    stays in ``apply_function_masks``; this is the runtime half).
+
+    File persistence is the CALLER's job and must happen FIRST (file-first
+    ordering: a failed runtime toggle leaves the file authoritative, so a
+    restart converges to the user's intent — never the reverse).
+
+    Returns {"applied": bool, "reason": str | None}.
+    """
+    if mcp is None:
+        return {"applied": False,
+                "reason": "server has no FastMCP instance wired (pre-E1 or not running)"}
+    if not (hasattr(mcp, "disable") and hasattr(mcp, "enable")):
+        return {"applied": False, "reason": "FastMCP lacks disable()/enable()"}
+    try:
+        if masked:
+            mcp.disable(names={tool_name})
+        else:
+            mcp.enable(names={tool_name})
+    except Exception as e:
+        logger.warning(f"[{server_name}] runtime mask toggle failed for {tool_name}: {e}")
+        return {"applied": False, "reason": str(e)}
+    logger.info(
+        f"[{server_name}] mask {'applied' if masked else 'lifted'} at runtime: {tool_name}"
+    )
+    return {"applied": True, "reason": None}

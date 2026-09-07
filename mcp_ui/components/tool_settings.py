@@ -42,6 +42,8 @@ async def apply_function_mask(
     """Persist a function mask through the management API and notify.
 
     Shared by the Function Masks dialog and the per-tool Functions tab.
+    Since E1 the central API also pushes the mask to the RUNNING server —
+    the notification reports whether that push happened.
     ``on_done`` (optional) re-renders the caller's rows after the save.
     """
     from ..management_ui import get_api_client
@@ -52,7 +54,15 @@ async def apply_function_mask(
     else:
         response = await client.disable_tool(server_name, tool_name)
     if response.success:
-        ui.notify("Mask saved. Changes take effect immediately.", type="info", duration=3)
+        data = response.data if isinstance(response.data, dict) else {}
+        if data.get("runtime_applied", False):
+            ui.notify("Mask saved and applied to the running server.", type="positive", duration=3)
+        else:
+            note = data.get("runtime_note") or "server not reachable"
+            ui.notify(
+                f"Mask saved — applies to the running server at its next start ({note}).",
+                type="info", duration=5,
+            )
     else:
         ui.notify(f"Failed to save: {response.error}", type="negative", duration=5)
     if on_done:

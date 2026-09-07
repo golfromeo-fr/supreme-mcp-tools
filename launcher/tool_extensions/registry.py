@@ -132,6 +132,9 @@ class ExtensionRegistry:
         self._event_subscribers: dict[str, list[Callable]] = {}
         self._event_queues: dict[str, list[asyncio.Queue]] = {}
         self._tool_name = tool_name
+        # E1: the tool's FastMCP instance, wired by server_manager after module
+        # load — lets /admin/function-masks toggle masks on the LIVE server.
+        self.mcp_instance = None
         
         # Register globally if tool_name is provided
         if tool_name:
