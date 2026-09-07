@@ -70,3 +70,31 @@ def test_action_param_guards():
     unknown_name = db_tools.disconnect_connection_action({"name": "ghost"})
     assert unknown_name["success"] is False
     assert "Unknown connection" in unknown_name["message"]
+
+
+def test_setup_extensions_registers_all_customs_despite_duplicates():
+    """Regression 2026-09-07: the custom clear_cache collided with the common
+    set and the register loop ABORTED — every custom extension after the
+    colliding name (connect_preset, disconnect_connection) silently went
+    missing from the launcher's registry. One duplicate must not kill the
+    rest, and the real custom handlers must be registered first."""
+    class FlakyRegistry:
+        def __init__(self):
+            self.names = set()
+
+        def register(self, tool_name, ext):
+            if ext.name in self.names:
+                raise ValueError(
+                    f"Extension '{ext.name}' already registered for tool '{tool_name}'"
+                )
+            self.names.add(ext.name)
+
+    import db_tools
+
+    registry = FlakyRegistry()
+    db_tools.setup_extensions(registry=registry)
+
+    assert "connect_preset" in registry.names
+    assert "disconnect_connection" in registry.names
+    assert "clear_cache" in registry.names  # the custom (registry-backed) one
+    assert "connection_presets" in registry.names  # common set still lands

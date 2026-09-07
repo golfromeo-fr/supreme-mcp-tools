@@ -757,10 +757,13 @@ async def _render_presets_section(handlers: dict) -> None:
     (same pattern as the Env Vars tab), with Connect/Disconnect actions."""
     client = get_api_client()
     response = await client.query_extension("databasemcp", "connection_presets")
-    presets_list: list[dict] = []
-    if response.success and isinstance(response.data, dict):
-        presets_list = response.data.get("presets", [])
-    elif not response.success:
+    # The central proxy double-wraps tool responses: {"data": {"data": {...}}}.
+    payload = response.data if isinstance(response.data, dict) else {}
+    for _ in range(2):
+        if "presets" not in payload and isinstance(payload.get("data"), dict):
+            payload = payload["data"]
+    presets_list: list[dict] = payload.get("presets", [])
+    if not response.success:
         show_error(f"Presets unavailable: {response.error}")
 
     async def _run_preset_action(ext_name: str, params: dict) -> None:
@@ -769,6 +772,9 @@ async def _render_presets_section(handlers: dict) -> None:
             show_error(f"{ext_name} failed: {action.error}")
         else:
             data = action.data if isinstance(action.data, dict) else {}
+            for _ in range(2):
+                if "success" not in data and isinstance(data.get("data"), dict):
+                    data = data["data"]
             if data.get("success", True):
                 show_success(data.get("message", "Action executed"))
             else:

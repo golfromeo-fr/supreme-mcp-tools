@@ -890,9 +890,19 @@ def setup_extensions(registry=None) -> None:
     if registry is not None:
         fef_registry = registry
         fef_manager = ToolExtensionManager(TOOL_NAME)
-        register_common_extensions(TOOL_NAME, fef_registry, fef_manager)
+        # Custom extensions FIRST so the real handlers win name collisions with
+        # the common set (the generic common clear_cache must not shadow this
+        # tool's registry-backed one). Each registration is independent: one
+        # duplicate must never abort the rest — that is exactly how the
+        # connect_preset/disconnect_connection actions went missing on
+        # 2026-09-07 (custom clear_cache collided after the common batch had
+        # claimed the name, aborting the loop before them).
         for ext in custom_extensions:
-            fef_registry.register(TOOL_NAME, ext)
+            try:
+                fef_registry.register(TOOL_NAME, ext)
+            except Exception as e:
+                logger.warning(f"[{TOOL_NAME}] custom extension {ext.name} not registered: {e}")
+        register_common_extensions(TOOL_NAME, fef_registry, fef_manager)
         fef_http_server = None
         logger.info(f"[{TOOL_NAME}] FEF V3 registered with launcher's registry")
     else:

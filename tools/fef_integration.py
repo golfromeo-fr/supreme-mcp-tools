@@ -183,9 +183,18 @@ def register_common_extensions(
         manager: ToolExtensionManager instance
     """
     from launcher.tool_extensions import Extension, ExtensionType
-    
+
+    def _try_register(ext):
+        """One duplicate/misconfigured extension must never abort the rest —
+        a mid-loop abort silently dropped every extension registered after
+        the colliding name (databasemcp, 2026-09-07)."""
+        try:
+            registry.register(tool_name, ext)
+        except Exception as e:
+            logger.warning(f"[{tool_name}] common extension {ext.name} skipped: {e}")
+
     # Data Sources
-    registry.register(tool_name, Extension(
+    _try_register(Extension(
         name="request_stats",
         ext_type=ExtensionType.DATA_SOURCE,
         schema={
@@ -212,7 +221,7 @@ def register_common_extensions(
         }
     ))
 
-    registry.register(tool_name, Extension(
+    _try_register(Extension(
         name="tool_info",
         ext_type=ExtensionType.DATA_SOURCE,
         schema={
@@ -234,7 +243,7 @@ def register_common_extensions(
     ))
 
     # Actions
-    registry.register(tool_name, Extension(
+    _try_register(Extension(
         name="clear_cache",
         ext_type=ExtensionType.ACTION,
         schema={
@@ -263,7 +272,7 @@ def register_common_extensions(
         }
     ))
     
-    registry.register(tool_name, Extension(
+    _try_register(Extension(
         name="reset_counters",
         ext_type=ExtensionType.ACTION,
         schema={
@@ -379,7 +388,11 @@ def setup_tool_extensions(
     # Register custom extensions if provided
     if custom_extensions:
         for ext in custom_extensions:
-            registry.register(tool_name, ext)
+            try:
+                registry.register(tool_name, ext)
+            except Exception as e:
+                logger.warning(f"[{tool_name}] custom extension {ext.name} skipped: {e}")
+                continue
             logger.info(f"[{tool_name}] Registered custom extension: {ext.name}")
     
     logger.info(f"[{tool_name}] FEF V3 extensions configured (port={mgmt_port}, server={'new' if http_server else 'existing'})")
