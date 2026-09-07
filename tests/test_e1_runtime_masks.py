@@ -214,5 +214,9 @@ class TestBootSyncRegression:
             "version": 1,
         }))
         results = validate_and_cleanup_config(cfg)
-        assert results["removed_invalid"] == ["ghost_tool"]
-        assert load_tools_config(cfg)["disabled_tools"]["webmcp"] == ["brave_search_web"]
+        # E3 fix: masks are never pruned by cleanup (ghost or not) — the
+        # masked tools/list makes enforced masks look "missing" by design
+        assert results["removed_invalid"] == []
+        assert load_tools_config(cfg)["disabled_tools"]["webmcp"] == [
+            "brave_search_web", "ghost_tool",
+        ]
