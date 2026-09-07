@@ -423,7 +423,7 @@ Set the `AI_API_KEY` environment variable in `.env` file or your shell profile.
 **Solution**:
 1. Verify the indexer script exists at the expected path
 2. Check the path in the error message
-3. Ensure the oraclemcp directory structure is correct
+3. Ensure the databasemcp directory structure is correct
 
 ## Dependencies
 
@@ -497,6 +497,6 @@ For issues and questions:
 
 ## Related Tools
 
-- **oraclemcp**: Oracle database tools and SQL execution
+- **databasemcp**: Oracle database tools and SQL execution
 - **webmcp**: Web search and URL fetching
 - **convertermcp**: Document conversion tools

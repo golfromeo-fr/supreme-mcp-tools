@@ -21,7 +21,7 @@ Former usage (in each *_fastmcp.py):
     from tools.shared.oauth_fix import apply_oauth_fix
     apply_oauth_fix(mcp)
 
-Was applied to: webmcp, ragmcp, convertermcp, memorymcp, simplemcp, oraclemcp
+Was applied to: webmcp, ragmcp, convertermcp, memorymcp, simplemcp, databasemcp (as oraclemcp)
 """
 
 from starlette.requests import Request

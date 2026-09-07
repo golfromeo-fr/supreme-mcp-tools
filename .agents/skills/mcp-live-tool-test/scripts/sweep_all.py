@@ -36,9 +36,17 @@ ROOT = Path(__file__).resolve().parents[4]
 # fetch_url asserts clean decode via classify() (decode bug fixed 2026-08-27).
 # convertermcp not swept — its only tool needs a docx fixture.
 CALLS = {
-    "oraclemcp": [
-        ("get_valid_languages", {}),
-        ("get_schemas", {}),
+    "databasemcp": [
+        ("list_connections", {}),
+        ("connect_database", {"name": "sweep", "db_type": "libsql",
+                              "params": {"url": "file:/tmp/databasemcp_sweep.db"}}),
+        ("execute_sql", {"sql": "CREATE TABLE IF NOT EXISTS sweep_t (id INTEGER PRIMARY KEY, label TEXT)"}),
+        ("execute_sql", {"sql": "INSERT INTO sweep_t VALUES (1, 'smoke')"}),
+        ("query", {"sql": "SELECT * FROM sweep_t", "max_rows": 10}),
+        ("list_tables", {}),
+        ("get_schemas", {"table_name": "sweep_t"}),
+        ("explain_plan", {"sql": "SELECT * FROM sweep_t"}),
+        ("disconnect_database", {"name": "sweep"}),
     ],
     "webmcp": [
         ("brave_search_api", {"query": "example domain info", "count": 3}),
@@ -74,6 +82,7 @@ UPSTREAM_PATTERNS = [
         r"\bUSERID\b",
         r"oracle.*(not configured|credentials)",
         r"connection (refused|reset|timed out|closed)",
+        r"no database connection",
         r"errno 111",
     )
 ]

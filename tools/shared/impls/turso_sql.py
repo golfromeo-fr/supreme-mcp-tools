@@ -64,7 +64,7 @@ class TursoSqlStore:
         # an internal mutex (verified: 4 threads x 50 interleaved INSERT/SELECT
         # ops on one connection produced 200/200 correct rows, no "database is
         # locked"). autocommit=True keeps each statement its own transaction so
-        # one thread's implicit transaction can't block another. Unlike oraclemcp
+        # one thread's implicit transaction can't block another. Unlike the legacy single-connection layer this replaces
         # we therefore do NOT add a threading.Lock here — it would only reduce
         # throughput without improving correctness. If a future build drops the
         # internal mutex, switch to a small Python connection pool (libsql

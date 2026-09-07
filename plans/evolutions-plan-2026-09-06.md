@@ -76,3 +76,7 @@ User goal: several humans/agents use the same deployment; **each has their own k
 **Honest constraints to record:** per-user *data* isolation in memorymcp (user A's memories vs user B's) is a separate, harder problem (tag-by-owner or partitioned collections) — out of scope until someone needs it; the free-plan quota and single-machine reality mean M4 is a design-first exercise.
 
 **Suggested sequencing:** E1 (half day) → M1 spike (half day) → E2 Memory Explorer (a day, independent — can interleave) → M2 → M3 → M4 doc.
+
+## E4 — databasemcp transaction management (planned 2026-09-07)
+
+Full plan: **`plans/databasemcp-transactions-2026-09-07.md`** (spec-grade, implementer probes included). Two tiers: atomic multi-statement batches (`execute_sql statements=[]`) and interactive transactions (`begin_transaction` → `tx_id` → `commit`/`rollback`, idle reaper mandatory). 15 → 18 tools. Load-bearing probe fact (2026-09-07, live): the libsql shared connection already carries explicit BEGIN/ROLLBACK across MCP calls — capability proven, hazard proven (no lock ⇒ other callers join the open tx) — so Tier 2 pins a dedicated per-tx connection on every dialect. **Sequencing: strictly after the `feature/databasemcp` merge**, as branch `feature/db-transactions` off merged main (~1–1.5 days). Note for E3: a `tx_id` is a bearer capability — when M2/M3 add identities, transactions should bind to the caller's identity.

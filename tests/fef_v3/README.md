@@ -9,7 +9,7 @@ This test suite validates the FEF V3 implementation for all MCP tools:
 - **simplemcp** - Simple demonstration tools (mgmt port 8102)
 - **ragmcp** - Retrieval-Augmented Generation (mgmt port 8104)
 - **convertermcp** - Document conversion tools (mgmt port 8103)
-- **oraclemcp** - Oracle database access (mgmt port 8100)
+- **databasemcp** - Oracle database access (mgmt port 8100)
 
 ## Prerequisites
 
@@ -91,7 +91,7 @@ The test suite runs tests in 5 phases for each tool:
    - **simplemcp**: `tool_usage`, `api_response_times`, `timeout_config`
    - **ragmcp**: `vector_db_stats`, `embedding_stats`, `collection_stats`, `collection_config`
    - **convertermcp**: `conversion_stats`, `format_usage`, `output_config`
-   - **oraclemcp**: `query_stats`, `connection_pool`, `schema_cache`, `pool_config`
+   - **databasemcp**: `query_stats`, `connection_pool`, `schema_cache`, `pool_config`
 
 4. **Error Handling** - Tests error handling for invalid requests:
    - Non-existent extensions
@@ -147,7 +147,7 @@ To skip testing a specific tool, set `enabled: false` in the configuration:
 ```json
 {
   "tools": {
-    "oraclemcp": {
+    "databasemcp": {
       "enabled": false
     }
   }

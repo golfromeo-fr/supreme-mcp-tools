@@ -290,3 +290,44 @@ def _with_entry(connection: str | None, fn) -> Any   # runs fn(entry); sync fn c
 ## Deviations (implementer appends here; empty at handoff)
 
 - (none)
+
+---
+
+## P7 — connection presets in .env (designed 2026-09-06, approved by user)
+
+Numbered, scalable presets in `.env`; dialect inferred from the URL scheme; optional DESC/NAME keys; AUTOCONNECT at tool startup; surfaced to clients and the management API.
+
+### .env pattern (only the URL line is required per preset)
+
+```bash
+# --- databasemcp connection presets (dialect inferred from the URL scheme) ---
+DB_PRESET_01=oracle://scott:tiger@dbhost:1521/ORCLPDB1
+DB_PRESET_01_DESC=Work Oracle
+DB_PRESET_02=postgres://gr:secret@127.0.0.1:5432/mydb
+DB_PRESET_02_NAME=pglocal
+DB_PRESET_02_DESC=Local Postgres
+DB_PRESET_03=file:/home/gr/databases/dev.db
+DB_PRESET_03_DESC=Dev database
+DB_PRESET_AUTOCONNECT=01,02
+```
+
+### Rules
+
+- `DB_PRESET_<NN>=<url>` — NN = any digits (`\d+`; zero-pad cosmetically). Scheme → dialect: `oracle://` (user:pass@host:port/service), `postgres://`/`postgresql://` (user:pass@host:port/dbname), `file:` and `libsql://` → libsql (Turso authToken may ride in the query string). Numbers are the identity: `os.environ` is unordered, so the numeric ID is what gives `list_presets` a stable, user-chosen order; numbers never collide or need renaming.
+- `DB_PRESET_<NN>_DESC` — optional free-text display label. This REPLACES .env comments as the label source (single source of truth); comments stay legal but the template drops them.
+- `DB_PRESET_<NN>_NAME` — optional env-safe alias (`[A-Za-z0-9_-]{1,32}`); the connection registers under it instead of the number, and `connect_preset`/`use_database` resolve by number OR name.
+- `DB_PRESET_AUTOCONNECT=01,02` — numbers only (stable even if aliases change). Eager connect at tool startup, TOLERANT failure: DB down → log warning, server still starts, preset remains connectable at runtime (invariant: the launcher is never blocked by a dead DB).
+- `.env` is read at process start: preset changes need a launcher restart (same as every env var).
+
+### New surface
+
+- Tools: `list_presets()` (name, number, dialect, DESC, masked URL — password → `***` — autoconnect flag) and `connect_preset(preset)` (resolves by number or NAME; registers under NAME or the number; duplicate-name rules identical to connect_database).
+- FEF data source `connection_presets` on the 81xx mgmt server: masked preset list + autoconnect flags → visible to the management API immediately.
+- mcp_ui: a "Presets" section on the databasemcp panel with per-preset Connect buttons — separate small UI task AFTER the server side is used once (same pattern as the Functions tab).
+- Precedence: unchanged — `USERID`/`DB_HOST` legacy default and `DB_AUTOCONNECT` still govern only that default; presets are additive.
+
+### Implementation notes
+
+- Parser: `presets.py` — `load_presets() -> list[Preset]` scanning `os.environ` for `^DB_PRESET_(\d+)$` (+ `_DESC`/`_NAME` suffixes); URL parsing per dialect (urlsplit; oracle port default 1521, postgres 5432; percent-decoding user/password; libsql query-string authToken).
+- Autoconnect: after `mcp` creation in `core.py` — for each AUTOCONNECT preset: `REGISTRY.connect(name, dialect, params)` in try/except; failure → `logger.warning` and continue.
+- Tests: parser (3 dialects + bad URL + missing scheme), `list_presets` masking, `connect_preset` by number and by NAME, autoconnect tolerance (bad URL → server still imports, warning logged), FEF data source shape.

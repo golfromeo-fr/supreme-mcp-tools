@@ -100,7 +100,9 @@
         "type": "email",
         "enabled": false,
         "config": {
-          "to": ["admin@example.com"],
+          "to": [
+            "admin@example.com"
+          ],
           "from": "alerts@example.com",
           "smtp_server": "localhost",
           "smtp_port": 587
@@ -126,14 +128,6 @@
         "track_errors": true
       }
     },
-    "oraclemcp": {
-      "enabled": true,
-      "metrics": {
-        "track_requests": true,
-        "track_tool_calls": true,
-        "track_errors": true
-      }
-    },
     "ragmcp": {
       "enabled": true,
       "metrics": {
@@ -151,6 +145,14 @@
       }
     },
     "convertermcp": {
+      "enabled": true,
+      "metrics": {
+        "track_requests": true,
+        "track_tool_calls": true,
+        "track_errors": true
+      }
+    },
+    "databasemcp": {
       "enabled": true,
       "metrics": {
         "track_requests": true,

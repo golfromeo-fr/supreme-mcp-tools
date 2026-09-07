@@ -1,0 +1,182 @@
+{
+  "name": "databasemcp",
+  "version": "1.0.0",
+  "description": "Database workbench MCP - connects to Oracle, Postgres and libSQL databases with query execution, schema introspection, explain plans, and AI-powered SQL optimization",
+  "transports": {
+    "streamable-http": {
+      "enabled": true,
+      "script": "databasemcp_fastmcp.py",
+      "port": 8000,
+      "endpoint": "/mcp",
+      "framing_format": "newline-delimited",
+      "description": "Database workbench MCP - connects to Oracle, Postgres and libSQL databases with query execution, schema introspection, explain plans, and AI-powered SQL optimization"
+    }
+  },
+  "tools": [
+    {
+      "name": "list_presets",
+      "description": "List connection presets defined in .env (dialect, description, autoconnect \u2014 passwords never shown)"
+    },
+    {
+      "name": "connect_preset",
+      "description": "Connect using a preset by number or NAME alias; first connection becomes active"
+    },
+    {
+      "name": "connect_database",
+      "description": "Connect to a database (oracle|postgres|libsql) and register it under a name; first connection becomes active"
+    },
+    {
+      "name": "disconnect_database",
+      "description": "Disconnect and remove a named database connection"
+    },
+    {
+      "name": "list_connections",
+      "description": "List all registered database connections (never shows credentials)"
+    },
+    {
+      "name": "use_database",
+      "description": "Switch the active database connection"
+    },
+    {
+      "name": "query",
+      "description": "Execute a read-only SQL query (SELECT/WITH) and return up to max_rows rows"
+    },
+    {
+      "name": "execute_sql",
+      "description": "Execute an SQL statement (INSERT/UPDATE/DELETE/DDL), commit, report affected rows"
+    },
+    {
+      "name": "get_schemas",
+      "description": "Get columns, constraints and foreign keys for a table (cached per connection)"
+    },
+    {
+      "name": "list_tables",
+      "description": "List all tables with their comments on a connection"
+    },
+    {
+      "name": "explain_plan",
+      "description": "Return the execution plan for a SQL statement (dialect-specific)"
+    },
+    {
+      "name": "get_valid_languages",
+      "description": "Oracle-only: get valid language codes from the LANGUES table"
+    },
+    {
+      "name": "get_sql_optimization_rules",
+      "description": "Show the user-local SQL optimization rules (optimization.json)"
+    },
+    {
+      "name": "get_proc_rules",
+      "description": "Show the user-local Pro*C coding rules (proc_rules.md)"
+    },
+    {
+      "name": "optimize_sql_with_ai",
+      "description": "Suggest SQL optimizations via AI using the user-local rules and live schema context"
+    }
+  ],
+  "environment_variables": {
+    "USERID": {
+      "description": "Oracle connection for the lazy 'default' connection (format: username/password)",
+      "required": false,
+      "secret": true,
+      "type": "string",
+      "default": ""
+    },
+    "DB_HOST": {
+      "description": "Oracle host for the lazy 'default' connection",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": ""
+    },
+    "DB_PORT": {
+      "description": "Oracle port for the lazy 'default' connection",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1521"
+    },
+    "DB_SERVICE_NAME": {
+      "description": "Oracle service name for the lazy 'default' connection",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": ""
+    },
+    "DB_AUTOCONNECT": {
+      "description": "Set to 0 to disable the lazy env-default connection entirely",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "1"
+    },
+    "ORACLE_MIN_CONNECTIONS": {
+      "description": "Oracle session pool minimum",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "1",
+      "minimum": 1
+    },
+    "ORACLE_MAX_CONNECTIONS": {
+      "description": "Oracle session pool maximum",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "10",
+      "minimum": 1
+    },
+    "ORACLE_QUERY_TIMEOUT": {
+      "description": "Oracle call timeout in seconds (applied per acquire; pool wait = 3x)",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "30",
+      "minimum": 1
+    },
+    "DB_QUERY_TIMEOUT_MS": {
+      "description": "Postgres statement timeout in milliseconds",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "30000",
+      "minimum": 1000
+    },
+    "DB_LOCK_WAIT_S": {
+      "description": "How long a tool waits for a busy connection's lock before reporting it busy",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "10",
+      "minimum": 1
+    },
+    "AI_API_KEY": {
+      "description": "API key for the AI SQL optimization",
+      "required": false,
+      "secret": true,
+      "type": "string",
+      "default": ""
+    },
+    "AI_BASE_URL": {
+      "description": "OpenAI-compatible gateway base URL for the AI SQL optimization",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": ""
+    },
+    "AI_MODEL": {
+      "description": "Model name for the AI SQL optimization",
+      "required": false,
+      "secret": false,
+      "type": "string",
+      "default": "gpt-4.1"
+    }
+  },
+  "auth": {
+    "api_key": "oraclemcp-test-key-efgh"
+  },
+  "files": {
+    "optimization": "examples/optimization.json (copy to ~/.config/supreme-mcp-tools/databasemcp/)",
+    "proc_rules": "examples/proc_rules.md (copy to ~/.config/supreme-mcp-tools/databasemcp/)"
+  }
+}

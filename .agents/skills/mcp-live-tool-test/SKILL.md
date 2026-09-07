@@ -73,6 +73,82 @@ For functions not listed: read the input schema from the session's tool
 definition or the tool's `config.json`, pick minimal safe args, and skip with
 a note if none are safe.
 
+### databasemcp notes (added 2026-09-06 — multi-DB workbench, ex-oraclemcp)
+
+Native-call procedure, in this order (the registry is stateful per server):
+
+1. `mcp__databasemcp-stateless__list_connections` `{}` — baseline (usually "none").
+2. `mcp__databasemcp-stateless__list_presets` `{}` — shows `.env` presets
+   (masked). If it errors "Unknown tool", the launcher predates P7 — say so
+   and skip the preset steps.
+3. `mcp__databasemcp-stateless__connect_database`
+   `{"name": "sweep", "db_type": "libsql", "params": {"url": "file:/tmp/databasemcp_sweep.db"}}`
+   — throwaway local DB; `file:` to a nonexistent path creates it (SQLite semantics).
+4. `mcp__databasemcp-stateless__execute_sql`
+   `{"sql": "CREATE TABLE IF NOT EXISTS sweep_t (id INTEGER PRIMARY KEY, label TEXT)"}`
+   then one INSERT — default connection = the one just connected.
+5. `mcp__databasemcp-stateless__query` `{"sql": "SELECT * FROM sweep_t", "max_rows": 10}`
+6. `mcp__databasemcp-stateless__get_schemas` `{"table_name": "sweep_t"}` — call
+   twice: second response contains "(cached)".
+7. `mcp__databasemcp-stateless__explain_plan` `{"sql": "SELECT * FROM sweep_t"}`
+8. `mcp__databasemcp-stateless__disconnect_database` `{"name": "sweep"}`
+
+Safe-args extras:
+
+| Function | Safe args | Notes |
+|---|---|---|
+| `query` + `connection` | `{"sql": "SELECT 1", "connection": "<preset NN or NAME>"}` | **preset bypass**: an unconnected preset number/alias connects lazily |
+| `query` (guard) | `{"sql": "DELETE FROM x"}` | must answer "query() is read-only" — a success here is a defect |
+| `use_database` | `{"name": "<connected name>"}` | switches the active connection |
+| `list_presets` | `{}` | passwords always masked (`***`); a raw password in output is a defect |
+
+#### Transaction testing (added 2026-09-07 — self-gating on E4)
+
+**Current server (E4 not yet built) — transaction semantics probes, THROWAWAY
+DB only:**
+
+1. `execute_sql` `{"sql": "BEGIN"}` → `{"sql": "INSERT INTO txp VALUES (2, 'in-tx')"}` →
+   `query` `{"sql": "SELECT * FROM txp"}` — on libsql the uncommitted row IS visible:
+   the shared connection carries an explicit BEGIN/ROLLBACK across separate MCP calls
+   (verified 2026-09-07).
+2. `execute_sql` `{"sql": "ROLLBACK"}` → `query` again — the in-tx row must be GONE.
+   A row that survives ROLLBACK is a defect.
+3. On a Postgres connection, do NOT chain BEGIN/COMMIT across calls — `BEGIN` is
+   discarded when the call ends (autocommit + pool release). Optional read-only probe:
+   `query` `{"sql": "SELECT count(*) AS open_txs FROM pg_stat_activity WHERE state = 'idle in transaction' AND usename = current_user"}`
+   right after an `execute_sql("BEGIN")` → must be **0** (verified 2026-09-07).
+
+**After E4 lands:** if `begin_transaction` appears in `tools/list`, run the full
+procedure on the throwaway DB (skip silently on an older launcher, like the preset steps):
+
+1. `begin_transaction` `{"connection": "sweep"}` → returns a `tx_id`.
+2. `execute_sql` `{"sql": "INSERT …", "tx_id": "…"}` + `query` `{"sql": "SELECT …", "tx_id": "…"}`
+   — the uncommitted row is visible inside the transaction.
+3. `rollback_transaction` `{"tx_id": "…"}` → `query` WITHOUT tx_id shows the row gone.
+4. `begin_transaction` again → INSERT → `commit_transaction` → row visible WITHOUT tx_id.
+5. Atomic batch: `execute_sql` `{"statements": ["INSERT …", "INSERT …"]}` → both applied;
+   with one bad statement among good ones → the whole batch is rolled back and the
+   failing index is reported.
+6. Guards: a second `begin_transaction` on the same connection is rejected;
+   `commit`/`rollback` with an unknown or already-finished `tx_id` is rejected.
+
+Cautions:
+- **Never `execute_sql` against a preset pointing at the live Turso memory
+  store** unless the user asked for it — preset 03-style entries target real
+  data; the sweep flow uses the throwaway `sweep` connection only.
+- **Never open transaction probes on live presets** — an open tx on the shared
+  libsql connection would leak into other callers' statements; on PG presets a
+  stray BEGIN just evaporates but there is nothing to test there.
+- Every `begin_transaction` gets a matching `commit`/`rollback` IN THE SAME
+  SWEEP — an abandoned transaction holds locks (and after E4, a pinned
+  connection) until the idle reaper fires.
+- The reaper itself is NOT exercised in a standard sweep (it needs a scratch
+  launcher with a shortened `DB_TX_IDLE_TIMEOUT`) — observe it only in a
+  dedicated E4 test session.
+- `query` accepts SELECT/WITH only (lexical guard); DML/DDL goes through
+  `execute_sql` (which commits).
+- Ports: MCP 8000, mgmt 8110 (pinned via `databasemcp_mgmt` in ports.json — ABOVE the auto-allocation corridor; a pin at 8100 collided with simplemcp's floor grab, 2026-09-07).
+
 ### webmcp notes (updated 2026-08-27)
 
 - **`brave_search_web` is NOT TESTED — user directive (2026-08-27).** The

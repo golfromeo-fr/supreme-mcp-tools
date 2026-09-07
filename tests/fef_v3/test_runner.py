@@ -163,14 +163,13 @@ class FEFTestRunner:
                 "storage_usage", "output_config", "parallel_limit"
             ]
         },
-        "oraclemcp": {
+        "databasemcp": {
             "mcp_port": 8000,
             "mgmt_port": 9010,
             "extensions": [
                 "request_stats", "cache_stats", "tool_info",
                 "cache_config", "api_key", "clear_cache", "reset_counters",
-                "query_stats", "connection_pool", "schema_cache",
-                "pool_config"
+                "query_stats", "connection_pool", "schema_cache"
             ]
         }
     }
@@ -469,15 +468,10 @@ class FEFTestRunner:
                 {"encoding": "utf-8", "max_size_mb": 50}
             ))
         
-        elif tool_name == "oraclemcp":
+        elif tool_name == "databasemcp":
             results.append(self.test_extension_execution(tool_name, base_url, "query_stats", {}))
             results.append(self.test_extension_execution(tool_name, base_url, "connection_pool", {}))
             results.append(self.test_extension_execution(tool_name, base_url, "schema_cache", {}))
-            results.append(self.test_extension_execution(
-                tool_name, base_url, "pool_config",
-                {"max_connections": 10, "min_connections": 2}
-            ))
-        
         return results
     
     def test_error_handling(self, tool_name: str, base_url: str) -> list[TestResult]:
@@ -778,7 +772,7 @@ def main():
         type=str,
         nargs='+',
         default=None,
-        help="Tools to test: webmcp simplemcp ragmcp convertermcp oraclemcp"
+        help="Tools to test: webmcp simplemcp ragmcp convertermcp databasemcp"
     )
     parser.add_argument(
         "--verbose", "-v",

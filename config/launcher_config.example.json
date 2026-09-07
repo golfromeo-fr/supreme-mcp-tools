@@ -4,7 +4,7 @@
 
   "toolDirectories": [
     "/path/to/tools/webmcp",
-    "/path/to/tools/oraclemcp",
+    "/path/to/tools/databasemcp",
     "/path/to/tools/simplemcp",
     "/path/to/tools/convertermcp",
     "/path/to/tools/ragmcp"

@@ -67,13 +67,13 @@ class TestToolDiscovery(unittest.TestCase):
             str(PROJECT_ROOT / "tools/webmcp"),
             str(PROJECT_ROOT / "tools/simplemcp"),
             str(PROJECT_ROOT / "tools/convertermcp"),
-            str(PROJECT_ROOT / "tools/oraclemcp"),
+            str(PROJECT_ROOT / "tools/databasemcp"),
         ])
         tools = td.discover()
         self.assertEqual(len(tools), 6)
         self.assertEqual(
             set(tools.keys()),
-            {"memorymcp", "ragmcp", "webmcp", "simplemcp", "convertermcp", "oraclemcp"}
+            {"memorymcp", "ragmcp", "webmcp", "simplemcp", "convertermcp", "databasemcp"}
         )
 
 

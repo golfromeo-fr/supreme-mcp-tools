@@ -15,7 +15,7 @@
   "assignments": {
     "mcp": {
       "_comment": "MCP tool endpoints",
-      "oraclemcp": 8000,
+      "databasemcp": 8000,
       "webmcp": 8001,
       "simplemcp": 8002,
       "convertermcp": 8003,
@@ -23,7 +23,7 @@
     },
     "mgmt": {
       "_comment": "Management ports per tool",
-      "oraclemcp": 8100,
+      "databasemcp": 8100,
       "webmcp": 8101,
       "simplemcp": 8102,
       "convertermcp": 8103,

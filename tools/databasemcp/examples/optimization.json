@@ -1,0 +1,17 @@
+{
+  "_hint": "Copy this file to ~/.config/supreme-mcp-tools/databasemcp/optimization.json and replace the rules with your own. Each rule: {id, description, pattern (optional regex), advice}.",
+  "rules": [
+    {
+      "id": "avoid-select-star",
+      "description": "Avoid SELECT * in production queries",
+      "pattern": "SELECT\\s+\\*",
+      "advice": "List only the columns you need so the optimizer can use covering indexes."
+    },
+    {
+      "id": "leading-wildcard-like",
+      "description": "Leading-wildcard LIKE cannot use a normal index",
+      "pattern": "LIKE\\s+'%",
+      "advice": "Consider a full-text index or anchoring the wildcard at the end."
+    }
+  ]
+}
