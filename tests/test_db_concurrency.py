@@ -54,6 +54,14 @@ class SlowFakeDialect(DbDialect):
     def explain(self, handle, sql): return ""
     def format_error(self, e): return {"error": "DB_ERROR", "code": None, "message": str(e), "offset": None}
 
+    # --- tx stubs (E4 ABC) — concurrency tests never enter transaction flows ---
+    def open_tx(self, handle, params): raise NotImplementedError
+    def select_tx(self, tx_handle, sql, max_rows): raise NotImplementedError
+    def execute_tx(self, tx_handle, sql): raise NotImplementedError
+    def commit_tx(self, tx_handle): raise NotImplementedError
+    def rollback_tx(self, tx_handle): raise NotImplementedError
+    def close_tx(self, handle, tx_handle): raise NotImplementedError
+
 
 @pytest.fixture()
 def slow_registry(monkeypatch):

@@ -78,6 +78,10 @@ metrics = {
     "connection_count": 0,
     "connection_errors": 0,
     "schema_lookups": 0,
+    "transactions_begun": 0,
+    "transactions_committed": 0,
+    "transactions_rolled_back": 0,
+    "transactions_reaped": 0,
 }
 
 # ============================================================================

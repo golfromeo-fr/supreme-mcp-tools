@@ -154,3 +154,49 @@ class OracleDialect(DbDialect):
             from core import logger
             logger.error(f"Error formatting Oracle error: {fmt_err}")
         return {"error": "DB_ERROR", "code": None, "message": str(e)}
+
+    # ------------------------------------------------------------------
+    # Transactions (E4): the session pool is the only connection source, so
+    # a transaction HOLDS one acquired session (max ORACLE_MAX_CONNECTIONS;
+    # getmode WAIT + pool timeout make concurrent acquires wait). Held
+    # sessions are the pool-exhaustion trade-off documented in the plan.
+    # P0-d stays documented-only: no live Oracle instance in the workbench.
+    # ------------------------------------------------------------------
+
+    def open_tx(self, handle, params: dict) -> Any:
+        conn = handle.acquire()
+        conn.call_timeout = int(os.environ.get("ORACLE_QUERY_TIMEOUT", "30")) * 1000
+        return conn
+
+    def select_tx(self, tx_handle, sql: str, max_rows: int) -> tuple[list[dict], bool]:
+        cursor = tx_handle.cursor()
+        cursor.execute(sql)
+        rows = cursor.fetchmany(max_rows + 1)
+        cols = [c[0] for c in cursor.description]
+        data = [dict(zip(cols, row)) for row in rows]
+        truncated = len(data) > max_rows
+        return data[:max_rows], truncated
+
+    def execute_tx(self, tx_handle, sql: str) -> int:
+        cursor = tx_handle.cursor()
+        cursor.execute(sql)
+        return cursor.rowcount  # NO commit — explicit commit_tx only
+
+    def commit_tx(self, tx_handle) -> None:
+        tx_handle.commit()
+
+    def rollback_tx(self, tx_handle) -> None:
+        tx_handle.rollback()
+
+    def close_tx(self, handle, tx_handle) -> None:
+        try:
+            tx_handle.rollback()  # no-op when the caller already committed
+        except Exception:
+            pass
+        release = getattr(handle, "release", None)
+        if release:
+            release(tx_handle)
+        else:
+            close = getattr(tx_handle, "close", None)
+            if close:
+                close()

@@ -16,6 +16,25 @@ from typing import Any
 from ._base import DbDialect
 
 
+def _reject_multi_statement(sql: str) -> None:
+    """Quote-aware multi-statement rejection (libsql silently runs only the
+    FIRST statement of a multi-statement string on file DBs)."""
+    body = sql.rstrip().rstrip(";")
+    in_str = False
+    for ch in body:
+        if ch == "'":
+            in_str = not in_str
+        elif ch == ";" and not in_str:
+            raise ValueError(
+                "Multiple statements detected; execute one statement at a time."
+            )
+
+
+def _connect_params(params: dict) -> tuple[str, str | None]:
+    """(url, auth_token) from preset/connection params."""
+    return params["url"], params.get("auth_token")
+
+
 class LibsqlDialect(DbDialect):
     name = "libsql"
     REQUIRED_PARAMS = ("url",)
@@ -50,15 +69,7 @@ class LibsqlDialect(DbDialect):
         # Multi-statement guard: libsql silently runs only the FIRST
         # statement of a multi-statement string on file DBs (probe
         # correction, 2026-09-06). Reject instead of partially executing.
-        body = sql.rstrip().rstrip(";")
-        in_str = False
-        for ch in body:
-            if ch == "'":
-                in_str = not in_str
-            elif ch == ";" and not in_str:
-                raise ValueError(
-                    "Multiple statements detected; execute one statement at a time."
-                )
+        _reject_multi_statement(sql)
         cursor = handle.execute(sql)
         return cursor.rowcount
 
@@ -111,3 +122,46 @@ class LibsqlDialect(DbDialect):
             "message": str(e),
             "offset": None,
         }
+
+    # ------------------------------------------------------------------
+    # Transactions (E4): a dedicated SECOND connection to the same DB with
+    # autocommit off. P0-a/P0-b verified live (2026-09-07): autocommit=False
+    # works, commit/rollback methods exist, uncommitted writes are invisible
+    # to other connections until commit.
+    # ------------------------------------------------------------------
+
+    def open_tx(self, handle, params: dict) -> Any:
+        import libsql_experimental as libsql
+
+        url, auth_token = _connect_params(params)
+        if auth_token:
+            tx = libsql.connect(url, auth_token=auth_token)
+        else:
+            tx = libsql.connect(url)
+        tx.autocommit = False
+        return tx
+
+    def select_tx(self, tx_handle, sql: str, max_rows: int) -> tuple[list[dict], bool]:
+        cursor = tx_handle.execute(sql)
+        rows = cursor.fetchmany(max_rows + 1)
+        cols = [c[0] for c in cursor.description]
+        data = [dict(zip(cols, row)) for row in rows]
+        truncated = len(data) > max_rows
+        return data[:max_rows], truncated
+
+    def execute_tx(self, tx_handle, sql: str) -> int:
+        _reject_multi_statement(sql)
+        return tx_handle.execute(sql).rowcount
+
+    def commit_tx(self, tx_handle) -> None:
+        tx_handle.commit()
+
+    def rollback_tx(self, tx_handle) -> None:
+        tx_handle.rollback()
+
+    def close_tx(self, handle, tx_handle) -> None:
+        try:
+            tx_handle.rollback()  # no-op when the caller already committed
+        except Exception:
+            pass
+        tx_handle.close()
