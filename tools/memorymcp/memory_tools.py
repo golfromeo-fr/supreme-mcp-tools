@@ -464,6 +464,98 @@ Content:
 
 
 @mcp.tool()
+async def listMemories(
+    limit: int = 20,
+    offset: int = 0,
+    tag: str | None = None,
+    sort: str = "recent",
+) -> dict:
+    """
+    Browse memories page by page (management/Explorer tool).
+
+    Unlike queryMemory (semantic search with scoring), this is a paged scan
+    for browsing: no embedding, no scoring, no usage-count side effects.
+
+    Args:
+        limit: Page size (1-100, default 20)
+        offset: Number of records to skip (0-based)
+        tag: Optional tag filter (substring match)
+        sort: "recent" (newest insertions first, default) or "oldest"
+
+    Returns:
+        {"memories": [{id, preview, memory_type, tags, sensitivity,
+                       created_at, last_accessed, usage_count, source}],
+         "total", "offset", "limit", "next_offset"}
+        total is exact for unfiltered scans; with a tag filter it is the
+        prefix length scanned so far (page until next_offset is None).
+    """
+    logger.info(f"listMemories: limit={limit}, offset={offset}, tag={tag}, sort={sort}")
+    if not vector_store:
+        return {"error": "vector store not initialized"}
+
+    import asyncio
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    filt = None
+    if tag:
+        filt = Filter(must=[FieldCondition(key="tags", match=MatchContains(value=tag))])
+
+    try:
+        # Management browse: bounded full filtered scan (stores are small —
+        # hundreds of records; the cap keeps a pathological store bounded).
+        # scroll's rowid cursor is the ABC's only position-aware primitive.
+        SCAN_BATCH = 250
+        SCAN_CAP = 2500
+        points: list = []
+        cursor = None
+        while len(points) < SCAN_CAP:
+            batch, next_cursor = await asyncio.to_thread(
+                vector_store.scroll,
+                COLLECTION_NAME,
+                limit=min(SCAN_BATCH, SCAN_CAP - len(points)),
+                offset=cursor,
+                with_payload=True,
+                filter=filt,
+            )
+            points.extend(batch)
+            if not batch or next_cursor is None:
+                break
+            cursor = next_cursor
+    except Exception as e:
+        logger.error(f"listMemories scroll failed: {e}")
+        return {"error": str(e)}
+
+    total = len(points)
+    if sort != "oldest":
+        points.reverse()  # insertion (rowid) order -> newest first
+    page = points[offset:offset + limit]
+
+    memories = []
+    for p in page:
+        payload = dict(p.payload or {})
+        text = payload.get("text") or payload.get("text_preview") or ""
+        memories.append({
+            "id": str(p.id),
+            "preview": text[:200],
+            "memory_type": payload.get("memory_type", ""),
+            "tags": payload.get("tags", []) if isinstance(payload.get("tags"), list) else [],
+            "sensitivity": payload.get("sensitivity", ""),
+            "created_at": payload.get("created_at", ""),
+            "last_accessed": payload.get("last_accessed", ""),
+            "usage_count": payload.get("usage_count", 0),
+            "source": payload.get("source", ""),
+        })
+
+    return {
+        "memories": memories,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "next_offset": (offset + limit) if offset + limit < len(points) else None,
+    }
+
+
+@mcp.tool()
 async def deleteMemory(memory_id: str) -> str:
     """
     Delete a memory by ID.
