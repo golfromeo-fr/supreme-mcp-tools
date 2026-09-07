@@ -77,7 +77,7 @@ tests/fef_v3/      # FEF V3 test fixtures
 | 8300-8399 | Metrics (metrics_server: 8300) |
 | 8400-8499 | UI (management_ui: 8400) |
 
-Port conflicts are detected via socket binding, not just config — a free config slot is not enough.
+Port conflicts are detected via socket binding, not just config — a free config slot is not enough. A **pinned mgmt port** whose stale holder outlives the 20s busy-retry window **degrades to corridor auto-allocation** (loud WARNING; consumers follow the service registry), so a tool never loses its run over its management port — pinned **MCP** ports still fail loudly because clients hardcode them.
 
 ### Backend abstraction (Phase 0–5)
 
