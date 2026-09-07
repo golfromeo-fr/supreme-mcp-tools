@@ -62,10 +62,10 @@ within one request, no restarts:
 - **Tool servers** build their token map from it: each tool's
   `DualHeaderVerifier` map = `{<tool system key> → client_id "<toolname>",
   role admin}` ∪ `{<user mcp_key> → client_id "<username>", role <role>}` for
-  every ENABLED user whose `allowed_tools` grants that tool. The tool system
+  every ENABLED user whose `servers` includes that tool. The tool system
   key keeps working forever (backward compat for existing harness bindings).
 - **Visibility** = `IdentityGateMiddleware` filtering `tools/list` /
-  gating `tools/call` by the caller's `allowed_tools[<tool>]`.
+  gating `tools/call` by the caller's `servers` + `masked_functions`.
 - **mcp_ui** logs in against it; the UI then makes tool calls AS the acting
   user (their `mcp_key`) → per-user visibility for free, enforced server-side.
 - **Roles**: `admin` (manage users/masks/env/auth, run mgmt actions, flush) vs
@@ -96,7 +96,8 @@ client (user key) ──▶ ApiKeyFallbackMiddleware (X-API-Key → Bearer)
       "password_hash": "pbkdf2_sha256$390000$<salt_b64>$<hash_b64>",
       "role": "admin",
       "mcp_key": "<secrets.token_urlsafe(32)>",
-      "allowed_tools": {"simplemcp": "*", "databasemcp": ["query", "execute_sql"]},
+      "servers": ["simplemcp", "databasemcp"],
+      "masked_functions": {"databasemcp": ["execute_sql", "deleteMemory"]},
       "enabled": true,
       "created_at": "2026-09-07T12:00:00+00:00",
       "key_rotated_at": "2026-09-07T12:00:00+00:00"
@@ -109,8 +110,19 @@ client (user key) ──▶ ApiKeyFallbackMiddleware (X-API-Key → Bearer)
   .encode(), salt, 390_000)`, salt = `secrets.token_bytes(16)`; serialized
   Django-style `pbkdf2_sha256$iters$saltb64$hashb64`; verify with
   `hmac.compare_digest` on the derived bytes. NO new dependencies.
-- `allowed_tools`: absent server = no access; `"*"` = all tools on that
-  server; a list = exact names (composes with E1 masks by INTERSECTION).
+- `servers` (round 3): the MCP servers this user may reach AT ALL —
+  absent server = no access (your "no key for that server" case: the user's
+  key simply fails auth there, because tokens_map_for_tool omits them).
+- `masked_functions` (round 3): PER-USER function masks, deny-list per
+  server — same UX/semantics as E1's global masks, scoped to one user.
+  Effective visibility = server ∈ user.servers
+                       AND function ∉ global disabled_tools[server] (E1)
+                       AND function ∉ user.masked_functions[server].
+  Hides compose by UNION; a user with every function masked sees an empty
+  server (bob case, F3). TRADE-OFF (veto-able): within an allowed server
+  this is default-OPEN — a NEWLY added function becomes visible to that
+  server's users until masked; grant-servers-then-mask-specifics is the
+  mental model, and the Users tab is literally the Functions matrix per user.
 - `mcp_key` shown ONCE at creation/rotation (UI), stored plaintext — it is a
   bearer credential like today's config.json keys, same threat model.
 
@@ -147,19 +159,20 @@ def verify_password(password: str, stored: str) -> bool
 def load_users() -> dict                          # tolerant: corrupt/missing → {} + loud log
 def save_users(store: dict) -> None               # atomic_write_json (flock sidecar)
 def list_users() -> list[dict]                    # never returns mcp_key/password_hash
-def create_user(username, password, role="user", allowed_tools=None) -> dict  # returns mcp_key ONCE
+def create_user(username, password, role="user", servers=None, masked_functions=None) -> dict  # returns mcp_key ONCE
 def delete_user(username) -> None
 def set_enabled(username, enabled: bool) -> None
 def rotate_key(username) -> dict                  # new mcp_key, returns it ONCE (globally unique)
 def revoke_system_key(tool_name) -> None          # OPTIONAL (round 2): retire one tool's system key
-def set_allowed_tools(username, allowed: dict) -> None
+def set_servers(username, servers: list) -> None
+def set_masked_functions(username, masks: dict) -> None   # per-user function masks
 def authenticate(username, password) -> dict | None   # constant-time verify
 def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
     # {system_key: {"client_id": <ADMIN_USERNAME>, "role": "admin", "allowed": "*"}} ∪
     # (round 2: system keys are ATTRIBUTED TO THE ADMIN — the current mono
     #  user — so logs attribute them from day one; toolname no longer used)
     # {u.mcp_key: {"client_id": u.username, "role": u.role,
-    #              "allowed": u.allowed_tools.get(tool_name, [])}}
+    #              "masked": u.masked_functions.get(tool_name, [])}}
     # mtime-cached internally (stat per call; reload on change)
 ```
 
@@ -198,8 +211,9 @@ no middleware) — bootstrap-safe, and tools never fail on a bad store
   calls; central calls use the admin system key when the actor is admin,
   else the user key (central role check = M3).
 - New **Users tab** (admin only): user list (role, enabled, tool count),
-  create user (username/password/role → key shown once), allowed-tools matrix
-  reusing the Functions-tab mask-grid pattern, rotate key, enable/disable,
+  create user (username/password/role → key shown once), server checkboxes + per-server
+  FUNCTION-MASK matrix reusing the Functions-tab mask-grid pattern (round 3:
+  the two dimensions the user asked for — servers reached, functions masked), rotate key, enable/disable,
   delete with confirm. Tab hidden for role=user.
 
 ### M3 — role enforcement + tx binding
@@ -236,6 +250,35 @@ tests/test_users_store.py                NEW  M2
 tests/test_e3_integration.py             NEW  M2/M3 (two users over real app)
 ```
 
+## Instance & resource model (round 3 — "1 instance for all, or fork per user?")
+
+**One shared instance per MCP server serves ALL users. No forking.** The
+spike proved identity is per-REQUEST metadata (header → map lookup → filter),
+not per-process state: alice and bob were served correctly by the SAME
+instance in F3, and the stateless endpoint exists precisely so a request can
+be answered by any process. Multi-user costs a dict lookup per request —
+process count, ports, memory baseline are UNCHANGED as users are added.
+Per-user forks would only ever buy HARD security isolation (separate
+processes per tenant), which a bearer-key shared instance already covers for
+a team workbench (the standard multi-tenant SaaS-API pattern); M4 multi-host
+is where N processes reappear (N nodes, not N×users).
+
+Per-tool resource reality as users grow:
+
+| Tool | Per-user state? | Shared-instance verdict |
+|---|---|---|
+| simplemcp | none | trivial (stateless math) |
+| webmcp | none that matters | "universal" as you said; search/fetch CACHE and history are shared (cache sharing is a feature); upstream API quotas are per-deployment, not per-user |
+| databasemcp | connections are NAMED+SHARED by design | registry does NOT multiply per user (two users using preset 02 share one pool — overhead actually stays flat); E4 txs: one per connection regardless of user; per-user DB CREDENTIALS remain a v1 non-goal — a future `per-user connection namespace` knob exists in the plan's non-goals lineage if ever needed |
+| memorymcp | the memories THEMSELVES are shared | data isolation stays the declared non-goal; cheapest future path is the EXISTING `agent_id` field (stamp/filter by client_id in middleware) — data-model work, not forking; per-user collections would multiply vector stores (heavy, rejected) |
+| ragmcp | indexes are shared artifacts | read access gated per user normally; destructive actions (reindex/start_indexing are mgmt ACTIONS) → admin role under M3, so only the admin mutates indexes |
+
+**The honest overhead curve:** auth/visibility scales to dozens of users at
+~zero marginal cost. The costs that DO grow per user are data-plane choices
+we deliberately deferred (whose memories, whose DB creds) — when they come,
+they are schema/filter work inside one process, never process forks. The
+only structural fork is M4 multi-host (node count ∝ load, not users).
+
 ## Environment (new)
 
 | Var | Default | Purpose |
@@ -260,7 +303,7 @@ No new ports. Metrics 8300: P0 documents bind/firewall guidance only.
    clients keep working unchanged. Admin bootstrap password = the current
    `MCP_UI_USERNAME`/`MCP_UI_PASSWORD` (write-through on first login).
 2. **One key per user (v1).** The key asserts WHO you are; WHAT you can reach
-   is `allowed_tools` (the store's job). One rotation, one revoke, one Users
+   is `servers` + `masked_functions` (the store's job). One rotation, one revoke, one Users
    row; cutting a user off from one server is a checkbox, which is the same
    protection per-server keys buy. Per-server keys (`mcp_keys: {server: key}`
    map, schema v2) remain a compatible LATER extension if blast-radius
@@ -297,7 +340,10 @@ No new ports. Metrics 8300: P0 documents bind/firewall guidance only.
 4. Key rotation race → old key invalid the moment the map swaps (atomic
    read); client sees 401 and must re-bind (documented).
 5. Username = tool-name collision → rejected at create (client_id namespace).
-6. `allowed_tools` absent server / `"*"` / list — all three shapes.
+6. `servers` ∅ / `masked_functions` shapes; all-functions-masked user sees an
+   empty server (allowed to auth, nothing listed); NEW function on an allowed
+   server is default-OPEN to that server's users until masked (documented
+   trade-off of deny-list, round 3).
 7. Masks ∩ identity = intersection (E1 mask hides globally; identity scopes
    per user) — test both orders.
 8. Identity-less call (in-memory `Client(mcp)`) → fail-open + log;
