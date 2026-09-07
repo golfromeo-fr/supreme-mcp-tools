@@ -18,11 +18,12 @@ from ..memory_client import get_memory_client, MemoryMcpError
 PAGE_SIZE = 20
 
 
-def render_memory_tab(container) -> None:
+def render_memory_tab(container, api_key: str | None = None) -> None:
     """Entry point: (re)build the whole tab into `container`. Sync on purpose —
     the management_ui tab builder calls it directly; async data loads are
-    scheduled with asyncio.create_task inside."""
-    client = get_memory_client()
+    scheduled with asyncio.create_task inside. api_key = the acting user's
+    mcp_key (E3): the Explorer calls memorymcp AS that user."""
+    client = get_memory_client(api_key=api_key)
     state: dict[str, Any] = {
         "mode": "browse",       # browse | search | detail
         "offset": 0,

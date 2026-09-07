@@ -27,6 +27,7 @@ from .tools_config import (
     enable_tool,
     disable_tool,
 )
+from tools.shared import users_store
 from .env_manager import (
     get_env_values,
     get_all_env_values,
@@ -65,6 +66,31 @@ class QueryRequest(BaseModel):
 class MutateRequest(BaseModel):
     """Request model for mutating configuration."""
     params: dict[str, Any]
+
+
+class UserCreateRequest(BaseModel):
+    """E3/M2: create a user (mcp_key returned once)."""
+    username: str
+    password: str
+    role: str = "user"
+    servers: list[str] = []
+    masked_functions: dict[str, list[str]] = {}
+
+
+class UserPasswordRequest(BaseModel):
+    password: str
+
+
+class UserServersRequest(BaseModel):
+    servers: list[str]
+
+
+class UserMaskedRequest(BaseModel):
+    masked_functions: dict[str, list[str]]
+
+
+class UserEnabledRequest(BaseModel):
+    enabled: bool
 
 
 class ExecuteRequest(BaseModel):
@@ -440,6 +466,84 @@ class ManagementServer:
             disable_tool(tool_name, server_name)
             runtime = await _push_runtime_mask(server_name, tool_name, True)
             return {"server": server_name, "tool": tool_name, "disabled": True, **runtime}
+
+        # === E3/M2: user management (admin; guard hardens in M3) ===
+
+        @self.app.get("/api/users")
+        async def list_users_endpoint(_: bool = Depends(self._verify_api_key)):
+            """List users — never returns mcp_key or password_hash."""
+            return {"users": users_store.list_users()}
+
+        @self.app.post("/api/users")
+        async def create_user_endpoint(request: UserCreateRequest,
+                                       _: bool = Depends(self._verify_api_key)):
+            """Create a user; the mcp_key is returned ONCE."""
+            try:
+                created = users_store.create_user(
+                    request.username, request.password, role=request.role,
+                    servers=request.servers, masked_functions=request.masked_functions,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"user": users_store._public_view(
+                users_store.get_user_record(created["username"])), "mcp_key": created["mcp_key"]}
+
+        @self.app.delete("/api/users/{username}")
+        async def delete_user_endpoint(username: str,
+                                       _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.delete_user(username)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"deleted": True}
+
+        @self.app.post("/api/users/{username}/rotate-key")
+        async def rotate_user_key_endpoint(username: str,
+                                           _: bool = Depends(self._verify_api_key)):
+            try:
+                return users_store.rotate_key(username)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.put("/api/users/{username}/password")
+        async def set_user_password_endpoint(username: str,
+                                             request: UserPasswordRequest,
+                                             _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.set_password(username, request.password)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"ok": True}
+
+        @self.app.put("/api/users/{username}/servers")
+        async def set_user_servers_endpoint(username: str,
+                                            request: UserServersRequest,
+                                            _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.set_servers(username, request.servers)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"ok": True}
+
+        @self.app.put("/api/users/{username}/masked-functions")
+        async def set_user_masked_endpoint(username: str,
+                                           request: UserMaskedRequest,
+                                           _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.set_masked_functions(username, request.masked_functions)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"ok": True}
+
+        @self.app.post("/api/users/{username}/enabled")
+        async def set_user_enabled_endpoint(username: str,
+                                            request: UserEnabledRequest,
+                                            _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.set_enabled(username, request.enabled)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"ok": True}
 
         @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/enable")
         async def enable_tool_endpoint(

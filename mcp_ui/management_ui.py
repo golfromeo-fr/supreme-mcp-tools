@@ -183,6 +183,7 @@ from .components.auth_box import AuthBox
 from .components.env_var_editor import EnvVarEditor, parse_env_vars_from_api
 from .components.presets_panel import PresetsPanel
 from .components.memory_tab import render_memory_tab
+from .components.users_tab import render_users_tab
 from .components.loading import loading_spinner
 
 
@@ -214,6 +215,63 @@ def verify_credentials(username: str, password: str) -> bool:
     return user_ok and pass_ok
 
 
+def _multi_user_mode() -> bool:
+    """E3: multi-user is active when MCP_AUTH_MODE=multi (round 2 decision)."""
+    return os.environ.get("MCP_AUTH_MODE", "").strip().lower() == "multi"
+
+
+def try_login_user(username: str, password: str) -> dict:
+    """E3-M2 login resolution.
+
+    multi mode: authenticate against the user store (per-user accounts);
+    the ENV admin pair remains a break-glass path that write-through
+    bootstraps the admin user on first use. mono mode: legacy env login.
+
+    Returns the session payload {"username", "role", "mcp_key", "authenticated"}
+    or raises ValueError with a user-facing message.
+    """
+    if not _multi_user_mode():
+        if verify_credentials(username, password):
+            return {"username": username or "admin", "role": "admin",
+                    "mcp_key": None, "authenticated": True}
+        raise ValueError("Wrong username or password")
+
+    from tools.shared import users_store
+
+    store_user = users_store.authenticate(username, password)
+    if store_user is not None:
+        if not store_user.get("enabled", True):
+            raise ValueError("This account is disabled.")
+        return {"username": store_user["username"],
+                "role": store_user.get("role", "user"),
+                "mcp_key": users_store.get_user_record(
+                    store_user["username"]
+                ).get("mcp_key"),
+                "authenticated": True}
+    # break-glass: the env admin pair bootstraps the store admin (once)
+    if verify_credentials(username, password):
+        admin_name = (username or "admin").lower()
+        try:
+            created = users_store.create_user(
+                admin_name, password, role="admin",
+                servers=["simplemcp", "ragmcp", "webmcp", "memorymcp", "databasemcp"],
+            )
+            logger.warning(
+                f"[E3] store admin '{admin_name}' bootstrapped from legacy env "
+                "login — mcp_key shown once in the UI"
+            )
+            return {"username": admin_name, "role": "admin",
+                    "mcp_key": created["mcp_key"], "authenticated": True,
+                    "bootstrapped_key": created["mcp_key"]}
+        except ValueError as e:
+            # admin already exists in the store under this name but the
+            # password mismatched — surface as a failed login, not an error
+            if "already exists" in str(e):
+                raise ValueError("Wrong username or password") from e
+            raise
+    raise ValueError("Wrong username or password")
+
+
 # =============================================================================
 # Page Functions
 # =============================================================================
@@ -224,13 +282,22 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
     logger.debug(f"Login page called, redirect_to={redirect_to}")
 
     def try_login() -> None:
-        """Try to log in with the provided credentials."""
-        if verify_credentials(username.value, password.value):
-            nicegui_app.storage.user.update({"username": username.value, "authenticated": True})
-            show_success("Login successful!")
-            ui.navigate.to(_safe_redirect_target(redirect_to))
-        else:
-            show_error("Wrong username or password")
+        """Try to log in with the provided credentials (store or legacy env)."""
+        try:
+            session = try_login_user(username.value, password.value)
+        except ValueError as e:
+            show_error(str(e))
+            return
+        nicegui_app.storage.user.update(dict(session))
+        show_success("Login successful!")
+        if session.get("bootstrapped_key"):
+            ui.notify(
+                "Multi-user mode: your admin MCP key was created — copy it now, "
+                "it will not be shown again.",
+                type="warning", duration=0, close_button="Got it",
+            )
+            nicegui_app.storage.user.update({"fresh_mcp_key": session["bootstrapped_key"]})
+        ui.navigate.to(_safe_redirect_target(redirect_to))
 
     # If already authenticated, redirect to main page
     if nicegui_app.storage.user.get("authenticated", False):
@@ -641,10 +708,14 @@ async def _render_content_area(state, handlers: dict) -> None:
 
     detail = state.selected_tool_detail
     is_memory = detail is not None and detail.name == "memorymcp"
+    session_role = nicegui_app.storage.user.get("role", "user") if _multi_user_mode() else "admin"
+    is_admin = session_role == "admin"
     with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
         ui.tab("overview", icon="dashboard", label="Overview")
         if is_memory:
             ui.tab("memory", icon="memory", label="Memory")
+        if is_admin and _multi_user_mode():
+            ui.tab("users", icon="groups", label="Users")
         ui.tab("functions", icon="checklist", label="Functions")
         ui.tab("extensions", icon="extension", label="Extensions")
         ui.tab("env", icon="tune", label="Env Vars")
@@ -656,7 +727,14 @@ async def _render_content_area(state, handlers: dict) -> None:
         if is_memory:
             with ui.tab_panel("memory"):
                 _memory_panel = ui.column().classes("w-full")
-                render_memory_tab(_memory_panel)
+                render_memory_tab(
+                    _memory_panel,
+                    api_key=nicegui_app.storage.user.get("mcp_key"),
+                )
+        if is_admin and _multi_user_mode():
+            with ui.tab_panel("users"):
+                _users_panel = ui.column().classes("w-full")
+                render_users_tab(_users_panel)
         with ui.tab_panel("functions"):
             _render_functions_tab(state, detail, handlers)
         with ui.tab_panel("extensions"):

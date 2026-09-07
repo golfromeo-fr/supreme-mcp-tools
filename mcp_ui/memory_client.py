@@ -88,7 +88,12 @@ class MemoryMcpClient:
 _client: MemoryMcpClient | None = None
 
 
-def get_memory_client() -> MemoryMcpClient:
+def get_memory_client(api_key: str | None = None) -> "MemoryMcpClient":
+    """Shared client (tool key) — or a per-call client acting AS a user when
+    an api_key is given (E3: the Explorer calls memorymcp as the logged-in
+    user, so server-side per-user visibility applies)."""
+    if api_key:
+        return MemoryMcpClient(api_key=api_key)
     global _client
     if _client is None:
         _client = MemoryMcpClient()
