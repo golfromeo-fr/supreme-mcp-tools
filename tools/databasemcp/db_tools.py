@@ -138,17 +138,20 @@ async def connect_preset(preset: str) -> str:
 
 @mcp.tool()
 async def disconnect_database(name: str) -> str:
-    """Disconnect and remove a named database connection."""
+    """Disconnect and remove a named database connection (refused while an
+    interactive transaction is open on it)."""
     start_time = time.perf_counter()
     try:
         result = await asyncio.to_thread(REGISTRY.disconnect, name)
     except LookupError as e:
         _timing_update(start_time, "disconnect_database", False)
         return f"Error: {e}"
-    _timing_update(start_time, "disconnect_database", True)
-    if result.startswith("Connection '") and "busy" in result:
+    if result.startswith("Connection '") and (
+        "busy" in result or "active transaction" in result
+    ):
         _timing_update(start_time, "disconnect_database", False)
         return result
+    _timing_update(start_time, "disconnect_database", True)
     return f"Disconnected '{name}'. Active now: {result}"
 
 
@@ -164,8 +167,9 @@ async def list_connections() -> str:
     for c in conns:
         active = " *ACTIVE*" if c["active"] else ""
         last_err = f" last_error={c['last_error']}" if c["last_error"] else ""
+        tx = f" tx={c['tx']}…" if c.get("tx") else ""
         lines.append(
-            f"- {c['name']} ({c['dialect']}, {c['state']}, cached={c['cached_tables']}){active}{last_err}"
+            f"- {c['name']} ({c['dialect']}, {c['state']}, cached={c['cached_tables']}){tx}{active}{last_err}"
         )
     _timing_update(start_time, "list_connections", True)
     return "\n".join(lines)
@@ -182,6 +186,110 @@ async def use_database(name: str) -> str:
         return f"Error: {e}"
     _timing_update(start_time, "use_database", True)
     return f"Active connection: '{entry.name}' ({entry.dialect})"
+
+
+# ============================================================================
+# Interactive Transactions (E4) — begin / commit / rollback + idle reaper
+# ============================================================================
+
+DB_TX_SWEEP_INTERVAL_S = 60.0
+
+_reaper_task: asyncio.Task | None = None
+_reaper_started = False
+
+
+def _ensure_reaper() -> None:
+    """Start the reaper lazily on the first begin_transaction — it needs a
+    running loop, and no abandoned transaction can predate this process's
+    first begin (transactions die with the server process)."""
+    global _reaper_task, _reaper_started
+    if _reaper_started:
+        return
+    _reaper_started = True
+    _reaper_task = start_tx_reaper()
+
+
+@mcp.tool()
+async def begin_transaction(connection: str | None = None) -> str:
+    """Begins an interactive transaction on the active connection (or the
+    named one / an unconnected preset). Returns a tx_id to pass to query or
+    execute_sql; finish with commit_transaction or rollback_transaction.
+    Exactly one transaction per connection; idle transactions are rolled
+    back automatically after DB_TX_IDLE_TIMEOUT seconds (default 300)."""
+    start_time = time.perf_counter()
+    _ensure_reaper()
+    try:
+        entry, tx_id = await asyncio.to_thread(REGISTRY.begin_tx, connection)
+    except Exception as e:
+        _timing_update(start_time, "begin_transaction", False)
+        return _render_error(e)
+    _timing_update(start_time, "begin_transaction", True)
+    idle = os.environ.get("DB_TX_IDLE_TIMEOUT", "300")
+    return (
+        f"Transaction {tx_id} opened on '{entry.name}' ({entry.dialect}). "
+        f"Pass tx_id to query/execute_sql for statements inside it, then "
+        f"commit_transaction or rollback_transaction with the same tx_id. "
+        f"Idle transactions roll back automatically after {idle}s."
+    )
+
+
+@mcp.tool()
+async def commit_transaction(tx_id: str) -> str:
+    """Commits the open transaction (all its statements become permanent)
+    and releases its dedicated connection."""
+    start_time = time.perf_counter()
+    try:
+        entry = await asyncio.to_thread(REGISTRY.finish_tx, tx_id, True)
+    except Exception as e:
+        _timing_update(start_time, "commit_transaction", False)
+        return _render_error(e)
+    _timing_update(start_time, "commit_transaction", True)
+    return f"Transaction committed on '{entry.name}' — all its statements are now permanent."
+
+
+@mcp.tool()
+async def rollback_transaction(tx_id: str) -> str:
+    """Rolls back the open transaction (all its statements are discarded)
+    and releases its dedicated connection."""
+    start_time = time.perf_counter()
+    try:
+        entry = await asyncio.to_thread(REGISTRY.finish_tx, tx_id, False)
+    except Exception as e:
+        _timing_update(start_time, "rollback_transaction", False)
+        return _render_error(e)
+    _timing_update(start_time, "rollback_transaction", True)
+    return f"Transaction rolled back on '{entry.name}' — none of its statements were applied."
+
+
+async def _tx_reaper_loop(sweep_interval: float, idle_timeout: float) -> None:
+    """Sweep for abandoned transactions; resilient loop (a failed sweep is
+    logged and the next tick continues)."""
+    while True:
+        await asyncio.sleep(sweep_interval)
+        try:
+            reaped = await asyncio.to_thread(REGISTRY.reap_idle_txs, idle_timeout)
+            if reaped:
+                logger.info(f"[databasemcp] tx reaper rolled back {reaped} idle transaction(s)")
+        except Exception:
+            logger.exception("[databasemcp] tx reaper sweep failed — continuing")
+
+
+def start_tx_reaper() -> asyncio.Task | None:
+    """Start the idle-transaction reaper next to the launcher's event loop.
+    DB_TX_IDLE_TIMEOUT (secs, default 300); 0 disables it (with a warning)."""
+    idle_timeout = float(os.environ.get("DB_TX_IDLE_TIMEOUT", "300"))
+    if idle_timeout <= 0:
+        logger.warning(
+            "DB_TX_IDLE_TIMEOUT=0 — idle-transaction reaper DISABLED. "
+            "Abandoned transactions hold locks and a pinned connection until "
+            "the DB server's own idle-in-transaction timeout reclaims them."
+        )
+        return None
+    logger.info(
+        f"[databasemcp] tx reaper active: sweep every {int(DB_TX_SWEEP_INTERVAL_S)}s, "
+        f"roll back after {int(idle_timeout)}s idle"
+    )
+    return asyncio.create_task(_tx_reaper_loop(DB_TX_SWEEP_INTERVAL_S, idle_timeout))
 
 
 # ============================================================================
@@ -239,6 +347,7 @@ def get_connections_stats(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "active_connection": next((c["name"] for c in conns if c["active"]), None),
         "total_connections": len(conns),
+        "active_transactions": sum(1 for c in conns if c.get("tx")),
         "connections": [
             {"name": c["name"], "dialect": c["dialect"], "state": c["state"],
              "cached_tables": c["cached_tables"], "last_error": c["last_error"]}
@@ -431,6 +540,118 @@ def _read_guard(sql: str) -> str | None:
     return None
 
 
+_ORACLE_DDL_WORDS = {"CREATE", "ALTER", "DROP", "TRUNCATE", "GRANT", "REVOKE",
+                     "ANALYZE", "COMMENT"}
+
+
+def _oracle_ddl_warning(sql: str) -> str:
+    """Oracle DDL commits implicitly — warn when such a statement runs inside
+    a transaction (best-effort keyword check, not a parser)."""
+    first = sql.strip().split(None, 1)[0].upper() if sql.strip() else ""
+    if first in _ORACLE_DDL_WORDS:
+        return ("⚠️ Oracle DDL commits implicitly — this statement just ended the "
+                "transaction server-side; a later commit will report it as finished. ")
+    return ""
+
+
+def _tx_entry(tx_id: str, connection: str | None):
+    """Resolve the entry owning tx_id; a mismatched connection param is an
+    error (edge case 5 — the tx pins its connection)."""
+    entry = REGISTRY.locate_tx(tx_id)
+    if connection and connection != entry.name:
+        raise ValueError(
+            f"tx belongs to connection '{entry.name}', not '{connection}'. "
+            "Omit the connection parameter or use the tx's connection."
+        )
+    return entry
+
+
+def _run_tx_select(entry, tx_id: str, sql: str, max_rows: int):
+    """SELECT inside the open transaction (tx_lock, not entry lock)."""
+    if not entry.tx_lock.acquire(timeout=int(os.environ.get("DB_LOCK_WAIT_S", "10"))):
+        raise TimeoutError(f"transaction on '{entry.name}' is busy")
+    try:
+        if entry.tx_id != tx_id:
+            raise LookupError(f"Transaction '{tx_id[:8]}…' already finished.")
+        start = time.time()
+        try:
+            rows, truncated = DIALECTS[entry.dialect].select_tx(entry.tx_handle, sql, max_rows)
+            metrics["query_count"] += 1
+            return rows, truncated
+        except Exception:
+            metrics["query_errors"] += 1
+            raise
+        finally:
+            metrics["total_query_time_ms"] += (time.time() - start) * 1000
+            entry.tx_last_used = time.monotonic()
+    finally:
+        entry.tx_lock.release()
+
+
+def _run_tx_execute(entry, tx_id: str, sql: str) -> int:
+    """Statement inside the open transaction — NO commit (explicit only)."""
+    if not entry.tx_lock.acquire(timeout=int(os.environ.get("DB_LOCK_WAIT_S", "10"))):
+        raise TimeoutError(f"transaction on '{entry.name}' is busy")
+    try:
+        if entry.tx_id != tx_id:
+            raise LookupError(f"Transaction '{tx_id[:8]}…' already finished.")
+        start = time.time()
+        try:
+            rowcount = DIALECTS[entry.dialect].execute_tx(entry.tx_handle, sql)
+            metrics["query_count"] += 1
+            return rowcount
+        except Exception:
+            metrics["query_errors"] += 1
+            raise
+        finally:
+            metrics["total_query_time_ms"] += (time.time() - start) * 1000
+            entry.tx_last_used = time.monotonic()
+    finally:
+        entry.tx_lock.release()
+
+
+def _run_batch(connection: str | None, statements: list[str]) -> str:
+    """Tier 1 atomic batch: all statements on ONE dedicated connection inside
+    one transaction; commit-or-rollback as a unit. Caller holds nothing —
+    the entry lock covers the whole call."""
+    entry = REGISTRY.get(connection)
+    if not entry.lock.acquire(timeout=int(os.environ.get("DB_LOCK_WAIT_S", "10"))):
+        raise TimeoutError(f"connection '{entry.name}' is busy")
+    entry.last_used = time.time()
+    try:
+        dialect = DIALECTS[entry.dialect]
+        tx = dialect.open_tx(entry.handle, entry.params)
+        rowcounts: list[int] = []
+        try:
+            for i, stmt in enumerate(statements):
+                if not stmt or not stmt.strip():
+                    raise ValueError(f"statement {i} is empty")
+                logger.info(f"[SQL] Batch {i + 1}/{len(statements)}: {stmt[:120]}")
+                rowcounts.append(dialect.execute_tx(tx, stmt))
+            dialect.commit_tx(tx)
+        except Exception as e:
+            try:
+                dialect.rollback_tx(tx)
+            except Exception as rb_err:
+                logger.warning(f"batch rollback error: {rb_err}")
+            finally:
+                dialect.close_tx(entry.handle, tx)
+            metrics["query_errors"] += 1
+            failed_at = len(rowcounts)
+            return (
+                f"Error: batch ROLLED BACK at statement {failed_at} "
+                f"(statements 0..{failed_at - 1} rowcounts {rowcounts} were undone). "
+                f"Cause: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
+            )
+        dialect.close_tx(entry.handle, tx)
+        entry.schema_cache.clear()  # batches may contain DDL
+        metrics["query_count"] += len(statements)
+        logger.info(f"[SQL] Batch committed: {len(statements)} statement(s)")
+        return f"OK. Batch committed: {len(statements)} statement(s), rowcounts {rowcounts}"
+    finally:
+        entry.lock.release()
+
+
 @mcp.tool()
 async def get_valid_languages() -> str:
     """Get valid language codes from the LANGUES table (Oracle work DB only)."""
@@ -461,9 +682,11 @@ async def get_valid_languages() -> str:
 
 
 @mcp.tool()
-async def query(sql: str, max_rows: int = 100, connection: str | None = None) -> str:
+async def query(sql: str, max_rows: int = 100, connection: str | None = None,
+                tx_id: str | None = None) -> str:
     """Executes a read-only SQL query (SELECT/WITH) on the active connection
-    (or the named one) and returns up to max_rows rows as JSON-ish text."""
+    (or the named one) and returns up to max_rows rows as JSON-ish text.
+    Pass tx_id to read inside an open transaction (see begin_transaction)."""
     start_time = time.perf_counter()
     if not sql or not sql.strip():
         _timing_update(start_time, "query", False)
@@ -474,10 +697,16 @@ async def query(sql: str, max_rows: int = 100, connection: str | None = None) ->
         _timing_update(start_time, "query", False)
         return guard
     try:
-        def _run(entry):
-            return _run_entry_select(entry, sql, max_rows)
+        if tx_id:
+            def _run_tx(entry):
+                return _run_tx_select(entry, tx_id, sql, max_rows)
+            tx_entry = await asyncio.to_thread(_tx_entry, tx_id, connection)
+            rows, truncated = await asyncio.to_thread(_run_tx, tx_entry)
+        else:
+            def _run(entry):
+                return _run_entry_select(entry, sql, max_rows)
 
-        rows, truncated = await asyncio.to_thread(_with_entry, connection, _run)
+            rows, truncated = await asyncio.to_thread(_with_entry, connection, _run)
     except Exception as e:
         _timing_update(start_time, "query", False)
         return _render_error(e)
@@ -489,15 +718,47 @@ async def query(sql: str, max_rows: int = 100, connection: str | None = None) ->
 
 
 @mcp.tool()
-async def execute_sql(sql: str, connection: str | None = None) -> str:
+async def execute_sql(sql: str = "", connection: str | None = None,
+                      statements: list[str] | None = None,
+                      tx_id: str | None = None) -> str:
     """Executes an SQL statement (INSERT/UPDATE/DELETE/DDL) on the active
-    connection (or the named one); commits and reports affected rows."""
+    connection (or the named one); commits and reports affected rows.
+
+    Atomic batch: pass statements=[...] (mutually exclusive with sql, max 50)
+    to run several statements in ONE all-or-nothing transaction — any failure
+    rolls the whole batch back and reports the failing index.
+    Pass tx_id to execute inside an open transaction WITHOUT committing
+    (see begin_transaction)."""
     start_time = time.perf_counter()
+    if statements is not None and sql.strip():
+        _timing_update(start_time, "execute_sql", False)
+        return "Error: pass either sql or statements, not both"
+    if statements is not None:
+        if not statements:
+            _timing_update(start_time, "execute_sql", False)
+            return "Error: statements must contain at least one statement"
+        if len(statements) > 50:
+            _timing_update(start_time, "execute_sql", False)
+            return "Error: statements supports at most 50 per batch"
+        try:
+            note = await asyncio.to_thread(_run_batch, connection, statements)
+        except Exception as e:
+            _timing_update(start_time, "execute_sql", False)
+            return _render_error(e)
+        _timing_update(start_time, "execute_sql", True)
+        return note
     if not sql or not sql.strip():
         _timing_update(start_time, "execute_sql", False)
         return "Error: sql statement is required"
     logger.info(f"[SQL] Executing statement: {sql[:200]}{'...' if len(sql) > 200 else ''}")
     try:
+        if tx_id:
+            entry0 = REGISTRY.locate_tx(tx_id)
+            rowcount = await asyncio.to_thread(_run_tx_execute, entry0, tx_id, sql)
+            _timing_update(start_time, "execute_sql", True)
+            warn = _oracle_ddl_warning(sql) if entry0.dialect == "oracle" else ""
+            return f"{warn}OK (in transaction, not committed). Rows affected: {rowcount}"
+
         def _run(entry):
             start = time.time()
             try:

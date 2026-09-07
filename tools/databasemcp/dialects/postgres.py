@@ -28,16 +28,19 @@ class PostgresDialect(DbDialect):
     name = "postgres"
     REQUIRED_PARAMS = ("host", "dbname", "user", "password")
 
-    def connect(self, params: dict) -> Any:
-        kwargs = {
+    def _conn_kwargs(self, params: dict, autocommit: bool) -> dict:
+        return {
             "host": params["host"],
             "port": int(params.get("port", 5432)),
             "dbname": params["dbname"],
             "user": params["user"],
             "password": params["password"],
             "connect_timeout": int(params.get("connect_timeout", 10)),
-            "autocommit": True,
+            "autocommit": autocommit,
         }
+
+    def connect(self, params: dict) -> Any:
+        kwargs = self._conn_kwargs(params, autocommit=True)
         try:
             from psycopg_pool import ConnectionPool
             from psycopg.rows import dict_row
@@ -178,3 +181,48 @@ class PostgresDialect(DbDialect):
             "message": message,
             "offset": None,
         }
+
+    # ------------------------------------------------------------------
+    # Transactions (E4): a standalone autocommit-off connection OUTSIDE the
+    # pool (a pinned pool connection would starve max_size=5). P0-c verified
+    # live (2026-09-07): autocommit toggles, uncommitted writes invisible to
+    # other connections, rollback works. psycopg3 has NO in_transaction —
+    # close_tx rolls back unconditionally (a no-op when already committed).
+    # ------------------------------------------------------------------
+
+    def open_tx(self, handle, params: dict) -> Any:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        kwargs = self._conn_kwargs(params, autocommit=False)
+        kwargs["row_factory"] = dict_row
+        kwargs["options"] = (
+            f"-c statement_timeout={int(__import__('os').environ.get('DB_QUERY_TIMEOUT_MS', '30000'))}"
+        )
+        return psycopg.connect(**kwargs)
+
+    def select_tx(self, tx_handle, sql: str, max_rows: int) -> tuple[list[dict], bool]:
+        with tx_handle.cursor() as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchmany(max_rows + 1)
+            data = [dict(r) for r in rows]
+        truncated = len(data) > max_rows
+        return data[:max_rows], truncated
+
+    def execute_tx(self, tx_handle, sql: str) -> int:
+        with tx_handle.cursor() as cursor:
+            cursor.execute(sql)
+            return cursor.rowcount
+
+    def commit_tx(self, tx_handle) -> None:
+        tx_handle.commit()
+
+    def rollback_tx(self, tx_handle) -> None:
+        tx_handle.rollback()
+
+    def close_tx(self, handle, tx_handle) -> None:
+        try:
+            tx_handle.rollback()  # no-op when the caller already committed
+        except Exception:
+            pass
+        tx_handle.close()

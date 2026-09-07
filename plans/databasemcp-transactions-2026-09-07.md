@@ -195,3 +195,25 @@ Deviations section appended during implementation.
 - `reset_connections` force-rolls-back without confirmation (admin-only path).
 - Oracle DDL warning is best-effort keyword matching (CREATE/ALTER/DROP/TRUNCATE/GRANT/
   REVOKE/ANALYZE), not a parser.
+
+## Deviations (recorded during implementation, 2026-09-07)
+
+1. **Dialect ABC grew to 6 tx methods** (open_tx/select_tx/execute_tx/commit_tx/
+   rollback_tx/close_tx) instead of the plan's 3. The plan's signatures
+   (`open_tx(params)`, `close_tx(handle)`) could not reach Oracle's pool —
+   `open_tx` takes `(handle, params)` and `close_tx` takes `(handle, tx_handle)`;
+   `select_tx` was mandatory because PG's `run_select` uses the pool shim and
+   Oracle's `_acquire` would read from a DIFFERENT session than the tx's (breaking
+   uncommitted-read visibility). commit/rollback became ABC methods for uniformity.
+2. **Reaper starts lazily on the first `begin_transaction`**, not in the entry-file
+   startup: `asyncio.create_task` at import time has no running loop, and no
+   abandoned tx can predate the process's first begin (txs die with the process).
+3. **P0-c correction:** psycopg3 has NO `in_transaction` (psycopg2-ism) — `close_tx`
+   rolls back unconditionally (no-op when clean), verified harmless.
+4. **P0-d stayed documented-only** (no live Oracle instance); Oracle tx behavior is
+   covered by the scripted-fake registry tests, not a real driver.
+5. **P0-a/b verified as planned**: libsql `autocommit=False` works, commit/rollback
+   methods exist, uncommitted writes invisible cross-connection until commit.
+6. libSQL batch/tx `CREATE TABLE` before a mid-batch failure may persist (SQLite
+   DDL is non-transactional on file DBs) — the all-or-nothing guarantee covers DML;
+   the live test asserts ROWS are rolled back, not the earlier DDL.

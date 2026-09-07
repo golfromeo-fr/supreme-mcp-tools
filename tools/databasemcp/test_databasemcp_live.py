@@ -220,6 +220,103 @@ class TestPresets:
         assert "Unknown connection" not in out, out
 
 
+class TestTransactions:
+    """E4 live tests — only when the running server has the tx tools."""
+
+    @pytest.fixture(scope="class")
+    def tx_tools(self, tool_names):
+        if "begin_transaction" not in tool_names:
+            pytest.skip("running server predates E4 — restart the launcher to activate")
+        return tool_names
+
+    @pytest.fixture()
+    def tx_db(self):
+        token = uuid.uuid4().hex[:8]
+        name = f"txlive{token[:6]}"
+        url = f"file:/tmp/dbmcp_tx_live_{token}.db"
+        _run(_call("connect_database", {
+            "name": name, "db_type": "libsql", "params": {"url": url},
+        }))
+        _run(_call("execute_sql", {
+            "sql": "CREATE TABLE tl (id INTEGER PRIMARY KEY, v TEXT)",
+            "connection": name,
+        }))
+        yield name
+        try:
+            _run(_call("disconnect_database", {"name": name}))
+        finally:
+            for suf in ("", "-wal", "-shm", "-journal"):
+                try:
+                    os.unlink(f"/tmp/dbmcp_tx_live_{token}.db{suf}")
+                except FileNotFoundError:
+                    pass
+
+    def _tx_id(self, begin_out: str) -> str:
+        return begin_out.split("Transaction ")[1].split(" ")[0]
+
+    def test_rollback_round_trip(self, tx_tools, tx_db):
+        begin = _run(_call("begin_transaction", {"connection": tx_db}))
+        tx_id = self._tx_id(begin)
+        try:
+            out = _run(_call("execute_sql", {
+                "sql": "INSERT INTO tl VALUES (1, 'in-tx')",
+                "connection": tx_db, "tx_id": tx_id,
+            }))
+            assert "not committed" in out, out
+            inside = _run(_call("query", {"sql": "SELECT count(*) AS n FROM tl", "tx_id": tx_id}))
+            assert "'n': 1" in inside, inside
+            outside = _run(_call("query", {"sql": "SELECT count(*) AS n FROM tl", "connection": tx_db}))
+            assert "'n': 0" in outside, outside
+            rb = _run(_call("rollback_transaction", {"tx_id": tx_id}))
+            assert "rolled back" in rb, rb
+            after = _run(_call("query", {"sql": "SELECT count(*) AS n FROM tl", "connection": tx_db}))
+            assert "'n': 0" in after, after
+        except Exception:
+            try:
+                _run(_call("rollback_transaction", {"tx_id": tx_id}))
+            except Exception:
+                pass
+            raise
+
+    def test_commit_round_trip(self, tx_tools, tx_db):
+        begin = _run(_call("begin_transaction", {"connection": tx_db}))
+        tx_id = self._tx_id(begin)
+        out = _run(_call("execute_sql", {
+            "sql": "INSERT INTO tl VALUES (2, 'kept')",
+            "connection": tx_db, "tx_id": tx_id,
+        }))
+        assert "not committed" in out, out
+        cm = _run(_call("commit_transaction", {"tx_id": tx_id}))
+        assert "committed" in cm, cm
+        after = _run(_call("query", {"sql": "SELECT count(*) AS n FROM tl", "connection": tx_db}))
+        assert "'n': 1" in after, after
+
+    def test_batch_all_or_nothing(self, tx_tools, tx_db):
+        out = _run(_call("execute_sql", {"statements": [
+            f"CREATE TABLE bl_{uuid.uuid4().hex[:6]} (id INTEGER PRIMARY KEY)",
+            "INSERT INTO tl VALUES (3, 'batch')",
+            "INSERT INTO tl VALUES ('oops')",  # fails -> whole batch rolled back
+        ], "connection": tx_db}))
+        assert "ROLLED BACK" in out, out
+        after = _run(_call("query", {"sql": "SELECT count(*) AS n FROM tl", "connection": tx_db}))
+        assert "'n': 0" in after, after  # nothing from the batch applied
+
+    def test_tx_guards(self, tx_tools, tx_db):
+        begin = _run(_call("begin_transaction", {"connection": tx_db}))
+        tx_id = self._tx_id(begin)
+        try:
+            second = _run(_call("begin_transaction", {"connection": tx_db}))
+            assert "already has an active transaction" in second, second
+            mismatch = _run(_call("query", {
+                "sql": "SELECT 1", "tx_id": tx_id, "connection": "no-such-conn",
+            }))
+            assert "belongs to connection" in mismatch, mismatch
+        finally:
+            _run(_call("rollback_transaction", {"tx_id": tx_id}))
+        replay = _run(_call("rollback_transaction", {"tx_id": tx_id}))
+        assert "Unknown or already-finished" in replay, replay
+
+
 if __name__ == "__main__":
     sys_exit = pytest.main([__file__, "-v"])
     raise SystemExit(sys_exit)

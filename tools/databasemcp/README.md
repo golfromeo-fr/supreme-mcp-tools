@@ -42,6 +42,31 @@ zero containers. Note: a `file:` path that doesn't exist is created empty.
 | `DB_QUERY_TIMEOUT_MS` | 30000 | Postgres statement timeout |
 | `DB_LOCK_WAIT_S` | 10 | Wait for a busy connection before reporting it busy |
 | `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` | — | AI SQL optimization endpoint (gpt-4.1 default model) |
+| `DB_TX_IDLE_TIMEOUT` | 300 s | Idle seconds before the reaper rolls an open transaction back; `0` disables the reaper |
+
+## Transactions (E4)
+
+Every tool call is a committed unit (autocommit; per-call pool release).
+Interactive transactions pin a **dedicated** connection per transaction —
+one transaction per connection entry — so ordinary traffic is never blocked:
+
+- `begin_transaction(connection?)` → returns a `tx_id`
+- `query(..., tx_id)` / `execute_sql(..., tx_id)` — statements inside the
+  transaction; **nothing commits implicitly** (visible only through the tx
+  until you finish it)
+- `commit_transaction(tx_id)` / `rollback_transaction(tx_id)` — finish it and
+  release the dedicated connection
+- `execute_sql(statements=[...])` — atomic batch: up to 50 statements in one
+  all-or-nothing transaction (failing index + undone rowcounts reported)
+
+Guards: `disconnect_database` refuses while a transaction is open;
+`reset_connections` (mgmt action) force-rolls-back; the reaper reaps idle
+transactions (log line per reap). Oracle caveat: DDL commits implicitly —
+a DDL statement inside a transaction ends it server-side (the tool warns).
+libSQL caveat: `file:`/Turso transactions need a second connection — handled
+by the dialect; Postgres transactions run outside the pool. Long-idle
+transactions on PG hold `idle in transaction` sessions — the reaper is the
+first line of defense, `idle_in_transaction_session_timeout` the backstop.
 
 ## Rules files (user-local)
 

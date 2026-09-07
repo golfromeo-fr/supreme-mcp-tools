@@ -46,3 +46,39 @@ class DbDialect(ABC):
     @abstractmethod
     def format_error(self, e: Exception) -> dict:
         """{"error": str, "code": str|None, "message": str, "offset": int|None}"""
+
+    # ------------------------------------------------------------------
+    # Transaction support (E4). A transaction pins a DEDICATED handle with
+    # autocommit off — pool handles are never held for this (except Oracle,
+    # whose session pool is the only connection source). Statements inside a
+    # transaction NEVER commit implicitly; commit/rollback are explicit.
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def open_tx(self, handle, params: dict) -> Any:
+        """Open a dedicated autocommit-off connection for a transaction.
+
+        handle is the entry's pool/connection handle (Oracle acquires a
+        session from it; Postgres/libsql ignore it and connect standalone).
+        Returns the tx handle."""
+
+    @abstractmethod
+    def select_tx(self, tx_handle, sql: str, max_rows: int) -> tuple[list[dict], bool]:
+        """Run a SELECT inside the transaction; (rows, truncated). No commit."""
+
+    @abstractmethod
+    def execute_tx(self, tx_handle, sql: str) -> int:
+        """Run a statement inside the transaction WITHOUT committing; rowcount."""
+
+    @abstractmethod
+    def commit_tx(self, tx_handle) -> None:
+        """Commit the transaction."""
+
+    @abstractmethod
+    def rollback_tx(self, tx_handle) -> None:
+        """Roll back the transaction."""
+
+    @abstractmethod
+    def close_tx(self, handle, tx_handle) -> None:
+        """Release the tx handle: rollback-if-open (harmless when clean),
+        then close the connection / return the session to its pool."""

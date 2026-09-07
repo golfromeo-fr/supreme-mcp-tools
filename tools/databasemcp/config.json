@@ -43,7 +43,7 @@
     },
     {
       "name": "execute_sql",
-      "description": "Execute an SQL statement (INSERT/UPDATE/DELETE/DDL), commit, report affected rows"
+      "description": "Execute an SQL statement (INSERT/UPDATE/DELETE/DDL), commit, report affected rows; or an atomic batch via statements=[]; or run inside an open transaction via tx_id"
     },
     {
       "name": "get_schemas",
@@ -56,6 +56,18 @@
     {
       "name": "explain_plan",
       "description": "Return the execution plan for a SQL statement (dialect-specific)"
+    },
+    {
+      "name": "begin_transaction",
+      "description": "Begin an interactive transaction (one per connection); returns a tx_id for query/execute_sql; idle reaper rolls abandoned ones back"
+    },
+    {
+      "name": "commit_transaction",
+      "description": "Commit the open transaction by tx_id and release its dedicated connection"
+    },
+    {
+      "name": "rollback_transaction",
+      "description": "Roll back the open transaction by tx_id and release its dedicated connection"
     },
     {
       "name": "get_valid_languages",
@@ -149,6 +161,14 @@
       "type": "integer",
       "default": "10",
       "minimum": 1
+    },
+    "DB_TX_IDLE_TIMEOUT": {
+      "description": "Seconds an interactive transaction may stay idle before the reaper rolls it back; 0 disables the reaper",
+      "required": false,
+      "secret": false,
+      "type": "integer",
+      "default": "300",
+      "minimum": 0
     },
     "AI_API_KEY": {
       "description": "API key for the AI SQL optimization",

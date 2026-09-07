@@ -10,6 +10,7 @@ plans/databasemcp-overhaul-2026-09-06.md).
 import os
 import threading
 import time as _time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,6 +53,14 @@ class ConnectionEntry:
     last_error: str | None = None
     schema_cache: dict = field(default_factory=dict)   # table -> describe_table() result
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Active transaction (E4) — at most ONE per entry. tx_lock serializes
+    # begin/commit/rollback/reap against in-flight tx statements (it is NOT
+    # the entry lock, which is never held across calls).
+    tx_id: str | None = None
+    tx_handle: Any = None
+    tx_opened_at: float | None = None    # monotonic()
+    tx_last_used: float | None = None    # monotonic()
+    tx_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 class ConnectionRegistry:
@@ -91,6 +100,12 @@ class ConnectionRegistry:
             if entry is None:
                 raise LookupError(
                     f"Unknown connection '{name}'. Available: {sorted(self._entries) or 'none'}"
+                )
+            if entry.tx_id:
+                age = int(_time.monotonic() - (entry.tx_last_used or entry.tx_opened_at or 0))
+                return (
+                    f"Connection '{name}' has an active transaction (tx {entry.tx_id[:8]}…, "
+                    f"idle {age}s). Commit or roll it back first."
                 )
             if not entry.lock.acquire(timeout=1):
                 return f"Connection '{name}' is busy (a query is running); retry after it completes."
@@ -195,12 +210,15 @@ class ConnectionRegistry:
                     "created_at": e.created_at,
                     "last_used": e.last_used,
                     "last_error": e.last_error,
+                    "tx": e.tx_id[:8] if e.tx_id else None,
                 }
                 for e in self._entries.values()
             ]
 
     def close_all(self) -> tuple[int, int]:
-        """Close every idle connection; busy entries are skipped. Returns (closed, skipped)."""
+        """Close every connection; busy entries are skipped. Active
+        transactions are force-rolled-back first (admin escape hatch).
+        Returns (closed, skipped)."""
         closed = skipped = 0
         with self._map_lock:
             names = list(self._entries)
@@ -209,6 +227,15 @@ class ConnectionRegistry:
                 entry = self._entries.get(name)
                 if entry is None:
                     continue
+                if entry.tx_id:
+                    # force-rollback (reset_connections is the admin path)
+                    if not entry.tx_lock.acquire(timeout=1):
+                        skipped += 1
+                        continue
+                    try:
+                        self._abort_tx(entry)
+                    finally:
+                        entry.tx_lock.release()
                 if not entry.lock.acquire(timeout=1):
                     skipped += 1
                     continue
@@ -224,6 +251,113 @@ class ConnectionRegistry:
         if self._active not in self._entries:
             self._active = next(iter(self._entries), None)
         return closed, skipped
+
+    # ------------------------------------------------------------------
+    # Transactions (E4) — at most ONE active tx per entry.
+    # ------------------------------------------------------------------
+
+    def begin_tx(self, name: str | None = None) -> tuple[ConnectionEntry, str]:
+        """Open a transaction on the named (or active) connection; the
+        preset bypass applies. Returns (entry, tx_id)."""
+        entry = self.get(name)
+        with entry.tx_lock:
+            if entry.tx_id:
+                age = int(_time.monotonic() - (entry.tx_last_used or entry.tx_opened_at or 0))
+                raise RuntimeError(
+                    f"Connection '{entry.name}' already has an active transaction "
+                    f"(tx {entry.tx_id[:8]}…, idle {age}s). One transaction per connection."
+                )
+            tx_handle = DIALECTS[entry.dialect].open_tx(entry.handle, entry.params)
+            entry.tx_id = uuid.uuid4().hex
+            entry.tx_handle = tx_handle
+            entry.tx_opened_at = _time.monotonic()
+            entry.tx_last_used = entry.tx_opened_at
+            metrics["transactions_begun"] += 1
+            logger.info(
+                f"[databasemcp] tx {entry.tx_id[:8]}… opened on '{entry.name}' ({entry.dialect})"
+            )
+            return entry, entry.tx_id
+
+    def locate_tx(self, tx_id: str) -> ConnectionEntry:
+        """Find the entry owning tx_id (map-lock protected)."""
+        with self._map_lock:
+            for entry in self._entries.values():
+                if entry.tx_id == tx_id:
+                    return entry
+        raise LookupError(
+            f"Unknown or already-finished transaction '{(tx_id or '')[:8]}…'. "
+            "Open one with begin_transaction."
+        )
+
+    def finish_tx(self, tx_id: str, commit: bool) -> ConnectionEntry:
+        """Commit (True) or roll back (False) the transaction; releases the
+        dedicated handle. Returns the entry."""
+        entry = self.locate_tx(tx_id)
+        verb = "commit" if commit else "rollback"
+        with entry.tx_lock:
+            if entry.tx_id != tx_id:
+                raise LookupError(f"Transaction '{tx_id[:8]}…' already finished.")
+            try:
+                if commit:
+                    DIALECTS[entry.dialect].commit_tx(entry.tx_handle)
+                else:
+                    DIALECTS[entry.dialect].rollback_tx(entry.tx_handle)
+                DIALECTS[entry.dialect].close_tx(entry.handle, entry.tx_handle)
+            finally:
+                entry.tx_id = None
+                entry.tx_handle = None
+                entry.tx_opened_at = None
+                entry.tx_last_used = None
+            if commit:
+                entry.schema_cache.clear()  # DDL staleness guard, as in execute_sql
+            metrics["transactions_committed" if commit else "transactions_rolled_back"] += 1
+            logger.info(f"[databasemcp] tx {tx_id[:8]}… {verb} on '{entry.name}'")
+            return entry
+
+    def _abort_tx(self, entry: ConnectionEntry, reason: str = "aborted") -> None:
+        """Roll back + release an entry's tx without ownership checks
+        (reaper/reset path — caller holds tx_lock)."""
+        tx_id = entry.tx_id
+        try:
+            if entry.tx_handle is not None:
+                try:
+                    DIALECTS[entry.dialect].rollback_tx(entry.tx_handle)
+                except Exception as rb_err:
+                    logger.warning(f"tx {tx_id[:8]}… rollback error: {rb_err}")
+                try:
+                    DIALECTS[entry.dialect].close_tx(entry.handle, entry.tx_handle)
+                except Exception as cl_err:
+                    logger.warning(f"tx {tx_id[:8]}… close error: {cl_err}")
+        finally:
+            entry.tx_id = None
+            entry.tx_handle = None
+            entry.tx_opened_at = None
+            entry.tx_last_used = None
+            metrics["transactions_reaped"] += 1
+            logger.info(f"[databasemcp] tx {tx_id[:8]}… {reason} on '{entry.name}'")
+
+    def reap_idle_txs(self, idle_timeout: float) -> int:
+        """Roll back transactions idle longer than idle_timeout (monotonic
+        seconds). Non-blocking per entry — a tx with an in-flight statement
+        is skipped and reaped on a later sweep. Returns the count reaped."""
+        reaped = 0
+        with self._map_lock:
+            candidates = [e for e in self._entries.values() if e.tx_id]
+        for entry in candidates:
+            if not entry.tx_lock.acquire(blocking=False):
+                continue  # statement in flight — next sweep
+            try:
+                if entry.tx_id is None:
+                    continue  # finished while we waited
+                now = _time.monotonic()
+                idle = now - (entry.tx_last_used or entry.tx_opened_at or now)
+                if idle < idle_timeout:
+                    continue
+                self._abort_tx(entry, reason=f"reaped (idle {int(idle)}s)")
+                reaped += 1
+            finally:
+                entry.tx_lock.release()
+        return reaped
 
 
 REGISTRY = ConnectionRegistry()
