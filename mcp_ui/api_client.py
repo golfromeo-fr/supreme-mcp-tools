@@ -286,12 +286,15 @@ class APIClient:
         extension_name: str,
         params: dict | None = None,
     ) -> APIResponse:
-        """Query a data source extension."""
-        payload = params or {}
+        """Query a data source extension.
+
+        The central route expects the params INSIDE a "params" key
+        (QueryRequest.params) — sending them bare meant handlers always
+        received empty params (found 2026-09-07 via connect_preset)."""
         return await self._request(
             "POST",
             f"/api/tools/{tool_name}/extensions/{extension_name}/query",
-            json=payload,
+            json={"params": params or {}},
         )
 
     async def execute_extension(
@@ -300,12 +303,14 @@ class APIClient:
         extension_name: str,
         params: dict | None = None,
     ) -> APIResponse:
-        """Execute an action extension."""
-        payload = params or {}
+        """Execute an action extension.
+
+        Same contract as query_extension: the route expects
+        ExecuteRequest.params — params must ride inside a "params" key."""
         return await self._request(
             "POST",
             f"/api/tools/{tool_name}/extensions/{extension_name}/execute",
-            json=payload,
+            json={"params": params or {}},
         )
 
     # === Disabled Tools Configuration ===

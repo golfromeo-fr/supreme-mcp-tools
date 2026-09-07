@@ -771,10 +771,16 @@ async def _render_presets_section(handlers: dict) -> None:
         if not action.success:
             show_error(f"{ext_name} failed: {action.error}")
         else:
+            # Central proxy wraps tool responses ({"result": {"result": ...}}
+            # for actions, {"data": {"data": ...}} for queries) — unwrap.
             data = action.data if isinstance(action.data, dict) else {}
-            for _ in range(2):
-                if "success" not in data and isinstance(data.get("data"), dict):
-                    data = data["data"]
+            for _ in range(3):
+                if "success" in data:
+                    break
+                inner = data.get("result") or data.get("data")
+                if not isinstance(inner, dict):
+                    break
+                data = inner
             if data.get("success", True):
                 show_success(data.get("message", "Action executed"))
             else:

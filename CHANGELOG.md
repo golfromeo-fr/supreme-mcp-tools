@@ -7,6 +7,7 @@ All notable changes to the MCP Launcher will be documented in this file.
 ### 2026-09-07 — databasemcp presets in mcp_ui (panel + mgmt actions)
 - **Added**: mcp_ui databasemcp Overview tab now renders a **DB Connection Presets** panel — numbered `.env` presets with dialect badge, `_DESC` label, masked URL, live connected state, and per-preset **Connect / Disconnect** buttons (`mcp_ui/components/presets_panel.py`; data fetched fresh from the `connection_presets` data source at render time).
 - **Added**: two databasemcp mgmt action extensions backing the buttons — `connect_preset` (by number/NAME alias, idempotent when already connected, secret-masking on failure) and `disconnect_connection`; `tests/test_db_ui_actions.py`.
+- **Fixed**: mcp_ui `query_extension`/`execute_extension` sent params BARE while the central routes expect `{"params": ...}` (`QueryRequest`/`ExecuteRequest`) — every parameterized extension call silently reached handlers as empty params (found 2026-09-07: connect_preset answered "Provide 'preset'"); params now ride inside the key, and the panel unwraps the proxy's double envelope (`data`/`result`).
 - **Doc**: transaction-management plan (`plans/databasemcp-transactions-2026-09-07.md`, E4) + native transaction-testing procedures in `.agents/skills/mcp-live-tool-test/SKILL.md` (libsql cross-call BEGIN/ROLLBACK verified; PG BEGIN-discarded verified).
 
 ### 2026-09-06 — databasemcp: oraclemcp renamed + multi-database overhaul (feature/databasemcp)
