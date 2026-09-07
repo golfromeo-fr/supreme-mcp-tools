@@ -459,7 +459,24 @@ asyncio.create_task for loads, dialogs awaited in async handlers.
    present and NO I/O at import (lazy `_cached_store` only).
 3. `MCP_AUTH_MODE=mono` path must remain byte-identical: the factory reads
    the env ONCE at call time; when mono, users_store is never imported by
-   the factory (import inside the multi branch).
+   the factory (import inside the multi branch). REGRESSION TEST (named):
+   `test_mono_mode_unchanged` — mono env + fresh factory call → verifier is
+   a plain DualHeaderVerifier with exactly ONE token, no middleware on the
+   instance, and `"users_store" not in sys.modules` afterwards.
+4. Integration-test scaffolding: COPY the live-app pattern from
+   `tests/test_era_negotiation.py` (uvicorn.Server + daemon thread on a
+   scratch port, fastmcp Client with BearerAuth) — do not invent a new one.
+5. Secrets never logged: mcp_key/password_hash filtered in every list/get
+   path; tests assert their absence in `list_users()` output and API bodies.
+6. Unanswered design question → implement the plan's default, mark it in
+   the commit message as veto-able.
+7. RECOMMENDED SPLIT (risk-based): P0, M1, users_store, central /api/users
+   = flash-safe (pure backend, spec'd to signatures). The mcp_ui M2 slice
+   (login swap in management_ui.py + Users tab) is the highest-risk surface
+   for ANY model (NiceGUI event-wiring history; two bugs there this week
+   came from GLM-5.3 itself) — either GLM-5.3 takes that slice, or flash
+   does it WITH the browser-verification step (in-app browser, DOM-dispatch
+   clicks, per-element counts) as a hard gate before the phase commit.
 4. Secrets never logged: mcp_key/password_hash filtered in every list/get
    path; tests assert their absence in `list_users()` output and API bodies.
 5. Unanswered design question → implement the plan's default, mark it in
