@@ -202,8 +202,11 @@ def _default_masks_for(role: str, servers: list[str]) -> dict:
 
 def create_user(username: str, password: str, role: str = "user",
                 servers: list[str] | None = None,
-                masked_functions: dict | None = None) -> dict:
-    """Create a user; returns {"username", "mcp_key"} — mcp_key shown ONCE."""
+                masked_functions: dict | None = None,
+                db_presets: list[str] | None = None,
+                rag_collections: list[str] | None = None) -> dict:
+    """Create a user; returns {"username", "mcp_key"} — mcp_key shown ONCE.
+    db_presets/rag_collections = E3.5 data-plane grants."""
     username = (username or "").strip().lower()
     if not USERNAME_RE.match(username):
         raise ValueError(
@@ -228,6 +231,8 @@ def create_user(username: str, password: str, role: str = "user",
         "servers": sorted(set(servers or [])),
         "masked_functions": (dict(masked_functions) if masked_functions is not None
                              else _default_masks_for(role, sorted(set(servers or [])))),
+        "db_presets": list(db_presets or []),
+        "rag_collections": list(rag_collections or []),
         "enabled": True,
         "created_at": _now_iso(),
         "key_rotated_at": _now_iso(),
@@ -306,6 +311,38 @@ def set_masked_functions(username: str, masks: dict) -> None:
     record["masked_functions"] = clean
     _touch(record)
     save_users(store)
+
+
+def set_db_presets(username: str, presets: list) -> None:
+    """E3.5: which databasemcp presets/connections this user may use."""
+    store = load_users()
+    record = store["users"].get((username or "").lower())
+    if record is None:
+        raise ValueError(f"user '{username}' does not exist")
+    record["db_presets"] = sorted({str(x) for x in (presets or [])})
+    _touch(record)
+    save_users(store)
+
+
+def set_rag_collections(username: str, collections: list) -> None:
+    """E3.5: which ragmcp collections this user may use."""
+    store = load_users()
+    record = store["users"].get((username or "").lower())
+    if record is None:
+        raise ValueError(f"user '{username}' does not exist")
+    record["rag_collections"] = sorted({str(x) for x in (collections or [])})
+    _touch(record)
+    save_users(store)
+
+
+def get_data_grants(username: str) -> dict:
+    record = get_user_record(username)
+    if record is None:
+        raise ValueError(f"user '{username}' does not exist")
+    return {
+        "db_presets": record.get("db_presets", []),
+        "rag_collections": record.get("rag_collections", []),
+    }
 
 
 def revoke_system_key(tool_name: str) -> None:
@@ -451,6 +488,8 @@ def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
             "role": record.get("role", "user"),
             "masked": list((record.get("masked_functions") or {}).get(tool, [])),
             "scopes": ["mcp"],
+            "db_presets": list(record.get("db_presets", [])),
+            "rag_collections": list(record.get("rag_collections", [])),
         }
     return tokens
 

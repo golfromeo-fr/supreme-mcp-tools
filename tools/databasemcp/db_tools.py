@@ -119,6 +119,13 @@ async def connect_preset(preset: str) -> str:
     except LookupError as e:
         _timing_update(start_time, "connect_preset", False)
         return f"Error: {e}"
+    # E3.5: preset grants are per user (admin bypasses)
+    from connections import preset_grant_error, _current_caller_grants
+    err = preset_grant_error(p_.number, p_.name, p_.connection_name,
+                             *_current_caller_grants())
+    if err:
+        _timing_update(start_time, "connect_preset", False)
+        return f"Error: {err}"
 
     def _connect():
         REGISTRY.connect(p_.connection_name, p_.dialect, p_.params)
