@@ -417,6 +417,79 @@ async def main() -> int:
         check("central 8200 wrong key → 401", r.status_code == 401)
 
     # ==================================================================
+    # central auth with user keys
+    # ==================================================================
+    print("\n── central auth with user keys ──")
+    async with httpx.AsyncClient(timeout=10) as hc:
+        # user key → 401 on central (central only accepts system key)
+        r = await hc.get("http://127.0.0.1:8200/api/tools",
+                         headers={"Authorization": f"Bearer {alice_key}"})
+        check("central rejects user key (401)", r.status_code == 401)
+
+        # no key → 401
+        r = await hc.get("http://127.0.0.1:8200/api/tools")
+        check("central no key → 401", r.status_code == 401)
+
+        # admin user key → also 401 (central only accepts system key, not user keys)
+        admin_rec = users_store.get_user_record("e35admin")
+        r = await hc.get("http://127.0.0.1:8200/api/tools",
+                         headers={"Authorization": f"Bearer {admin_rec['mcp_key']}"})
+        check("central admin user key → 401 (needs system key)", r.status_code == 401)
+
+    # ==================================================================
+    # store corruption resilience
+    # ==================================================================
+    print("\n── store corruption resilience ──")
+    # save the current store
+    store_backup = STORE_PATH.read_text()
+    # write invalid JSON
+    STORE_PATH.write_text("{invalid json!!!")
+    import time
+    time.sleep(0.3)  # allow mtime cache to notice
+    # verify graceful fallback
+    rec = users_store.get_user_record("e35alice")
+    check("corrupt store → graceful fallback", rec is None or isinstance(rec, dict))
+    # restore
+    STORE_PATH.write_text(store_backup)
+    time.sleep(0.3)
+    rec = users_store.get_user_record("e35alice")
+    check("store restored after corruption test", rec is not None)
+
+    # ==================================================================
+    # store hot-reload (external edit propagates)
+    # ==================================================================
+    print("\n── store hot-reload ──")
+    # add a user directly to the file (external edit)
+    store_raw = json.loads(STORE_PATH.read_text())
+    store_raw["users"]["e35hotreload"] = {
+        "username": "e35hotreload",
+        "password_hash": users_store.hash_password("hot-reload-pass"),
+        "role": "user",
+        "mcp_key": "hot-reload-test-key-12345",
+        "servers": ["simplemcp"],
+        "masked_functions": {},
+        "db_presets": [],
+        "rag_collections": [],
+        "enabled": True,
+        "created_at": "2026-09-08T00:00:00+00:00",
+        "key_rotated_at": "2026-09-08T00:00:00+00:00",
+        "updated_at": "2026-09-08T00:00:00+00:00",
+    }
+    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
+    import time
+    time.sleep(0.5)  # allow mtime cache to notice
+
+    # verify the new user can authenticate via the MCP surface
+    hot_tools = await mcp_list_tools("simplemcp", "hot-reload-test-key-12345")
+    check("hot-reload user works (external edit picked up)",
+          isinstance(hot_tools, list) and "double" in hot_tools)
+
+    # cleanup hot-reload user
+    store_raw = json.loads(STORE_PATH.read_text())
+    store_raw["users"].pop("e35hotreload", None)
+    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
+
+    # ==================================================================
     # cleanup
     # ==================================================================
     print("\n── cleanup ──")
