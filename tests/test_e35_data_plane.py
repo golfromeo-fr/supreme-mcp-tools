@@ -18,6 +18,7 @@ Covers:
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -274,7 +275,7 @@ async def main() -> int:
             check("tx rollback", False)
 
     # ==================================================================
-    # ragmcp: collection access
+    # ragmcp collection access
     # ==================================================================
     print("\n── ragmcp collection access ──")
 
@@ -284,7 +285,105 @@ async def main() -> int:
     check("alice sees ragmcp tools", isinstance(alice_tools, list) and "search" in alice_tools)
 
     # ==================================================================
-    # identity & masks (E1 + E3 composition)
+    # key rotation lifecycle
+    # ==================================================================
+    print("\n── key rotation lifecycle ──")
+    alice_old_key = alice_key
+    users_store.rotate_key("e35alice")
+    alice_new_key = users_store.get_user_record("e35alice")["mcp_key"]
+    check("key changed on rotate", alice_old_key != alice_new_key)
+
+    old_tools = await mcp_list_tools("simplemcp", alice_old_key)
+    check("old key rejected after rotation", isinstance(old_tools, str) and "REJECTED" in old_tools)
+
+    new_tools = await mcp_list_tools("simplemcp", alice_new_key)
+    check("new key works after rotation", isinstance(new_tools, list) and "double" in new_tools)
+
+    alice_key = alice_new_key  # update for subsequent tests
+
+    # ==================================================================
+    # role transition
+    # ==================================================================
+    print("\n── role transition ──")
+    record = users_store.get_user_record("e35bob")
+    record["role"] = "admin"
+    store_raw = json.loads(STORE_PATH.read_text())
+    store_raw["users"]["e35bob"]["role"] = "admin"
+    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
+    import time
+    time.sleep(0.5)  # allow mtime cache to notice
+
+    # bob (now admin) should see users-manager-type power
+    bob_rec = users_store.get_user_record("e35bob")
+    check("bob promoted to admin", bob_rec["role"] == "admin")
+
+    # demote back
+    store_raw = json.loads(STORE_PATH.read_text())
+    store_raw["users"]["e35bob"]["role"] = "user"
+    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
+    time.sleep(0.3)
+
+    # ==================================================================
+    # concurrent two-user access
+    # ==================================================================
+    print("\n── concurrent two-user access ──")
+    alice_mem2 = await mcp_call("memorymcp", alice_key, "upsertMemory", {
+        "text": "e35test concurrent alice memory",
+        "memory_type": "concept", "source": "e35test",
+    })
+    bob_mem2 = await mcp_call("memorymcp", bob_key, "upsertMemory", {
+        "text": "e35test concurrent bob memory",
+        "memory_type": "concept", "source": "e35test",
+    })
+    alice_mem2_id = _extract_id(alice_mem2)
+    bob_mem2_id = _extract_id(bob_mem2)
+
+    # simultaneous queries
+    alice_cq, bob_cq = await asyncio.gather(
+        mcp_call("memorymcp", alice_key, "queryMemory",
+                 {"query": "e35test concurrent", "k": 20}),
+        mcp_call("memorymcp", bob_key, "queryMemory",
+                 {"query": "e35test concurrent", "k": 20}),
+    )
+    check("concurrent: alice sees own only", "alice" in alice_cq.lower() and "bob" not in alice_cq.lower())
+    check("concurrent: bob sees own only", "bob" in bob_cq.lower() and "alice" not in bob_cq.lower())
+
+    # ==================================================================
+    # E4 tx + identity composition
+    # ==================================================================
+    print("\n── E4 tx + identity ──")
+    alice_p = await mcp_call("databasemcp", alice_key, "connect_preset",
+                             {"preset": "02"})
+    check("alice reconnect preset 02", "connected" in alice_p.lower()
+          or "already" in alice_p.lower())
+
+    alice_tx = await mcp_call("databasemcp", alice_key, "begin_transaction",
+                              {"connection": "02"})
+    check("alice begin_transaction", "opened" in alice_tx.lower())
+    tx_id = ""
+    for word in alice_tx.split():
+        if len(word) == 32 and all(c in "0123456789abcdef" for c in word):
+            tx_id = word
+            break
+
+    if tx_id:
+        try:
+            tx_q = await mcp_call("databasemcp", alice_key, "query",
+                                  {"sql": "SELECT 1 AS t", "connection": "02",
+                                   "tx_id": tx_id})
+            check("tx-scoped query works", "t" in tx_q.lower() or "1" in tx_q)
+        except Exception as e:
+            check("tx-scoped query", False)
+            print(f"    err: {e}")
+        try:
+            tx_rb = await mcp_call("databasemcp", alice_key, "rollback_transaction",
+                                   {"tx_id": tx_id})
+            check("tx rollback", "rolled back" in tx_rb.lower())
+        except Exception:
+            check("tx rollback", False)
+
+    # ==================================================================
+    # identity & mask composition
     # ==================================================================
     print("\n── identity & mask composition ──")
 
