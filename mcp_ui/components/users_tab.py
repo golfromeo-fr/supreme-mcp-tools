@@ -8,8 +8,7 @@ container.clear() rebuilds, asyncio.create_task for loads, dialogs awaited
 in async handlers.
 """
 
-import json
-import json
+import asyncio
 import json
 import logging
 from pathlib import Path
