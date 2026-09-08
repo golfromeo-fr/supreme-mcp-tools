@@ -272,6 +272,22 @@ def try_login_user(username: str, password: str) -> dict:
     raise ValueError("Wrong username or password")
 
 
+@ui.page("/users")
+def users_page() -> None:
+    """E3: user-account management page — admin only, multi mode only."""
+    if not (_multi_user_mode()
+            and nicegui_app.storage.user.get("role", "user") == "admin"
+            and nicegui_app.storage.user.get("authenticated", False)):
+        ui.navigate.to("/")
+        return
+    with ui.column().classes("w-full max-w-4xl p-4 gap-2 mx-auto"):
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.button("Back", icon="arrow_back", on_click=lambda: ui.navigate.to("/"))                .props("flat dense")
+            ui.label("User accounts").classes("text-h6")
+        _users_container = ui.column().classes("w-full")
+        render_users_tab(_users_container)
+
+
 # =============================================================================
 # Page Functions
 # =============================================================================
@@ -660,6 +676,12 @@ async def main_page() -> None:
             sidebar_container = ui.column().classes("w-full gap-2")
             with ui.column().classes("w-full gap-2 mt-auto"):
                 ui.separator()
+                if _multi_user_mode() and nicegui_app.storage.user.get("role", "user") == "admin":
+                    ui.button(
+                        "Users",
+                        icon="groups",
+                        on_click=lambda: ui.navigate.to("/users"),
+                    ).classes("w-full").tooltip("Manage user accounts (E3 multi-user)")
                 ui.button(
                     "Function Masks",
                     icon="visibility_off",
@@ -708,14 +730,10 @@ async def _render_content_area(state, handlers: dict) -> None:
 
     detail = state.selected_tool_detail
     is_memory = detail is not None and detail.name == "memorymcp"
-    session_role = nicegui_app.storage.user.get("role", "user") if _multi_user_mode() else "admin"
-    is_admin = session_role == "admin"
     with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
         ui.tab("overview", icon="dashboard", label="Overview")
         if is_memory:
             ui.tab("memory", icon="memory", label="Memory")
-        if is_admin and _multi_user_mode():
-            ui.tab("users", icon="groups", label="Users")
         ui.tab("functions", icon="checklist", label="Functions")
         ui.tab("extensions", icon="extension", label="Extensions")
         ui.tab("env", icon="tune", label="Env Vars")
@@ -731,10 +749,6 @@ async def _render_content_area(state, handlers: dict) -> None:
                     _memory_panel,
                     api_key=nicegui_app.storage.user.get("mcp_key"),
                 )
-        if is_admin and _multi_user_mode():
-            with ui.tab_panel("users"):
-                _users_panel = ui.column().classes("w-full")
-                render_users_tab(_users_panel)
         with ui.tab_panel("functions"):
             _render_functions_tab(state, detail, handlers)
         with ui.tab_panel("extensions"):
