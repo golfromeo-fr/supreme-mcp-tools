@@ -828,6 +828,9 @@ async def search(
     - 'sidebar': Sidebar context block
     """
     logger.debug(f"Processing unified search: query={query}, mode={mode}, copilot_format={copilot_format}")
+    _client_id, _allowed = _caller_rag_access()
+    if not _collection_allowed(collection_name, _allowed):
+        return f"Error: Collection '{collection_name}' is not granted to your account."
 
     if not vector_store:
         return "Error: Qdrant client not initialized."
@@ -1253,6 +1256,9 @@ async def index_code(
 
     For advanced options (mode, custom embedding provider), use start_indexing.
     """
+    _client_id, _allowed = _caller_rag_access()
+    if not _collection_allowed(collection_name, _allowed):
+        return f"Error: Collection '{collection_name}' is not granted to your account."
     logger.debug(f"Processing index_code tool: workspace_root={workspace_root}, embedding_model={embedding_model}")
 
     if not vector_store:
@@ -1592,6 +1598,9 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
         result = ["Qdrant Collections\n"]
         result.append("=" * 80 + "\n\n")
 
+        client_id, allowed = _caller_rag_access()
+        collections = [c for c in collections
+                       if _collection_allowed(c, allowed)]
         for collection in collections:
             try:
                 collection_info = vector_store.get_collection(collection)
@@ -1734,6 +1743,9 @@ async def clear_index(
     confirm: bool = False
 ) -> str:
     """Clear all indexed code from Qdrant vector database. Only use this when you are CERTAIN an index needs to be deleted."""
+    _client_id, _allowed = _caller_rag_access()
+    if not _collection_allowed(collection_name, _allowed):
+        return f"Error: Collection '{collection_name}' is not granted to your account."
     try:
         if not vector_store:
             return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT."
