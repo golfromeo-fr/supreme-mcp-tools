@@ -212,11 +212,14 @@ def render_users_tab(container) -> None:
             password = ui.input("Password (min 8)", password=True).classes("w-full")
             role = ui.select({"user": "user", "admin": "admin"}, value="user",
                              label="Role").classes("w-full")
-            server_checks = {
-                s: ui.checkbox(s, value=False) for s in known_servers
-            }
             with ui.column().classes("w-full"):
                 ui.label("Servers this user may reach:").classes("text-caption")
+                # create the checkboxes INSIDE the column's slot — creating
+                # them before the with-block attached them to the card above
+                # the label (slot-stack variant, user screenshot 2026-09-08)
+                server_checks = {
+                    s: ui.checkbox(s, value=False) for s in known_servers
+                }
                 for cb in server_checks.values():
                     cb.classes("ml-2")
             error = ui.label("").classes("text-negative text-caption")
