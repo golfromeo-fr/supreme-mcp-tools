@@ -133,8 +133,17 @@ class ToolExtensionManager:
         self._custom_data: dict[str, Any] = {}
     
     def get_request_stats(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Data source: Get request statistics."""
-        return self.metrics.to_dict()
+        """Data source: Get request statistics (incl. E3 per-user counters)."""
+        stats = self.metrics.to_dict()
+        try:
+            from tools.shared.identity import get_user_call_stats
+
+            by_user = get_user_call_stats()
+            if by_user:
+                stats["by_user"] = by_user
+        except Exception:
+            pass
+        return stats
 
     def clear_cache(self, params: dict[str, Any]) -> dict[str, Any]:
         """Action: Clear cache."""

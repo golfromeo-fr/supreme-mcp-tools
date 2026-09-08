@@ -27,6 +27,35 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
+# E3: per-user call counters, process-wide (surfaced via request_stats).
+# Keyed by client_id; in-memory only — the durable per-user history is the
+# user=<client_id> attribution in the mcp.access log lines.
+_USER_CALL_STATS: dict[str, dict] = {}
+_STATS_LOCK = None
+
+
+def _stats_lock():
+    global _STATS_LOCK
+    if _STATS_LOCK is None:
+        import threading
+        _STATS_LOCK = threading.Lock()
+    return _STATS_LOCK
+
+
+def _record_user_call(client_id: str, tool: str | None) -> None:
+    with _stats_lock():
+        entry = _USER_CALL_STATS.setdefault(client_id, {"calls": 0, "by_tool": {}})
+        entry["calls"] += 1
+        if tool:
+            entry["by_tool"][tool] = entry["by_tool"].get(tool, 0) + 1
+
+
+def get_user_call_stats() -> dict:
+    """Snapshot of per-user call counters (E3). Empty in mono mode / before
+    any gated call."""
+    with _stats_lock():
+        return {u: dict(v) for u, v in _USER_CALL_STATS.items()}
+
 
 def resolve_identity(request, tokens_map_fn: Callable[[], dict]) -> tuple[str, dict] | None:
     """(client_id, entry) from the request's Bearer (fallback X-API-Key)
@@ -123,9 +152,11 @@ class IdentityGateMiddleware(Middleware):
         return result
 
     async def on_call_tool(self, context, call_next):
-        entry = self._entry(context)
+        entry = self._entry(context)  # fail-closed check lives here
         masked = self._masked(entry)
         name = getattr(context.message, "name", None)
         if masked and name in masked:
             raise ToolError("Unknown tool")
+        if entry is not None:
+            _record_user_call(entry["client_id"], name)
         return await call_next(context)
