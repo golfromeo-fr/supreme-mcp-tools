@@ -97,7 +97,11 @@ by a purpose-built API — keep as the fallback if B's table design strains.
 
 1. **H1** — `users_store` Turso backend (interface already clean; E3 seeds
    converge). One table: `users(username, password_hash, role, mcp_key,
-   servers, masked_functions, enabled, created_at, key_rotated_at)`.
+   servers, masked_functions, enabled, created_at, key_rotated_at,
+   updated_at)`. Records carry `updated_at` (stamped on every mutation
+   since 2026-09-08) — it is H1's last-writer-wins comparison key. CAVEAT:
+   JSON deletes are lossy for sync — H1 needs either tombstones or a
+   full-table reconcile for removals.
 2. **H2** — `tools_config` + env/auth key-value to network tables
    (largest slice: touches masks manager, env_manager, sync; the
    self-destruct lesson requires the inventory source to be unmasked

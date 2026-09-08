@@ -123,6 +123,30 @@ class TestCrud:
         assert "mcp_key" not in user and "password_hash" not in user
         assert us.authenticate("alice", "wrong") is None
 
+    def test_updated_at_stamped_on_every_mutation(self, store_path):
+        """E3/M4 seam: per-record updated_at is the future DB migration's
+        last-writer-wins key — every mutation must stamp it."""
+        _path, us = store_path
+        created = us.create_user("alice", "password-1")
+        rec = us.get_user_record("alice")
+        assert "updated_at" in rec
+
+        us.set_servers("alice", ["simplemcp"])
+        assert us.get_user_record("alice")["updated_at"] >= rec["updated_at"]
+
+        us.set_masked_functions("alice", {"simplemcp": ["x"]})
+        assert us.get_user_record("alice")["updated_at"] >= rec["updated_at"]
+
+        us.set_password("alice", "new-password-9")
+        assert us.get_user_record("alice")["updated_at"] >= rec["updated_at"]
+
+        us.set_enabled("alice", False)
+        assert us.get_user_record("alice")["updated_at"] >= rec["updated_at"]
+
+        us.set_enabled("alice", True)
+        us.rotate_key("alice")
+        assert us.get_user_record("alice")["updated_at"] >= rec["updated_at"]
+
 
 class TestTokensMapForTool:
     def test_system_key_attributed_to_admin(self, store_path):

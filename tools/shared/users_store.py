@@ -113,7 +113,13 @@ def _dummy_hash() -> str:
     return _DUMMY_HASH
 
 
+def _touch(record: dict) -> None:
+    """E3/M4 seam: per-record updated_at (ISO) — the future DB migration's
+    last-writer-wins comparison key. Stamped by EVERY record mutation."""
+    record["updated_at"] = _now_iso()
+
 def _public_view(record: dict) -> dict:
+
     return {k: v for k, v in record.items()
             if k not in ("mcp_key", "password_hash")}
 
@@ -202,6 +208,7 @@ def create_user(username: str, password: str, role: str = "user",
         "enabled": True,
         "created_at": _now_iso(),
         "key_rotated_at": _now_iso(),
+        "updated_at": _now_iso(),
     }
     save_users(store)
     logger.info(f"user '{username}' created (role={role})")
@@ -227,6 +234,7 @@ def set_enabled(username: str, enabled: bool) -> None:
     if record["role"] == "admin" and not enabled:
         _refuse_last_admin(store, username)
     record["enabled"] = bool(enabled)
+    _touch(record)
     save_users(store)
 
 
@@ -238,6 +246,7 @@ def set_password(username: str, password: str) -> None:
     if record is None:
         raise ValueError(f"user '{username}' does not exist")
     record["password_hash"] = hash_password(password)
+    _touch(record)
     save_users(store)
 
 
@@ -250,6 +259,7 @@ def rotate_key(username: str) -> dict:
         raise ValueError(f"user '{username}' does not exist")
     record["mcp_key"] = _unique_key(store)
     record["key_rotated_at"] = _now_iso()
+    _touch(record)
     save_users(store)
     return {"username": username, "mcp_key": record["mcp_key"]}
 
@@ -260,6 +270,7 @@ def set_servers(username: str, servers: list) -> None:
     if record is None:
         raise ValueError(f"user '{username}' does not exist")
     record["servers"] = sorted(set(servers or []))
+    _touch(record)
     save_users(store)
 
 
@@ -270,6 +281,7 @@ def set_masked_functions(username: str, masks: dict) -> None:
         raise ValueError(f"user '{username}' does not exist")
     clean = {str(k): sorted({str(x) for x in v}) for k, v in (masks or {}).items()}
     record["masked_functions"] = clean
+    _touch(record)
     save_users(store)
 
 
@@ -324,6 +336,7 @@ def seed_from_env() -> int:
             "enabled": True,
             "created_at": _now_iso(),
             "key_rotated_at": _now_iso(),
+            "updated_at": _now_iso(),
         }
         changed = True
         created_or_synced += 1
@@ -353,6 +366,7 @@ def seed_from_env() -> int:
                 "enabled": True,
                 "created_at": _now_iso(),
                 "key_rotated_at": _now_iso(),
+                "updated_at": _now_iso(),
             }
             changed = True
             created_or_synced += 1
@@ -360,6 +374,7 @@ def seed_from_env() -> int:
         elif os.environ.get(prefix + "KEY") and record["mcp_key"] != os.environ[prefix + "KEY"]:
             record["mcp_key"] = os.environ[prefix + "KEY"]  # declarative key wins
             record["key_rotated_at"] = _now_iso()
+            _touch(record)
             changed = True
             created_or_synced += 1
             logger.info(f"[E3] synced env key for user '{name}'")
