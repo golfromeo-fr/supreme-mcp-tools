@@ -49,11 +49,15 @@ def _url(tool: str) -> str:
 
 
 async def mcp_call(tool: str, key: str, mcp_tool: str, args: dict,
-                   expect_error: bool = False) -> str:
-    try:
+                   expect_error: bool = False, timeout_s: float = 15) -> str:
+    async def _do():
         async with Client(_url(tool), auth=BearerAuth(key)) as c:
             r = await c.call_tool(mcp_tool, args)
             return r.content[0].text if getattr(r, "content", None) else ""
+    try:
+        return await asyncio.wait_for(_do(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        return "TIMEOUT after {}s".format(timeout_s)
     except Exception as e:
         if expect_error:
             return f"REJECTED: {type(e).__name__}: {e}"
