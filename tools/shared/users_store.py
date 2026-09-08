@@ -93,6 +93,7 @@ def authenticate(username: str, password: str) -> dict | None:
     Timing-hardened: an unknown username still runs one hash comparison
     against a dummy hash so response time does not enumerate users.
     """
+    _ensure_seeded()
     users = load_users().get("users", {})
     record = users.get((username or "").lower())
     stored = record.get("password_hash") if record else _dummy_hash()
@@ -288,6 +289,97 @@ def revoke_system_key(tool_name: str) -> None:
 # tool-server side: token map for one tool's verifier/gate
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# .env declarative seeding (round 5): MCP_USER_<NAME>_PASSWORD [+ _KEY, _ROLE,
+# _SERVERS] — same philosophy as DB_PRESET_<NN>. Idempotent, once per process.
+# ---------------------------------------------------------------------------
+
+_seed_ran = False
+
+
+def seed_from_env() -> int:
+    """Seed users from MCP_USER_<NAME>_* env lines + the admin pair.
+
+    The admin (MCP_UI_USERNAME / MCP_UI_PASSWORD, default admin/admin) is
+    seeded as role=admin with reach to every known tool — this IS the
+    original admin/password pair, unchanged. Declarative users:
+    MCP_USER_<NAME>_PASSWORD plus optional _KEY (authoritative when given),
+    _ROLE (user|admin), _SERVERS (comma list). Returns created/synced count.
+    """
+    created_or_synced = 0
+    store = load_users()
+    users = store.setdefault("users", {})
+    changed = False
+
+    admin_name = (os.environ.get("MCP_UI_USERNAME") or "admin").strip().lower()
+    admin_password = os.environ.get("MCP_UI_PASSWORD") or "admin"
+    if admin_name not in users:
+        users[admin_name] = {
+            "username": admin_name,
+            "password_hash": hash_password(admin_password),
+            "role": "admin",
+            "mcp_key": _unique_key(store),
+            "servers": sorted(_tool_names()),
+            "masked_functions": {},
+            "enabled": True,
+            "created_at": _now_iso(),
+            "key_rotated_at": _now_iso(),
+        }
+        changed = True
+        created_or_synced += 1
+        logger.info(f"[E3] seeded admin '{admin_name}' from env pair (all tools)")
+
+    for env_key, value in sorted(os.environ.items()):
+        m = re.match(r"^MCP_USER_([A-Z0-9_]+)_PASSWORD$", env_key)
+        if not m or not value:
+            continue
+        name = m.group(1).lower()
+        if not USERNAME_RE.match(name) or name == "system" or name in _tool_names():
+            logger.warning(f"[E3] seed skipped for reserved/invalid name '{name}'")
+            continue
+        prefix = f"MCP_USER_{m.group(1)}_"
+        role = os.environ.get(prefix + "ROLE", "user")
+        servers = [s.strip() for s in os.environ.get(prefix + "SERVERS", "").split(",") if s.strip()]
+        record = users.get(name)
+        if record is None:
+            key = os.environ.get(prefix + "KEY") or _unique_key(store)
+            users[name] = {
+                "username": name,
+                "password_hash": hash_password(value),
+                "role": role if role in ("admin", "user") else "user",
+                "mcp_key": key,
+                "servers": servers,
+                "masked_functions": {},
+                "enabled": True,
+                "created_at": _now_iso(),
+                "key_rotated_at": _now_iso(),
+            }
+            changed = True
+            created_or_synced += 1
+            logger.info(f"[E3] seeded user '{name}' from env ({role}, {len(servers)} server(s))")
+        elif os.environ.get(prefix + "KEY") and record["mcp_key"] != os.environ[prefix + "KEY"]:
+            record["mcp_key"] = os.environ[prefix + "KEY"]  # declarative key wins
+            record["key_rotated_at"] = _now_iso()
+            changed = True
+            created_or_synced += 1
+            logger.info(f"[E3] synced env key for user '{name}'")
+
+    if changed:
+        save_users(store)
+    return created_or_synced
+
+
+def _ensure_seeded() -> None:
+    global _seed_ran
+    if _seed_ran:
+        return
+    _seed_ran = True
+    try:
+        seed_from_env()
+    except Exception as e:
+        logger.warning(f"[E3] user seeding failed ({type(e).__name__}: {e}) — continuing")
+
+
 def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
     """{system_key: admin entry} ∪ {user key: entry} for reachable users.
 
@@ -295,6 +387,7 @@ def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
     mono user) unless revoked. Users are omitted unless enabled AND the tool
     is in their servers list. mtime-cached file read inside load_users.
     """
+    _ensure_seeded()
     store = load_users()
     tool = (tool_name or "").lower()
     if tool in store.get("revoked_system_keys", []):
