@@ -8,11 +8,19 @@ container.clear() rebuilds, asyncio.create_task for loads, dialogs awaited
 in async handlers.
 """
 
+import json
+import json
+import json
 import logging
+from pathlib import Path
 
 from nicegui import ui
 
 logger = logging.getLogger(__name__)
+
+PORTS = json.loads(
+    (Path(__file__).resolve().parents[2] / "config" / "ports.json")
+    .read_text())["assignments"]["mcp"]
 
 
 def render_users_tab(container) -> None:
@@ -160,8 +168,9 @@ def render_users_tab(container) -> None:
         asyncio_create_task(_wait())
 
     def _access_dialog(user: dict):
-        """Edit one user's reach (server checkboxes) + per-server function
-        masks (comma-separated deny-lists, E1 semantics scoped to the user)."""
+        """Edit one user's reach (server checkboxes), per-server function
+        masks (comma-separated deny-lists, E1 semantics scoped to the user),
+        and the E3.5 data-plane grants (db presets + rag collections)."""
         from ..management_ui import get_state
 
         username = user.get("username", "?")
@@ -170,10 +179,13 @@ def render_users_tab(container) -> None:
         known_servers = sorted(
             {t.name for t in get_state().tools} | set(current_servers)
         )
+        db_presets_current = list(user.get("db_presets") or [])
+        rags_current = list(user.get("rag_collections") or [])
+
         with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl"):
             ui.label(f"Access for {username}").classes("text-subtitle1")
-            checks: dict[str, ui.checkbox] = {}
-            mask_inputs: dict[str, ui.input] = {}
+            checks: dict = {}
+            mask_inputs: dict = {}
             with ui.column().classes("w-full gap-2"):
                 for srv in known_servers:
                     with ui.row().classes("w-full items-center gap-2 flex-wrap"):
@@ -182,6 +194,58 @@ def render_users_tab(container) -> None:
                             "masked (comma-sep)",
                             value=", ".join(current_masks.get(srv, [])),
                         ).classes("w-64").tooltip("Functions this user must NOT see on this server")
+
+            ui.separator()
+            ui.label("Data-plane grants (E3.5)").classes("text-subtitle2")
+
+            preset_checks: dict = {}
+            rags_checks: dict = {}
+            presets_col = ui.column().classes("w-full")
+            with presets_col:
+                ui.label("databasemcp presets:").classes("text-caption text-grey")
+            rags_col = ui.column().classes("w-full")
+            with rags_col:
+                ui.label("ragmcp collections:").classes("text-caption text-grey")
+
+            async def _load_grant_options():
+                import json as _json
+
+                from fastmcp import Client
+                from fastmcp.client.auth import BearerAuth
+
+                async def _mcp_list(tool: str, mcp_tool: str, args: dict) -> str:
+                    cfg = json.loads((Path(__file__).resolve().parents[2]
+                                      / "tools" / tool / "config.json").read_text())
+                    url = f"http://127.0.0.1:{PORTS[tool]}/mcp"
+                    async with Client(url, auth=BearerAuth(cfg["auth"]["api_key"])) as c:
+                        r = await c.call_tool(mcp_tool, args)
+                        return r.content[0].text if getattr(r, "content", None) else ""
+
+                try:
+                    raw = await _mcp_list("databasemcp", "list_presets", {})
+                    with presets_col:
+                        for line in raw.splitlines():
+                            if line.startswith("- "):
+                                num = line[2:].split(" ")[0]
+                                preset_checks[num] = ui.checkbox(num)
+                except Exception as e:
+                    with presets_col:
+                        ui.label(f"presets unavailable: {e}").classes("text-negative text-caption")
+
+                try:
+                    raw = await _mcp_list("ragmcp", "list_collections", {})
+                    data = _json.loads(raw) if raw.strip().startswith(("[", "{")) else []
+                    if isinstance(data, dict):
+                        data = data.get("collections", [])
+                    with rags_col:
+                        for c in data:
+                            name = c if isinstance(c, str) else c.get("name", "?")
+                            rags_checks[name] = ui.checkbox(name)
+                except Exception as e:
+                    with rags_col:
+                        ui.label(f"collections unavailable: {e}").classes("text-negative text-caption")
+
+            asyncio.create_task(_load_grant_options())
 
             async def _save():
                 servers = [s for s, cb in checks.items() if cb.value]
@@ -192,12 +256,16 @@ def render_users_tab(container) -> None:
                 }
                 ok1 = await get_api_client().set_user_servers(username, servers)
                 ok2 = await get_api_client().set_user_masked_functions(username, masked)
+                presets = [p for p, cb in preset_checks.items() if cb.value]
+                collections = [c for c, cb in rags_checks.items() if cb.value]
+                ok3 = await get_api_client().set_user_db_presets(username, presets)
+                ok4 = await get_api_client().set_user_rag_collections(username, collections)
                 dialog.close()
-                if ok1.success and ok2.success:
+                if all(o.success for o in (ok1, ok2, ok3, ok4)):
                     ui.notify("Access updated.", type="positive")
                     _rebuild()
                 else:
-                    _notify_error((ok1.error or ok2.error or "update failed"))
+                    _notify_error("update failed — see notifications")
 
             ui.button("Save", on_click=_save).props("outline dense")
         dialog.open()

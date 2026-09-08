@@ -93,6 +93,14 @@ class UserEnabledRequest(BaseModel):
     enabled: bool
 
 
+class UserPresetsRequest(BaseModel):
+    presets: list[str]
+
+
+class UserCollectionsRequest(BaseModel):
+    collections: list[str]
+
+
 class ExecuteRequest(BaseModel):
     """Request model for executing actions."""
     params: dict[str, Any] | None = None
@@ -544,6 +552,22 @@ class ManagementServer:
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             return {"ok": True}
+
+        @self.app.put("/api/users/{username}/db-presets")
+        async def set_user_db_presets_endpoint(username: str,
+                                               request: UserPresetsRequest,
+                                               _: bool = Depends(self._verify_api_key)):
+            """E3.5: set the databasemcp presets granted to a user."""
+            users_store.set_db_presets(username, request.presets)
+            return {"ok": True, "username": username, "db_presets": request.presets}
+
+        @self.app.put("/api/users/{username}/rag-collections")
+        async def set_user_rag_collections_endpoint(username: str,
+                                                    request: UserCollectionsRequest,
+                                                    _: bool = Depends(self._verify_api_key)):
+            """E3.5: set the ragmcp collections granted to a user."""
+            users_store.set_rag_collections(username, request.collections)
+            return {"ok": True, "username": username, "rag_collections": request.collections}
 
         @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/enable")
         async def enable_tool_endpoint(

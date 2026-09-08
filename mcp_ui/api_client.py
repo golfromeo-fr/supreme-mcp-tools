@@ -436,6 +436,14 @@ class APIClient:
         return await self._request("PUT", f"/api/users/{username}/masked-functions",
                                    json={"masked_functions": masked})
 
+    async def set_user_db_presets(self, username: str, presets: list) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/db-presets",
+                                   json={"presets": presets})
+
+    async def set_user_rag_collections(self, username: str, collections: list) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/rag-collections",
+                                   json={"collections": collections})
+
     async def set_user_enabled(self, username: str, enabled: bool) -> APIResponse:
         return await self._request("POST", f"/api/users/{username}/enabled",
                                    json={"enabled": enabled})
