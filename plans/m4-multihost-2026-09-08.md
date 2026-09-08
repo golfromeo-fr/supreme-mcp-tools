@@ -120,6 +120,62 @@ by a purpose-built API — keep as the fallback if B's table design strains.
   store for cross-node per-user history (the natural completion of E3
   attribution).
 
+## Single-instance scalability (user decision 2026-09-08: ONE instance now, M4 later)
+
+**Decision recorded:** Option B (network-backed stores) is the chosen M4
+direction; until then the deployment runs ONE startlauncher instance, and
+multi-user must scale within it. Also recorded: the future cluster may be
+**Podman instances** — data circulation must be clean (containers must hold
+NO unique local state; everything mutable either in network backends or in
+declared volumes).
+
+### Does one instance limit multi-user? Mostly NO.
+
+- **Identity scales free**: a user's key is one dict entry; verification is
+  a map lookup + one filter per request. User count costs ~nothing.
+- **The real per-user costs are data-plane, and a second instance does NOT
+  fix them** (same backends behind both nodes): databasemcp shared
+  connections (users sharing a preset serialize on its pool — E4 txs: one
+  per connection), memorymcp's shared memory data (declared non-goal),
+  ragmcp's shared indexes and upstream API quotas.
+- **True single-instance ceilings** (team-scale, not reached at dozens of
+  users): uvicorn concurrent connections per tool server; the GIL-bound
+  local embedding model (ragmcp bge-m3) which is the biggest CPU consumer;
+  ONE transaction per databasemcp connection entry (cross-user tx
+  contention if users share connections — mitigation already exists:
+  connect more NAMED connections, no code needed).
+
+### Details to preserve NOW so the M4 swap stays trivial
+
+1. **`users_store` function set is the migration seam** — never let tool
+   code reach users.json directly. A future backend (Turso/PG) re-implements
+   the same functions; callers don't change.
+2. **Record hygiene for a future table**: stable field names, no
+   process-local data, plaintext `mcp_key` (a DB column maps 1:1). When
+   migrating, ADD `updated_at` per record then (not before — no speculative
+   fields).
+3. **Key format is DB-friendly** (`token_urlsafe(32)`), unique by
+   construction, and globally unique checks already run at create/rotate.
+4. **Latency note for the future DB backend**: per-request map reads become
+   DB reads — plan a short TTL cache (2–5s) or keep a JSON mirror; do NOT
+   query the DB per tool-call, only per verify.
+5. **Log attribution (`user=` in mcp.access) is storage-agnostic** — it
+   keeps working no matter where users live.
+6. **Podman notes (for H4)**: rootless podman binds ports fine (publish
+   8000-8200 range); keep logs and any transition-state files in DECLARED
+   volumes; run backends and nodes on one podman network so nodes reach
+   Turso/PG by name; the "identical .env" rule becomes "same image, one
+   mounted .env".
+
+### What would justify moving to a DB backend BEFORE M4
+
+- Multiple simultaneous writers become routine (UI + scripts + nodes).
+- Audit/compliance needs DB-level backup/restore of accounts.
+- User count grows past what a JSON file review comfortably handles
+  (hundreds).
+Until then: JSON + atomic writes + hot-reload is the right amount of
+machinery (single-instance multi-user is NOT limited by the JSON store).
+
 ## Honest limits
 
 - Write contention: last-writer-wins per key; no distributed transactions.
