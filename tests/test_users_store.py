@@ -123,6 +123,25 @@ class TestCrud:
         assert "mcp_key" not in user and "password_hash" not in user
         assert us.authenticate("alice", "wrong") is None
 
+    def test_role_user_gets_default_masks(self, store_path):
+        """E3 dig: role=user accounts are seeded with the destructive-tool
+        mask profile (memorymcp deletes/expiry, ragmcp index mutations,
+        databasemcp writes) — overridable per user via the Users tab."""
+        _path, us = store_path
+        us.create_user("alice", "password-1", role="user",
+                       servers=["memorymcp", "ragmcp", "databasemcp"])
+        masked = us.get_user_record("alice")["masked_functions"]
+        assert "deleteMemory" in masked["memorymcp"]
+        assert "decayOrExpire" in masked["memorymcp"]
+        assert "clear_index" in masked["ragmcp"]
+        assert "execute_sql" in masked["databasemcp"]
+
+    def test_role_admin_gets_no_default_masks(self, store_path):
+        _path, us = store_path
+        us.create_user("root", "password-1", role="admin",
+                       servers=["memorymcp"])
+        assert us.get_user_record("root")["masked_functions"] == {}
+
     def test_updated_at_stamped_on_every_mutation(self, store_path):
         """E3/M4 seam: per-record updated_at is the future DB migration's
         last-writer-wins key — every mutation must stamp it."""

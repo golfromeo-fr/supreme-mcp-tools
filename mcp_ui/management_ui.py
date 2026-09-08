@@ -667,6 +667,8 @@ async def main_page() -> None:
             chip_container = ui.row().classes("items-center")
 
     # === DRAWER: tool navigation ===
+    is_admin = (_multi_user_mode() is False) or \
+        nicegui_app.storage.user.get("role", "user") == "admin"
     # behavior=desktop pins the drawer open on narrow viewports too — Quasar's
     # default switches to an overlay below 1024px, hiding the navigation
     # (behavior change vs NiceGUI 3.9, where the drawer showed at any width).
@@ -682,11 +684,15 @@ async def main_page() -> None:
                         icon="groups",
                         on_click=lambda: ui.navigate.to("/users"),
                     ).classes("w-full").tooltip("Manage user accounts (E3 multi-user)")
-                ui.button(
-                    "Function Masks",
-                    icon="visibility_off",
-                    on_click=lambda: _open_tool_settings(state),
-                ).classes("w-full").tooltip("Enable or disable functions per server")
+                # E3: global mask editing is an admin operation — hide the
+                # entry for non-admin sessions (surface-level; central also
+                # gates in M3 style).
+                if is_admin:
+                    ui.button(
+                        "Function Masks",
+                        icon="visibility_off",
+                        on_click=lambda: _open_tool_settings(state),
+                    ).classes("w-full").tooltip("Enable or disable functions per server")
                 with ui.row().classes("w-full items-center justify-between"):
                     with ui.row().classes("items-center gap-1"):
                         ui.icon("dark_mode", size="xs")

@@ -53,6 +53,19 @@ USERS_PATH = Path(
 PBKDF2_ITERATIONS = 390_000
 USERNAME_RE = re.compile(r"^[a-z0-9_-]{2,32}$")
 
+# E3 dig (2026-09-08): identity-blind destructive/shared-state tools.
+# role=user accounts get these PRE-MASKED by default (per server where the
+# user has access); admins are unaffected, and the Users tab can unmask any
+# of them per user. Veto-able policy — adjust the lists, not the code.
+DEFAULT_USER_MASKS: dict[str, list[str]] = {
+    "memorymcp": [
+        "deleteMemory", "decayOrExpire", "mergeDuplicates",
+        "reindexMemory", "migrateMemoryBackend", "attachProvenance",
+    ],
+    "ragmcp": ["clear_index", "start_indexing", "stop_indexing", "reindex"],
+    "databasemcp": ["execute_sql", "connect_database", "disconnect_database"],
+}
+
 _store_cache: dict[str, Any] = {"mtime": None, "store": None}
 
 
@@ -96,6 +109,8 @@ def authenticate(username: str, password: str) -> dict | None:
     _ensure_seeded()
     users = load_users().get("users", {})
     record = users.get((username or "").lower())
+    logger.warning(f"[DEBUG authenticate] username={username!r} found={record is not None} "
+                   f"store_users={list(users)}")
     stored = record.get("password_hash") if record else _dummy_hash()
     if not record or not verify_password(password or "", stored):
         return None
@@ -178,6 +193,13 @@ def get_user_record(username: str) -> dict | None:
     return load_users().get("users", {}).get((username or "").lower())
 
 
+def _default_masks_for(role: str, servers: list[str]) -> dict:
+    if role == "admin":
+        return {}
+    return {s: list(DEFAULT_USER_MASKS.get(s, []))
+            for s in servers if s in DEFAULT_USER_MASKS}
+
+
 def create_user(username: str, password: str, role: str = "user",
                 servers: list[str] | None = None,
                 masked_functions: dict | None = None) -> dict:
@@ -204,7 +226,8 @@ def create_user(username: str, password: str, role: str = "user",
         "role": role,
         "mcp_key": mcp_key,
         "servers": sorted(set(servers or [])),
-        "masked_functions": dict(masked_functions or {}),
+        "masked_functions": (dict(masked_functions) if masked_functions is not None
+                             else _default_masks_for(role, sorted(set(servers or [])))),
         "enabled": True,
         "created_at": _now_iso(),
         "key_rotated_at": _now_iso(),
@@ -362,7 +385,8 @@ def seed_from_env() -> int:
                 "role": role if role in ("admin", "user") else "user",
                 "mcp_key": key,
                 "servers": servers,
-                "masked_functions": {},
+                "masked_functions": _default_masks_for(
+                    role if role in ("admin", "user") else "user", servers),
                 "enabled": True,
                 "created_at": _now_iso(),
                 "key_rotated_at": _now_iso(),
