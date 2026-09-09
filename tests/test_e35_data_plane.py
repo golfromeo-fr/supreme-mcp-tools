@@ -49,30 +49,32 @@ def _url(tool: str) -> str:
 
 
 async def mcp_call(tool: str, key: str, mcp_tool: str, args: dict,
-                   expect_error: bool = False, timeout_s: float = 15) -> str:
+                   timeout_s: float = 15) -> str:
+    """Call a tool; returns the text output or an error string (never raises
+    on tool errors — only on connection failures)."""
     async def _do():
         async with Client(_url(tool), auth=BearerAuth(key)) as c:
-            r = await c.call_tool(mcp_tool, args)
+            r = await c.call_tool(mcp_tool, args, raise_on_error=False)
             return r.content[0].text if getattr(r, "content", None) else ""
     try:
         return await asyncio.wait_for(_do(), timeout=timeout_s)
     except asyncio.TimeoutError:
-        return "TIMEOUT after {}s".format(timeout_s)
+        return f"TIMEOUT after {timeout_s}s"
     except Exception as e:
-        if expect_error:
-            return f"REJECTED: {type(e).__name__}: {e}"
-        raise
+        return f"CONNECTION_ERROR: {type(e).__name__}: {e}"
 
 
 async def mcp_list_tools(tool: str, key: str,
-                         expect_error: bool = False) -> list[str] | str:
-    try:
+                         timeout_s: float = 15) -> list[str] | str:
+    async def _do():
         async with Client(_url(tool), auth=BearerAuth(key)) as c:
             return sorted(t.name for t in await c.list_tools())
+    try:
+        return await asyncio.wait_for(_do(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        return f"TIMEOUT after {timeout_s}s"
     except Exception as e:
-        if expect_error:
-            return f"REJECTED: {type(e).__name__}"
-        raise
+        return f"CONNECTION_ERROR: {type(e).__name__}: {e}"
 
 
 async def main() -> int:
