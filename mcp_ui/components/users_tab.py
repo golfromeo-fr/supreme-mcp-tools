@@ -238,15 +238,18 @@ def render_users_tab(container) -> None:
 
                 try:
                     raw = await _mcp_list("databasemcp", "list_presets", {})
+                    preset_lines = [ln for ln in raw.splitlines() if ln.startswith("- ")]
                     with presets_col:
-                        for line in raw.splitlines():
-                            if line.startswith("- "):
-                                num = line[2:].split(" ")[0]
-                                # seed current grants — an unseeded checkbox
-                                # renders unchecked and Save would WIPE the
-                                # user's presets (UI test 2026-09-09)
-                                preset_checks[num] = ui.checkbox(
-                                    num, value=num in db_presets_current)
+                        if not preset_lines:
+                            ui.label("No presets defined (DB_PRESET_<NN> in .env) — nothing to grant.")\
+                                .classes("text-grey text-caption")
+                        for line in preset_lines:
+                            num = line[2:].split(" ")[0]
+                            # seed current grants — an unseeded checkbox
+                            # renders unchecked and Save would WIPE the
+                            # user's presets (UI test 2026-09-09)
+                            preset_checks[num] = ui.checkbox(
+                                num, value=num in db_presets_current)
                 except Exception as e:
                     with presets_col:
                         ui.label(f"presets unavailable: {e}").classes("text-negative text-caption")
@@ -257,6 +260,9 @@ def render_users_tab(container) -> None:
                     if isinstance(data, dict):
                         data = data.get("collections", [])
                     with rags_col:
+                        if not data:
+                            ui.label("No collections on this ragmcp backend yet — nothing to grant.")\
+                                .classes("text-grey text-caption")
                         for c in data:
                             name = c if isinstance(c, str) else c.get("name", "?")
                             rags_checks[name] = ui.checkbox(
