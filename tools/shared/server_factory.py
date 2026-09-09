@@ -100,6 +100,11 @@ class DualHeaderVerifier(TokenVerifier):
         super().__init__()
         self._tokens: dict[str, dict[str, Any]] = tokens
 
+    def tokens(self) -> dict[str, dict[str, Any]]:
+        """Current token map (E3: UserStoreVerifier overrides to build fresh
+        from the user store; request-log attribution reads this)."""
+        return self._tokens
+
     async def verify_token(self, token: str) -> AccessToken | None:
         """Validate token against the static token dict."""
         found = None
@@ -115,6 +120,39 @@ class DualHeaderVerifier(TokenVerifier):
             client_id=info.get("client_id", "unknown"),
             scopes=info.get("scopes", []),
             claims=info,
+        )
+
+
+class UserStoreVerifier(DualHeaderVerifier):
+    """E3 (MCP_AUTH_MODE=multi): token map built per-verify from the user
+    store — {system key → admin username} ∪ {user keys → usernames}. One
+    map read PER VERIFY = the per-request snapshot rule (failure playbook):
+    store edits (rotate/disable/create) apply to the next request."""
+
+    def __init__(self, tool_name: str, system_key: str) -> None:
+        super().__init__({})  # base map unused — tokens() builds fresh
+        self._tool_name = tool_name
+        self._system_key = system_key
+
+    def tokens(self) -> dict[str, dict[str, Any]]:
+        from tools.shared import users_store
+
+        return users_store.tokens_map_for_tool(self._tool_name, self._system_key)
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        tokens = self.tokens()
+        found = None
+        for key, val in tokens.items():
+            if hmac.compare_digest(token, key):
+                found = val
+                break
+        if found is None:
+            return None
+        return AccessToken(
+            token=token,
+            client_id=found.get("client_id", "unknown"),
+            scopes=found.get("scopes", ["mcp"]),
+            claims=found,
         )
 
 
@@ -205,10 +243,12 @@ class RequestLogMiddleware:
     _MAX_SNIFF = 1_000_000       # request body bytes buffered for parsing
     _MAX_RESPONSE_SNIFF = 8192   # response body bytes kept for error extraction
 
-    def __init__(self, app, name: str = "mcp"):
+    def __init__(self, app, name: str = "mcp", identity_resolver=None):
         self.app = app
         self.name = name
         self.logger = logging.getLogger("mcp.access")
+        # E3-M1: optional callable (lowercased headers dict) -> client_id|None
+        self.identity_resolver = identity_resolver
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -285,10 +325,18 @@ class RequestLogMiddleware:
                 rpc += f" {rpc_name}"
             error_marker = _jsonrpc_failure_marker(bytes(response_sniff))
             error_field = f" {error_marker}" if error_marker is not None else ""
+            # E3-M1 attribution: resolved client_id (username) appended after
+            # session, BEFORE "->" — positional field order stays stable.
+            user = "-"
+            if self.identity_resolver is not None:
+                try:
+                    user = self.identity_resolver(headers) or "-"
+                except Exception:
+                    user = "-"
             self.logger.info(
-                "[%s] %s %s from %s v=%s session=%s -> %s in %dms%s%s",
+                "[%s] %s %s from %s v=%s session=%s user=%s -> %s in %dms%s%s",
                 self.name, method, path, peer, proto or "-",
-                session[:8] if session else "NEW", status or "-",
+                session[:8] if session else "NEW", user, status or "-",
                 elapsed_ms, rpc, error_field,
             )
 
@@ -328,6 +376,40 @@ def create_fastmcp_server(
     )
 
     mcp = FastMCP(name, auth=verifier)
+
+    # E3-M1 (MCP_AUTH_MODE=multi): user-store-backed verifier + per-user
+    # visibility gate. Lazy users_store import — the mono path must never
+    # touch it (import-time I/O guardrail), and a missing store module keeps
+    # mono behavior with a loud warning.
+    if (os.environ.get("MCP_AUTH_MODE", "").strip().lower() == "multi"
+            and os.environ.get("MCP_USERS_STORE_DISABLE", "").strip() != "1"):
+        try:
+            from tools.shared import users_store
+            from tools.shared.identity import IdentityGateMiddleware
+
+            verifier = UserStoreVerifier(name, resolved_key)
+            mcp = FastMCP(name, auth=verifier)
+            mcp.add_middleware(
+                IdentityGateMiddleware(
+                    tokens_map_fn=lambda: users_store.tokens_map_for_tool(
+                        name, resolved_key
+                    )
+                )
+            )
+            logging.getLogger(__name__).info(
+                f"[{name}] MCP_AUTH_MODE=multi — user-store verifier + "
+                "identity gate active"
+            )
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"[{name}] MCP_AUTH_MODE=multi requested but the user layer "
+                f"failed to initialize ({type(e).__name__}: {e}) — falling "
+                "back to single-key mono behavior"
+            )
+            verifier = DualHeaderVerifier(
+                tokens={resolved_key: {"client_id": name, "scopes": ["mcp"]}},
+            )
+            mcp = FastMCP(name, auth=verifier)
 
     if tools_module is not None:
         import importlib
@@ -413,19 +495,34 @@ def get_transport_app(mcp, transport: str | None = None):
     if not hasattr(mcp, "http_app"):
         raise RuntimeError(f"FastMCP server has no http_app method: {type(mcp)}")
 
+    auth_provider = getattr(mcp, "auth", None)
     if transport == "multi":
         app = _build_multi_app(mcp)
     else:
         app = _build_http_app(mcp, transport)
         if transport == "streamable-http":
-            _wire_session_management(app)
+            _wire_session_management(app, auth_provider)
     # User middleware runs outside the router, so the normalizer executes
     # before FastMCP's per-route RequireAuthMiddleware on every route.
     app.add_middleware(ApiKeyFallbackMiddleware)
+    # E3-M1 attribution: resolve the verified token's client_id for the
+    # mcp.access line (verifier map = same map auth checked).
+    verifier = getattr(mcp, "auth", None)
+    if verifier is not None and hasattr(verifier, "tokens"):
+        def _identity_resolver(headers, _verifier=verifier):
+            auth = headers.get("authorization", "")
+            token = auth[7:] if auth.lower().startswith("bearer ") else headers.get("x-api-key")
+            entry = (_verifier.tokens() or {}).get(token) if token else None
+            return entry.get("client_id") if entry else None
+    else:
+        _identity_resolver = None
     # add_middleware stacks last-added = outermost, so the access line sees
     # every request including auth rejections and flush-endpoint calls.
     if not os.environ.get("MCP_DISABLE_REQUEST_LOGS"):
-        app.add_middleware(RequestLogMiddleware, name=getattr(mcp, "name", "mcp"))
+        app.add_middleware(
+            RequestLogMiddleware, name=getattr(mcp, "name", "mcp"),
+            identity_resolver=_identity_resolver,
+        )
     return app
 
 
@@ -442,7 +539,7 @@ def _build_multi_app(mcp):
     before flattening, and the idle TTL applies to it.
     """
     stateful = _build_http_app(mcp, "streamable-http")
-    _wire_session_management(stateful)
+    _wire_session_management(stateful, getattr(mcp, "auth", None))
     stateless = mcp.http_app(transport="http", stateless_http=True, path="/mcp-stateless")
     sse = mcp.http_app(transport="sse", path="/sse")
 
@@ -499,7 +596,7 @@ def _build_http_app(mcp, transport: str):
     return mcp.http_app(transport="http")
 
 
-def _wire_session_management(app) -> None:
+def _wire_session_management(app, auth_provider=None) -> None:
     """Attach the flush-sessions admin route.
 
     The session idle TTL is applied at app construction (see _build_http_app).
@@ -526,6 +623,23 @@ def _wire_session_management(app) -> None:
                 {"error": "unauthorized"}, status_code=401,
                 headers={"www-authenticate": 'Bearer error="invalid_token"'},
             )
+        # E3-M3: flush is destructive — admin role only. In mono mode the
+        # single map entry has no role field and defaults to admin (same
+        # owner as today). A user key here gets 403.
+        try:
+            from fastmcp.server.dependencies import get_http_request
+            req = get_http_request()
+            auth = (req.headers.get("authorization", "") or "")
+            token = auth[7:] if auth.lower().startswith("bearer ") else None
+            entry = (auth_provider.tokens() or {}).get(token) \
+                if (token and auth_provider is not None) else None
+            role = (entry or {}).get("role", "admin")  # legacy mono map = admin
+            if role != "admin":
+                return JSONResponse(
+                    {"error": "admin role required"}, status_code=403,
+                )
+        except Exception:
+            pass  # gate must never break the endpoint; auth already ran
         # Find the /mcp route's endpoint — it holds the session_manager singleton.
         sm = _get_session_manager(app)
         if sm is None:

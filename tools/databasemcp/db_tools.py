@@ -119,6 +119,13 @@ async def connect_preset(preset: str) -> str:
     except LookupError as e:
         _timing_update(start_time, "connect_preset", False)
         return f"Error: {e}"
+    # E3.5: preset grants are per user (admin bypasses)
+    from connections import preset_grant_error, _current_caller_grants
+    err = preset_grant_error(p_.number, p_.name, p_.connection_name,
+                             *_current_caller_grants())
+    if err:
+        _timing_update(start_time, "connect_preset", False)
+        return f"Error: {err}"
 
     def _connect():
         REGISTRY.connect(p_.connection_name, p_.dialect, p_.params)
@@ -218,8 +225,23 @@ async def begin_transaction(connection: str | None = None) -> str:
     back automatically after DB_TX_IDLE_TIMEOUT seconds (default 300)."""
     start_time = time.perf_counter()
     _ensure_reaper()
+    # E3: attribute the transaction to the caller (F7 — identity visible
+    # inside tool functions). Unknown owner (in-memory/mono-legacy) is fine.
+    owner = None
     try:
-        entry, tx_id = await asyncio.to_thread(REGISTRY.begin_tx, connection)
+        from fastmcp.server.dependencies import get_http_request
+        from tools.shared.identity import resolve_identity
+
+        auth_verifier = getattr(mcp, "auth", None)
+        if auth_verifier is not None and hasattr(auth_verifier, "tokens"):
+            ident = resolve_identity(
+                get_http_request(), lambda: auth_verifier.tokens()
+            )
+            owner = ident[0] if ident else None
+    except Exception:
+        owner = None
+    try:
+        entry, tx_id = await asyncio.to_thread(REGISTRY.begin_tx, connection, owner)
     except Exception as e:
         _timing_update(start_time, "begin_transaction", False)
         return _render_error(e)
@@ -528,6 +550,51 @@ def _run_entry_select(entry, sql: str, max_rows: int):
         metrics["total_query_time_ms"] += elapsed_ms
 
 
+def _assert_preset_grant(connection: str | None) -> None:
+    """E3.5: check preset grants ON THE EVENT LOOP (before to_thread).
+    Non-admin callers may only use presets granted via db_presets.
+    Runs on the event loop because get_http_request() needs the HTTP
+    request context. Fail-open for mono mode / non-HTTP scope."""
+    if not connection:
+        return
+    verifier = getattr(mcp, "auth", None)
+    get_tokens = getattr(verifier, "tokens", None)
+    if get_tokens is None:
+        logger.warning("preset-grant check skipped: no verifier/tokens (verifier=%r)", verifier)
+        return
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+    except Exception as e:
+        logger.warning("preset-grant check skipped: no HTTP context (%s: %s)", type(e).__name__, e)
+        return
+    auth = (request.headers.get("authorization", "") or "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else \
+        request.headers.get("x-api-key")
+    if not token:
+        logger.warning("preset-grant check skipped: no token in request headers")
+        return
+    entry = get_tokens().get(token)
+    if entry is None:
+        logger.warning("preset-grant check skipped: caller token not in map (map size=%d)", len(get_tokens()))
+        return
+    role = entry.get("role", "admin")  # legacy mono map = admin
+    if role == "admin":
+        return
+    granted = set(entry.get("db_presets") or [])
+    try:
+        preset = presets.get_preset(connection)
+    except LookupError as e:
+        logger.warning("preset-grant check skipped: preset lookup failed: %s", e)
+        return
+    if preset.number not in granted and preset.name not in granted \
+            and preset.connection_name not in granted:
+        raise PermissionError(
+            f"Preset '{connection}' is not granted to your account "
+            f"({entry.get('client_id', 'unknown')})."
+        )
+
+
 def _read_guard(sql: str) -> str | None:
     """Lexical read-only guard for query() (accident prevention, not security:
     PG CTE-DML 'WITH x AS (DELETE ...)' passes — client holds execute_sql anyway)."""
@@ -703,6 +770,8 @@ async def query(sql: str, max_rows: int = 100, connection: str | None = None,
             tx_entry = await asyncio.to_thread(_tx_entry, tx_id, connection)
             rows, truncated = await asyncio.to_thread(_run_tx, tx_entry)
         else:
+            _assert_preset_grant(connection)
+
             def _run(entry):
                 return _run_entry_select(entry, sql, max_rows)
 
@@ -750,6 +819,7 @@ async def execute_sql(sql: str = "", connection: str | None = None,
     if not sql or not sql.strip():
         _timing_update(start_time, "execute_sql", False)
         return "Error: sql statement is required"
+    _assert_preset_grant(connection)
     logger.info(f"[SQL] Executing statement: {sql[:200]}{'...' if len(sql) > 200 else ''}")
     try:
         if tx_id:
@@ -773,6 +843,7 @@ async def execute_sql(sql: str = "", connection: str | None = None,
                 elapsed_ms = (time.time() - start) * 1000
                 metrics["total_query_time_ms"] += elapsed_ms
 
+        _assert_preset_grant(connection)
         rowcount = await asyncio.to_thread(_with_entry, connection, _run)
     except Exception as e:
         _timing_update(start_time, "execute_sql", False)

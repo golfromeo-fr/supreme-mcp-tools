@@ -60,6 +60,7 @@ class ConnectionEntry:
     tx_handle: Any = None
     tx_opened_at: float | None = None    # monotonic()
     tx_last_used: float | None = None    # monotonic()
+    tx_owner: str | None = None          # E3: client_id of the opener
     tx_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -138,6 +139,13 @@ class ConnectionRegistry:
                 except LookupError:
                     preset = None
                 if preset is not None:
+                    # E3.5: preset grants are per user (admin bypasses)
+                    err = preset_grant_error(
+                        preset.number, preset.name, preset.connection_name,
+                        *_current_caller_grants(),
+                    )
+                    if err:
+                        raise LookupError(err)
                     if preset.connection_name in self._entries:
                         return self._entries[preset.connection_name]
                     handle = DIALECTS[preset.dialect].connect(preset.params)
@@ -256,9 +264,11 @@ class ConnectionRegistry:
     # Transactions (E4) — at most ONE active tx per entry.
     # ------------------------------------------------------------------
 
-    def begin_tx(self, name: str | None = None) -> tuple[ConnectionEntry, str]:
+    def begin_tx(self, name: str | None = None,
+                 owner: str | None = None) -> tuple[ConnectionEntry, str]:
         """Open a transaction on the named (or active) connection; the
-        preset bypass applies. Returns (entry, tx_id)."""
+        preset bypass applies. owner = the caller's client_id (E3) — stamped
+        for attribution. Returns (entry, tx_id)."""
         entry = self.get(name)
         with entry.tx_lock:
             if entry.tx_id:
@@ -272,9 +282,11 @@ class ConnectionRegistry:
             entry.tx_handle = tx_handle
             entry.tx_opened_at = _time.monotonic()
             entry.tx_last_used = entry.tx_opened_at
+            entry.tx_owner = owner
             metrics["transactions_begun"] += 1
             logger.info(
-                f"[databasemcp] tx {entry.tx_id[:8]}… opened on '{entry.name}' ({entry.dialect})"
+                f"[databasemcp] tx {entry.tx_id[:8]}… opened on '{entry.name}' "
+                f"({entry.dialect}) by {owner or 'unknown'}"
             )
             return entry, entry.tx_id
 
@@ -361,3 +373,48 @@ class ConnectionRegistry:
 
 
 REGISTRY = ConnectionRegistry()
+
+
+# ---------------------------------------------------------------------------
+# E3.5: preset grants — presets are system-defined (master admin, .env) and
+# GRANTED per user. Non-admin callers may only bypass into granted presets.
+# Pure function for testability; the HTTP-dependent caller identity is
+# resolved by the tools layer (identity.resolve_identity).
+# ---------------------------------------------------------------------------
+
+def _current_caller_grants() -> tuple[str, str, list[str]]:
+    """(client_id, role, db_presets) of the in-flight caller, from the
+    verifier's token map. Tolerant: mono mode / non-HTTP scope /
+    unknown token -> ("system", "admin", []) — fail-open, matching the
+    E3 gate's mono behavior."""
+    try:
+        from core import mcp
+        from fastmcp.server.dependencies import get_http_request
+        from tools.shared.identity import resolve_identity
+
+        verifier = getattr(mcp, "auth", None)
+        if verifier is None or not hasattr(verifier, "tokens"):
+            return "system", "admin", []
+        ident = resolve_identity(get_http_request(), verifier.tokens)
+        if ident is None:
+            return "system", "admin", []
+        client_id, entry = ident
+        return client_id, entry.get("role", "user"), list(entry.get("db_presets") or [])
+    except Exception as e:
+        logger.warning(f"caller-grant resolution failed: {type(e).__name__}: {e}")
+        return "system", "admin", []
+
+
+def preset_grant_error(preset_number: str, preset_name: str | None,
+                       connection_name: str, client_id: str, role: str,
+                       db_presets: list[str]) -> str | None:
+    """Error message when a non-admin caller uses an ungranted preset."""
+    if role == "admin":
+        return None
+    granted = set(db_presets or [])
+    if preset_number in granted or preset_name in granted             or connection_name in granted:
+        return None
+    return (
+        f"Preset '{preset_number}' is not granted to your account "
+        f"({client_id}). Ask an admin to grant it (Users tab)."
+    )

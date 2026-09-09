@@ -350,15 +350,13 @@ def validate_and_cleanup_config(config_path: Path | None = None) -> dict[str, li
     tools = config.get("tools", {})
     disabled = config.get("disabled_tools", {})
 
-    # Clean up disabled tools that don't exist in tools list
-    for server_name, disabled_list in list(disabled.items()):
-        server_tools = tools.get(server_name, [])
-        if server_tools:
-            invalid = [t for t in disabled_list if t not in server_tools]
-            if invalid:
-                disabled[server_name] = [t for t in disabled_list if t in server_tools]
-                results["removed_invalid"].extend(invalid)
-                results["servers_updated"].append(server_name)
+    # E3 fix (2026-09-08): do NOT prune disabled entries for being absent
+    # from the `tools` inventory — that inventory comes from the MASKED
+    # tools/list, so an enforced mask makes its own function "missing" and
+    # the prune silently DELETED user masks on every restart (get_secret /
+    # brave_search_web were lost this way). A mask for a function that
+    # truly no longer exists is harmless; masks are user data and are only
+    # removed via the management API / Functions tab.
 
     config["disabled_tools"] = disabled
     save_tools_config(config, config_path)

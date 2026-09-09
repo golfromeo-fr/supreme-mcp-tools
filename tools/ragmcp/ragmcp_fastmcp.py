@@ -71,6 +71,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ragmcp")
 
+
+# ============================================================================
+# E3.5 — per-user collection access (identity from the request's auth key)
+# ============================================================================
+
+def _caller_rag_access() -> tuple[str | None, set[str] | None]:
+    """(client_id, allowed_collections) for the in-flight caller.
+
+    allowed_collections=None means UNRESTRICTED (admin role, or identity not
+    applicable: mono mode / in-memory). Returns (None, None) when the caller
+    has no identity (fail-open, matching the E3 gate)."""
+    verifier = getattr(mcp, "auth", None)
+    get_tokens = getattr(verifier, "tokens", None)
+    if get_tokens is None:
+        return None, None
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+        auth = (request.headers.get("authorization", "") or "")
+        token = auth[7:] if auth.lower().startswith("bearer ") else \
+            request.headers.get("x-api-key")
+    except Exception:
+        return None, None
+    if not token:
+        return None, None
+    entry = get_tokens().get(token)
+    if entry is None:
+        return None, None
+    if entry.get("role") == "admin":
+        return entry.get("client_id"), None
+    return entry.get("client_id"), set(entry.get("rag_collections") or [])
+
+
+def _collection_allowed(name: str, allowed: set[str] | None) -> bool:
+    return allowed is None or name in allowed
+
+
 # Load configuration from root .env
 root_env = SCRIPT_DIR.parent.parent / ".env"
 if root_env.exists():
@@ -828,6 +865,9 @@ async def search(
     - 'sidebar': Sidebar context block
     """
     logger.debug(f"Processing unified search: query={query}, mode={mode}, copilot_format={copilot_format}")
+    _client_id, _allowed = _caller_rag_access()
+    if not _collection_allowed(collection_name, _allowed):
+        return f"Error: Collection '{collection_name}' is not granted to your account."
 
     if not vector_store:
         return "Error: Qdrant client not initialized."
@@ -1253,6 +1293,9 @@ async def index_code(
 
     For advanced options (mode, custom embedding provider), use start_indexing.
     """
+    _client_id, _allowed = _caller_rag_access()
+    if not _collection_allowed(collection_name, _allowed):
+        return f"Error: Collection '{collection_name}' is not granted to your account."
     logger.debug(f"Processing index_code tool: workspace_root={workspace_root}, embedding_model={embedding_model}")
 
     if not vector_store:
@@ -1592,6 +1635,9 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-d
         result = ["Qdrant Collections\n"]
         result.append("=" * 80 + "\n\n")
 
+        client_id, allowed = _caller_rag_access()
+        collections = [c for c in collections
+                       if _collection_allowed(c, allowed)]
         for collection in collections:
             try:
                 collection_info = vector_store.get_collection(collection)
@@ -1734,6 +1780,9 @@ async def clear_index(
     confirm: bool = False
 ) -> str:
     """Clear all indexed code from Qdrant vector database. Only use this when you are CERTAIN an index needs to be deleted."""
+    _client_id, _allowed = _caller_rag_access()
+    if not _collection_allowed(collection_name, _allowed):
+        return f"Error: Collection '{collection_name}' is not granted to your account."
     try:
         if not vector_store:
             return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT."

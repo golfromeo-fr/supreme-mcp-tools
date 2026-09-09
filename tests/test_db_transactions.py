@@ -319,6 +319,22 @@ def test_postgres_close_tx_is_idempotent_after_commit(pg_dialect):
 # Tool surface (T2/T3) — in-memory MCP client over the shared mcp instance
 # ============================================================================
 
+
+class TestPresetGrants:
+    def test_grant_error_pure_function(self):
+        from connections import preset_grant_error
+
+        # admin bypasses
+        assert preset_grant_error("02", None, "02", "root", "admin", []) is None
+        # granted by number or alias
+        assert preset_grant_error("02", "pg", "02", "alice", "user", ["02"]) is None
+        assert preset_grant_error("02", "pg", "02", "alice", "user", ["pg"]) is None
+        # not granted
+        err = preset_grant_error("02", "pg", "02", "alice", "user", ["webmcp"])
+        assert err is not None and "not granted" in err
+
+
+
 @pytest.fixture()
 def clean_registry():
     """Isolate the module-global REGISTRY per test (unique names + teardown)."""
@@ -557,3 +573,46 @@ class TestReaper:
                     pass  # task's loop already closed (in-memory-client artifact)
             db_tools._reaper_started = False
             db_tools._reaper_task = None
+
+
+@pytest.fixture()
+def multi_registry(monkeypatch):
+    """Caller resolves as role=user with preset 96 granted."""
+    import connections
+    import dialects
+    from connections import ConnectionRegistry
+
+    fake = ScriptedFakeDialect()
+    monkeypatch.setitem(dialects.DIALECTS, "scripted", fake)
+    monkeypatch.setenv("DB_PRESET_96", "file:/tmp/never_multi.db")
+    monkeypatch.setattr(connections, "_current_caller_grants",
+                        lambda: ("alice", "user", ["96"]))
+    reg = ConnectionRegistry()
+    return reg, fake
+
+
+@pytest.fixture()
+def no_grant_registry(monkeypatch):
+    import connections
+    import dialects
+    from connections import ConnectionRegistry
+
+    fake = ScriptedFakeDialect()
+    monkeypatch.setitem(dialects.DIALECTS, "scripted", fake)
+    monkeypatch.setenv("DB_PRESET_96", "file:/tmp/never_multi2.db")
+    monkeypatch.setattr(connections, "_current_caller_grants",
+                        lambda: ("alice", "user", []))
+    reg = ConnectionRegistry()
+    return reg, fake
+
+
+def test_bypass_denied_without_grant(no_grant_registry):
+    reg, _fake = no_grant_registry
+    with pytest.raises(LookupError, match="not granted"):
+        reg.get("96")
+
+
+def test_bypass_allowed_with_grant(multi_registry):
+    reg, _fake = multi_registry
+    entry = reg.get("96")
+    assert entry.dialect == "libsql"

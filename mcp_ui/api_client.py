@@ -112,7 +112,10 @@ class APIClient:
         self.base_url = (_get_default_base_url() if base_url is None else base_url).rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout if timeout is not None else _get_api_timeout())
         self._session: aiohttp.ClientSession | None = None
-        self.api_key = os.environ.get("MCP_API_KEY")
+        # E3-P0: the central API key moved to MCP_MANAGEMENT_API_KEY (auth for
+        # the privileged 8200 surface); MCP_API_KEY remains a fallback so
+        # deployments configured the old way keep authenticating.
+        self.api_key = os.environ.get("MCP_MANAGEMENT_API_KEY") or os.environ.get("MCP_API_KEY")
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session (lazy initialization)."""
@@ -402,6 +405,48 @@ class APIClient:
             APIResponse with auth config (is_set, value_masked)
         """
         return await self._request("GET", f"/api/tools/{tool_name}/auth")
+
+    # === E3/M2: user management (admin) ===
+
+    async def list_users(self) -> APIResponse:
+        return await self._request("GET", "/api/users")
+
+    async def create_user(self, username: str, password: str, role: str,
+                          servers: list, masked_functions: dict | None = None) -> APIResponse:
+        return await self._request("POST", "/api/users", json={
+            "username": username, "password": password, "role": role,
+            "servers": servers, "masked_functions": masked_functions or {},
+        })
+
+    async def delete_user(self, username: str) -> APIResponse:
+        return await self._request("DELETE", f"/api/users/{username}")
+
+    async def rotate_user_key(self, username: str) -> APIResponse:
+        return await self._request("POST", f"/api/users/{username}/rotate-key")
+
+    async def set_user_password(self, username: str, password: str) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/password",
+                                   json={"password": password})
+
+    async def set_user_servers(self, username: str, servers: list) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/servers",
+                                   json={"servers": servers})
+
+    async def set_user_masked_functions(self, username: str, masked: dict) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/masked-functions",
+                                   json={"masked_functions": masked})
+
+    async def set_user_db_presets(self, username: str, presets: list) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/db-presets",
+                                   json={"presets": presets})
+
+    async def set_user_rag_collections(self, username: str, collections: list) -> APIResponse:
+        return await self._request("PUT", f"/api/users/{username}/rag-collections",
+                                   json={"collections": collections})
+
+    async def set_user_enabled(self, username: str, enabled: bool) -> APIResponse:
+        return await self._request("POST", f"/api/users/{username}/enabled",
+                                   json={"enabled": enabled})
 
     async def update_tool_auth(self, tool_name: str, api_key: str) -> APIResponse:
         """

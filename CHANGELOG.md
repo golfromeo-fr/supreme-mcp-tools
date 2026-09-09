@@ -4,6 +4,13 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-09-08 — E3: multi-user identity layer (feature/e3-multiuser)
+- **Added**: `MCP_AUTH_MODE=mono|multi` (default `mono` = exactly today). In `multi`, each tool's verifier is backed by the **user store** (`~/.config/supreme-mcp-tools/users.json`): `{system key → admin username (current mono user)} ∪ {per-user mcp_keys → usernames}`, gated by `enabled` + per-user `servers` reachability; `IdentityGateMiddleware` filters `tools/list` and rejects `tools/call` with "Unknown tool" for per-user `masked_functions`. Store edits hot-apply (mtime cache) — no restarts. Kill-switch: keep `mono` (or `MCP_USERS_STORE_DISABLE=1`).
+- **Added**: central `/api/users` CRUD (create with once-only `mcp_key`, rotate, set password/servers/masked-functions, enable/disable, delete with last-admin guard) — list responses never contain secrets.
+- **Added**: mcp_ui multi-user login (username/password via pbkdf2 store; legacy ENV admin pair bootstraps the store admin once, key shown once); admin-only **Users tab** (server checkboxes + per-server function-mask grid, rotate key, enable/disable, delete); Memory Explorer calls memorymcp **as the acting user**.
+- **Changed**: `mcp.access` lines now append `user=<client_id>` (positional, `-` when unknown); central 8200 requires `MCP_MANAGEMENT_API_KEY` (P0 — it was open before); 81xx action routes + `/admin/flush-sessions` require the admin role (system key or admin user key).
+- **Tests**: `test_management_auth.py` (4), `test_identity_middleware.py` (12), `test_users_store.py` (19), `test_e3_integration.py` (7) — 838 total.
+
 ### 2026-09-07 — E2: Memory Explorer (feature/e2-memory-explorer)
 - **Added**: memorymcp `listMemories(limit, offset, tag, sort="recent")` — paged browse over the vector store's scroll contract (bounded scan, newest-first paging, tag filter; no embedding, no usage-count side effects). 15 → **16** memorymcp tools. `tests/test_memory_list.py` (7, contract-faithful fake).
 - **Added**: mcp_ui **Memory tab** (memorymcp only) — browse cards (preview, type/tags/sensitivity badges, usage, date) with Prev/Next + tag filter, semantic search via `queryMemory`, detail view (`getMemory` + `auditTrail`), delete with confirm (`deleteMemory`). The UI consumes memorymcp **through its MCP surface only** (`mcp_ui/memory_client.py`, fastmcp Client + tool-config key) — no backend credentials in the UI, and every Explorer action is something an MCP client could do.

@@ -155,7 +155,32 @@ class ExtensionHTTPServer:
         if not hmac.compare_digest(key, self.api_key):
             raise HTTPException(status_code=401, detail="Invalid API key")
         return True
-    
+
+    def _is_admin(self, key: str | None) -> bool:
+        """E3-M3: is this key an admin identity?
+
+        The tool's system key (self.api_key) IS admin. A user key is admin
+        only when its tokens-map entry says so. Unknown/disabled keys are not
+        admin (they would already have failed _verify_api_key for routes that
+        run it first — this helper is standalone for actions)."""
+        if key is None or self.api_key is None:
+            return self.api_key is None  # open server = admin (legacy)
+        if hmac.compare_digest(key, self.api_key):
+            return True
+        try:
+            from tools.shared import users_store
+
+            entry = users_store.tokens_map_for_tool(
+                self.tool_name, self.api_key
+            ).get(key)
+            return (entry or {}).get("role") == "admin"
+        except Exception:
+            return False
+
+    def _require_admin(self, key: str | None = Depends(API_KEY_HEADER)) -> None:
+        if not self._is_admin(key):
+            raise HTTPException(status_code=403, detail="Admin role required")
+
     def _register_routes(self) -> None:
         """Register all API routes."""
         
@@ -245,8 +270,8 @@ class ExtensionHTTPServer:
                 raise HTTPException(status_code=500, detail="Internal server error")
         
         @self.app.post("/extensions/{extension_name}/execute")
-        async def execute_extension(extension_name: str, request: ExecuteRequest, _: bool = Depends(self._verify_api_key)):
-            """Execute an action extension."""
+        async def execute_extension(extension_name: str, request: ExecuteRequest, _: bool = Depends(self._verify_api_key), admin: None = Depends(self._require_admin)):
+            """Execute an action extension (E3-M3: admin role required)."""
             try:
                 result = self.registry.execute(
                     self.tool_name,
@@ -261,7 +286,7 @@ class ExtensionHTTPServer:
                 raise HTTPException(status_code=500, detail="Internal server error")
 
         @self.app.post("/admin/function-masks")
-        async def set_function_mask(request: FunctionMaskRequest, _: bool = Depends(self._verify_api_key)):
+        async def set_function_mask(request: FunctionMaskRequest, _: bool = Depends(self._verify_api_key), admin: None = Depends(self._require_admin)):
             """E1: toggle a function mask on this LIVE tool server.
 
             File-first: persist to tools_config.json, then apply on the

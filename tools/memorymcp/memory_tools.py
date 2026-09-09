@@ -44,6 +44,36 @@ from text_utils import similarity_with_fallback
 # lazily on the first save/load/delete, so S3 is never initialized at import.
 from shared.artifact_store import ArtifactStoreError, generate_artifact_key, get_artifact_store
 
+
+# ============================================================================
+# E3.5 — per-user memory scoping (identity from the request's auth key)
+# ============================================================================
+
+def _memory_caller() -> tuple[str | None, bool, bool]:
+    """(client_id, is_admin, scoped) for the in-flight caller.
+
+    scoped=False when identity is not applicable: mono mode (legacy single
+    verifier without role entries), in-memory tests, or no auth header —
+    the pre-E3 unrestricted behavior. role=admin sees/is allowed everything."""
+    verifier = getattr(mcp, "auth", None)
+    get_tokens = getattr(verifier, "tokens", None)
+    if get_tokens is None:
+        return None, False, False
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+        auth = (request.headers.get("authorization", "") or "")
+        token = auth[7:] if auth.lower().startswith("bearer ") else \
+            request.headers.get("x-api-key")
+    except Exception:
+        return None, False, False
+    if not token:
+        return None, False, False
+    entry = get_tokens().get(token)
+    if entry is None:
+        return None, False, False
+    return entry.get("client_id"), entry.get("role") == "admin", True
+
 # For FEF V3 extensions
 try:
     from launcher.tool_extensions import Extension, ExtensionType
@@ -211,7 +241,36 @@ async def upsertMemory(
 
     payload = memory_item_to_payload(item)
     payload["sensitivity"] = sensitivity
+    # E3.5 owner attribution: the memory belongs to the caller
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        from tools.shared.identity import resolve_identity
 
+        auth_verifier = getattr(mcp, "auth", None)
+        if auth_verifier is not None and hasattr(auth_verifier, "tokens"):
+            ident = resolve_identity(
+                get_http_request(), lambda: auth_verifier.tokens()
+            )
+            if ident is not None:
+                payload["owner"] = ident[0]
+    except Exception:
+        pass  # mono mode / non-HTTP scope: no owner concept
+    # E3.5: attribute the memory to the caller (admin may pass an explicit
+    # owner to create shared memories). Legacy records (no owner) are
+    # treated as admin-owned.
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        from tools.shared.identity import resolve_identity
+
+        auth_verifier = getattr(mcp, "auth", None)
+        if auth_verifier is not None and hasattr(auth_verifier, "tokens"):
+            ident = resolve_identity(
+                get_http_request(), lambda: auth_verifier.tokens()
+            )
+            if ident is not None:
+                payload["owner"] = ident[0]
+    except Exception:
+        pass  # mono mode / non-HTTP scope: no owner concept
     # When updating, read the existing payload so a replaced artifact sidecar
     # can be cleaned up (no orphaned blobs).
     old_artifact_key = None
@@ -307,6 +366,12 @@ async def queryMemory(
     if tags:
         for tag in tags:
             conditions.append(FieldCondition(key="tags", match=MatchContains(value=tag)))
+
+    # E3.5 owner scoping: non-admin callers see only their own memories
+    # (legacy corpus without an owner belongs to admin)
+    _caller, _is_admin, _scoped = _memory_caller()
+    if _scoped and not _is_admin:
+        conditions.append(FieldCondition(key="owner", match=MatchValue(value=_caller)))
 
     search_filter = Filter(must=conditions) if conditions else None
 
@@ -494,11 +559,15 @@ async def listMemories(
         return {"error": "vector store not initialized"}
 
     import asyncio
+    client_id, _is_admin, _scoped = _memory_caller()
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
-    filt = None
+    conditions = []
     if tag:
-        filt = Filter(must=[FieldCondition(key="tags", match=MatchContains(value=tag))])
+        conditions.append(FieldCondition(key="tags", match=MatchContains(value=tag)))
+    if _scoped and not _is_admin:
+        conditions.append(FieldCondition(key="owner", match=MatchValue(value=client_id)))
+    filt = Filter(must=conditions) if conditions else None
 
     try:
         # Management browse: bounded full filtered scan (stores are small —
@@ -570,6 +639,15 @@ async def deleteMemory(memory_id: str) -> str:
     """
     if not vector_store:
         return "Error: Qdrant client not initialized"
+    _caller, _is_admin, _scoped = _memory_caller()
+    try:
+        existing = vector_store.retrieve(COLLECTION_NAME, [memory_id], with_payload=True)
+        if existing:
+            owner = (existing[0].payload or {}).get("owner")
+            if _scoped and not _is_admin and owner and owner != _caller:
+                return "Memory not found"
+    except Exception as e:
+        logger.warning(f"Could not read payload of {memory_id}: {e}")
 
     try:
         # Read the payload first so the artifact sidecar can be removed too.

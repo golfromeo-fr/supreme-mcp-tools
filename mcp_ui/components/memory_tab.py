@@ -18,11 +18,12 @@ from ..memory_client import get_memory_client, MemoryMcpError
 PAGE_SIZE = 20
 
 
-def render_memory_tab(container) -> None:
+def render_memory_tab(container, api_key: str | None = None) -> None:
     """Entry point: (re)build the whole tab into `container`. Sync on purpose —
     the management_ui tab builder calls it directly; async data loads are
-    scheduled with asyncio.create_task inside."""
-    client = get_memory_client()
+    scheduled with asyncio.create_task inside. api_key = the acting user's
+    mcp_key (E3): the Explorer calls memorymcp AS that user."""
+    client = get_memory_client(api_key=api_key)
     state: dict[str, Any] = {
         "mode": "browse",       # browse | search | detail
         "offset": 0,
@@ -178,14 +179,11 @@ def render_memory_tab(container) -> None:
                 def _confirm_delete():
                     with ui.dialog() as dialog, ui.card():
                         ui.label(f"Delete memory {mid[:8]}…? This cannot be undone.")
-                        with ui.row():
-                            ui.button("Delete", color="negative",
-                                      on_click=lambda: dialog.submit("yes"))
-                            ui.button("Cancel", on_click=lambda: dialog.submit("no"))
 
-                    async def _wait():
-                        outcome = await dialog
-                        if outcome == "yes":
+                        async def _do_delete():
+                            # async handler keeps the event's slot context —
+                            # ui.notify inside create_task has none (RuntimeError).
+                            dialog.close()
                             try:
                                 await client.delete(mid)
                                 ui.notify("Memory deleted.", type="positive")
@@ -193,7 +191,9 @@ def render_memory_tab(container) -> None:
                             except MemoryMcpError as e:
                                 ui.notify(f"Delete failed: {e}", type="negative")
 
-                    asyncio.create_task(_wait())
+                        with ui.row():
+                            ui.button("Delete", color="negative", on_click=_do_delete)
+                            ui.button("Cancel", on_click=dialog.close)
 
                 ui.button("Delete", icon="delete", color="negative",
                           on_click=_confirm_delete).props("outline dense")
@@ -226,6 +226,7 @@ def render_memory_tab(container) -> None:
 
         with ui.row():
             ui.button("Search", icon="search", on_click=_run_search).props("outline dense")
+        query_input.on("keydown.enter", _run_search)
 
         if state["last_query"]:
             query_input.value = state["last_query"]

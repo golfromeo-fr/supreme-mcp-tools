@@ -15,6 +15,17 @@ import sys
 from pathlib import Path
 import uvicorn
 
+# Load .env BEFORE any launcher/tool import. Tool modules are imported
+# in-process at discovery time and build their auth verifier from
+# MCP_AUTH_MODE at import: without this, the first-imported tool sees no env
+# and silently boots mono (simplemcp rejected every user key, 2026-09-09 —
+# launcher/__main__.py, the new-style entry, already did this).
+from dotenv import load_dotenv
+
+_root_env = Path(__file__).resolve().parent / ".env"
+if _root_env.exists():
+    load_dotenv(_root_env)
+
 from launcher import (
     Config,
     PortManager,
@@ -606,10 +617,21 @@ async def start_management_api_server(
         _service_registry = service_registry
         
         # Create management server
+        # E3-P0: the central API is privileged (users, env, auth, masks) — an
+        # unset key means it serves OPEN. Warn loudly; multi-user (E3) later
+        # makes this mandatory.
+        management_api_key = os.environ.get("MCP_MANAGEMENT_API_KEY")
+        if not management_api_key:
+            logging.warning(
+                "MCP_MANAGEMENT_API_KEY is not set — the central management API "
+                f"on port {port} is OPEN (any local process can read/write config, "
+                "env vars, auth keys and users). Set MCP_MANAGEMENT_API_KEY in .env."
+            )
         management_server = ManagementServer(
             service_registry=service_registry,
             port=port,
-            host=DEFAULT_HOST
+            host=DEFAULT_HOST,
+            api_key=management_api_key,
         )
         
         logging.info(f"Starting management API server on port {port}")
