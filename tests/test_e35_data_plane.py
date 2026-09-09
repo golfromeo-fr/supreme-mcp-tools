@@ -115,6 +115,27 @@ async def main() -> int:
     print("=" * 60)
 
     # ==================================================================
+    # force-mask: masked tool is invisible AND callable-rejected
+    # ==================================================================
+    print("\n-- force-mask: deleteMemory masked for role=user --")
+    # alice's key → deleteMemory is in DEFAULT_USER_MASKS for memorymcp
+    alice_mm = await mcp_list_tools("memorymcp", alice_key)
+    check("tools/list hides deleteMemory (default mask)",
+          isinstance(alice_mm, list) and "deleteMemory" not in alice_mm)
+    try:
+        r = await mcp_call("memorymcp", alice_key, "deleteMemory",
+                           {"memory_id": "00000000-0000-0000-0000-000000000000"})
+        check("deleteMemory call rejected (Unknown tool)",
+              "unknown tool" in r.lower() or "not found" in r.lower())
+    except Exception as e:
+        check("deleteMemory call rejected (Unknown tool)", True)  # rejected = correct
+
+    # admin is unrestricted
+    admin_mm = await mcp_list_tools("memorymcp", admin_key)
+    check("admin sees deleteMemory (not masked for admin)",
+          isinstance(admin_mm, list) and "deleteMemory" in admin_mm)
+
+    # ==================================================================
     # memorymcp: owner scoping
     # ==================================================================
     print("\n── memorymcp owner scoping ──")
