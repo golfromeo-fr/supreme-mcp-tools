@@ -146,7 +146,7 @@ def _public_view(record: dict) -> dict:
 def load_users() -> dict:
     """Full store dict; missing/corrupt file → empty store + loud log."""
     try:
-        mtime = USERS_PATH.stat().st_mtime if USERS_PATH.exists() else None
+        mtime = USERS_PATH.stat().st_mtime_ns if USERS_PATH.exists() else None
     except OSError:
         mtime = None
     if _store_cache["store"] is not None and _store_cache["mtime"] == mtime:
@@ -175,7 +175,7 @@ def load_users() -> dict:
 def save_users(store: dict) -> None:
     USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(USERS_PATH, store)
-    _store_cache["mtime"] = USERS_PATH.stat().st_mtime
+    _store_cache["mtime"] = USERS_PATH.stat().st_mtime_ns
     _store_cache["store"] = store
 
 

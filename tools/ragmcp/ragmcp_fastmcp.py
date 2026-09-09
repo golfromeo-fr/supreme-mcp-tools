@@ -71,6 +71,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ragmcp")
 
+
+# ============================================================================
+# E3.5 — per-user collection access (identity from the request's auth key)
+# ============================================================================
+
+def _caller_rag_access() -> tuple[str | None, set[str] | None]:
+    """(client_id, allowed_collections) for the in-flight caller.
+
+    allowed_collections=None means UNRESTRICTED (admin role, or identity not
+    applicable: mono mode / in-memory). Returns (None, None) when the caller
+    has no identity (fail-open, matching the E3 gate)."""
+    verifier = getattr(mcp, "auth", None)
+    get_tokens = getattr(verifier, "tokens", None)
+    if get_tokens is None:
+        return None, None
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+        auth = (request.headers.get("authorization", "") or "")
+        token = auth[7:] if auth.lower().startswith("bearer ") else \
+            request.headers.get("x-api-key")
+    except Exception:
+        return None, None
+    if not token:
+        return None, None
+    entry = get_tokens().get(token)
+    if entry is None:
+        return None, None
+    if entry.get("role") == "admin":
+        return entry.get("client_id"), None
+    return entry.get("client_id"), set(entry.get("rag_collections") or [])
+
+
+def _collection_allowed(name: str, allowed: set[str] | None) -> bool:
+    return allowed is None or name in allowed
+
+
 # Load configuration from root .env
 root_env = SCRIPT_DIR.parent.parent / ".env"
 if root_env.exists():
