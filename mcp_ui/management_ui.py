@@ -194,6 +194,25 @@ from .components.loading import loading_spinner
 _api_client = None
 
 
+def _session_tool_filter() -> set[str] | None:
+    """Server names the current session may see, or None = unrestricted
+    (mono sessions, admins, or legacy sessions without a servers field).
+    multi mode: users are limited to their store `servers` grant — the
+    sidebar shows only those tools (enforcement stays server-side; this is
+    presentation). An EMPTY grant list means the user sees no tools."""
+    try:
+        if not nicegui_app.storage.user.get("authenticated"):
+            return None
+        if nicegui_app.storage.user.get("role", "user") == "admin":
+            return None
+        servers = nicegui_app.storage.user.get("servers")
+        if servers is None:
+            return None
+        return set(servers)
+    except Exception:
+        return None
+
+
 def _session_central_key() -> str | None:
     """Central credential of the logged-in admin (per-admin audit on 8200).
     None outside a request context or for non-admin sessions → env key."""
@@ -245,8 +264,9 @@ def try_login_user(username: str, password: str) -> dict:
     """
     if not _multi_user_mode():
         if verify_credentials(username, password):
+            # servers=None → sidebar unrestricted (mono sees every tool)
             return {"username": username or "admin", "role": "admin",
-                    "mcp_key": None, "authenticated": True}
+                    "mcp_key": None, "authenticated": True, "servers": None}
         raise ValueError("Wrong username or password")
 
     from tools.shared import users_store
@@ -260,7 +280,8 @@ def try_login_user(username: str, password: str) -> dict:
                 "mcp_key": users_store.get_user_record(
                     store_user["username"]
                 ).get("mcp_key"),
-                "authenticated": True}
+                "authenticated": True,
+                "servers": list(store_user.get("servers") or [])}
     # break-glass: the env admin pair bootstraps the store admin (once)
     if verify_credentials(username, password):
         admin_name = (username or "admin").lower()
@@ -275,7 +296,8 @@ def try_login_user(username: str, password: str) -> dict:
             )
             return {"username": admin_name, "role": "admin",
                     "mcp_key": created["mcp_key"], "authenticated": True,
-                    "bootstrapped_key": created["mcp_key"]}
+                    "bootstrapped_key": created["mcp_key"],
+                    "servers": list(created["servers"])}
         except ValueError as e:
             # admin already exists in the store under this name but the
             # password mismatched — surface as a failed login, not an error
@@ -351,8 +373,12 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
     return None
 
 
-async def _refresh_tools() -> None:
-    """Refresh the tools list from the API."""
+async def _refresh_tools(tools_filter: set[str] | None = None) -> None:
+    """Refresh the tools list from the API.
+
+    tools_filter: server names the session may see (computed at page build,
+    where storage.user is bound — background refreshes have no storage
+    context). None = unrestricted."""
     logger.info("action: refresh_tools started")
 
     state = get_state()
@@ -365,9 +391,12 @@ async def _refresh_tools() -> None:
         response = await client.get_tools()
 
         if response.success:
-            state.set_tools(response.data)
+            tools = response.data
+            if tools_filter is not None:
+                tools = [t for t in tools if t.name in tools_filter]
+            state.set_tools(tools)
             state.connection_status = "connected"
-            logger.info(f"action: refresh_tools success count={len(response.data)}")
+            logger.info(f"action: refresh_tools success count={len(tools)}")
         else:
             state.set_error(response.error)
             show_error(f"Connection error: {response.error}")
@@ -427,6 +456,9 @@ async def main_page() -> None:
         ui.navigate.to("/login")
 
     state = get_state()
+    # per-user sidebar filter: computed HERE because storage.user is bound
+    # during page build; background refreshes would fail-open to unrestricted
+    tool_filter = _session_tool_filter()
 
     # Set up theme
     theme = _get_ui_theme()
@@ -563,7 +595,7 @@ async def main_page() -> None:
             asyncio.create_task(fetch_tool_detail(tool_name))
 
     async def on_refresh_tools() -> None:
-        await _refresh_tools()
+        await _refresh_tools(tools_filter=tool_filter)
         rebuild_sidebar()
         await rebuild_content()
 
@@ -657,8 +689,13 @@ async def main_page() -> None:
         state = get_state()
         response = await get_api_client().get_tools()
         if response.success:
+            tools = response.data
+            # keep the session's per-user grant filter (without this the
+            # poller re-broadens the list the page build had filtered)
+            if tool_filter is not None:
+                tools = [t for t in tools if t.name in tools_filter]
             old_status = {t.name: t.status for t in state.tools}
-            state.set_tools(response.data)
+            state.set_tools(tools)
             state.connection_status = "connected"
             new_status = {t.name: t.status for t in state.tools}
             rebuild_status_chip()
@@ -725,9 +762,12 @@ async def main_page() -> None:
     rebuild_sidebar()
     await rebuild_content()
 
-    # Initial load: fetch tools before first render, then rebuild regions
-    if not state.tools and not state.loading_tools:
-        await _refresh_tools()
+    # Initial load: ALWAYS fetch with this session's filter. state is a
+    # process-wide singleton - without this, a new connection renders the
+    # previous session's unfiltered tool list (a user-key session would see
+    # tools its grant doesn't cover).
+    if not state.loading_tools:
+        await _refresh_tools(tools_filter=tool_filter)
         rebuild_sidebar()
         await rebuild_content()
 

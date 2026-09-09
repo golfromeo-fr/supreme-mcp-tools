@@ -483,6 +483,8 @@ every tool accepts only its system key — exactly the pre-E3 behavior.
   unknown on call. Admins manage global masks (Functions tab); `role=user` accounts get
   a destructive-tool mask profile by default (delete/decay/merge on memorymcp, indexing
   controls on ragmcp, execute/connect/disconnect on databasemcp).
+- **Per-user reach in the UI**: the management-UI sidebar lists only the servers a
+  session's account is granted (admins see everything); enforcement stays server-side.
 - **Per-user data plane (E3.5)**: memorymcp stamps an `owner` on upserts and scopes
   queries/lists to the caller (admins see all); ragmcp gates collections per user;
   databasemcp denies ungranted presets per call.
