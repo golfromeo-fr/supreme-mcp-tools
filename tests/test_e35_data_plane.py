@@ -472,11 +472,11 @@ async def main() -> int:
         r = await hc.get("http://127.0.0.1:8200/api/tools")
         check("central no key → 401", r.status_code == 401)
 
-        # admin user key → also 401 (central only accepts system key, not user keys)
+        # E3 multi-admin: an enabled admin's own key opens the central API
         admin_rec = users_store.get_user_record("e35admin")
         r = await hc.get("http://127.0.0.1:8200/api/tools",
                          headers={"Authorization": f"Bearer {admin_rec['mcp_key']}"})
-        check("central admin user key → 401 (needs system key)", r.status_code == 401)
+        check("central accepts admin user key (multi-admin)", r.status_code == 200)
 
     # ==================================================================
     # store corruption resilience

@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import aiohttp
 
@@ -116,6 +116,9 @@ class APIClient:
         # the privileged 8200 surface); MCP_API_KEY remains a fallback so
         # deployments configured the old way keep authenticating.
         self.api_key = os.environ.get("MCP_MANAGEMENT_API_KEY") or os.environ.get("MCP_API_KEY")
+        # E3 multi-admin: when set, returns the logged-in admin's own user
+        # key (per-admin audit + revocation on 8200); None → env key.
+        self.session_key_getter: Callable[[], str | None] | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session (lazy initialization)."""
@@ -154,10 +157,13 @@ class APIClient:
         logger.debug(f"--> {method} {url}")
 
         headers = kwargs.pop("headers", {})
-        if self.api_key:
-            # The central management API's _verify_api_key accepts only the
-            # Bearer scheme (HTTPBearer) — X-API-Key headers get 401.
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        key = self.api_key
+        if self.session_key_getter is not None:
+            key = self.session_key_getter() or self.api_key
+        if key:
+            # The central management API's auth accepts only the Bearer
+            # scheme (HTTPBearer) — X-API-Key headers get 401.
+            headers["Authorization"] = f"Bearer {key}"
 
         try:
             session = await self._get_session()

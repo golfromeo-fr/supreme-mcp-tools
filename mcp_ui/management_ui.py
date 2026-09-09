@@ -194,11 +194,24 @@ from .components.loading import loading_spinner
 _api_client = None
 
 
+def _session_central_key() -> str | None:
+    """Central credential of the logged-in admin (per-admin audit on 8200).
+    None outside a request context or for non-admin sessions → env key."""
+    try:
+        if nicegui_app.storage.user.get("authenticated") and \
+                nicegui_app.storage.user.get("role") == "admin":
+            return nicegui_app.storage.user.get("mcp_key")
+    except Exception:
+        pass
+    return None
+
+
 def get_api_client():
     """Get or create the API client."""
     global _api_client
     if _api_client is None:
         _api_client = get_client()
+        _api_client.session_key_getter = _session_central_key
     return _api_client
 
 

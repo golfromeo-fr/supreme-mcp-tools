@@ -11,7 +11,7 @@ import logging
 import os
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -214,19 +214,36 @@ class ManagementServer:
     
     def _verify_api_key(
         self,
+        request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(security)
-    ) -> bool:
-        """Verify API key if configured."""
+    ) -> str:
+        """Central auth (E3 multi-admin): the env break-glass key
+        (attributed "system") OR an enabled admin's user key (attributed to
+        that admin, revocable via rotate/disable). Non-admin user keys are
+        rejected. Returns the acting identity; every authenticated call is
+        audit-logged."""
         if self.api_key is None:
-            return True
+            return "open"
         
         if credentials is None:
             raise HTTPException(status_code=401, detail="Missing API key")
         
-        if not hmac.compare_digest(credentials.credentials, self.api_key):
-            raise HTTPException(status_code=401, detail="Invalid API key")
+        token = credentials.credentials
+        if hmac.compare_digest(token, self.api_key):
+            self._audit_access(request, "system")
+            return "system"
         
-        return True
+        from tools.shared import users_store
+        for key, entry in users_store.central_tokens().items():
+            if hmac.compare_digest(token, key):
+                self._audit_access(request, entry["client_id"])
+                return entry["client_id"]
+        
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    @staticmethod
+    def _audit_access(request: Request, who: str) -> None:
+        logger.info(f"central.access user={who} {request.method} {request.url.path}")
     
     def _register_routes(self) -> None:
         """Register all API routes."""

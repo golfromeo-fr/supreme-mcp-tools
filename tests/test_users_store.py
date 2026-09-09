@@ -241,3 +241,27 @@ class TestTolerantLoad:
         future = time.time() + 10
         os.utime(_path, (future, future))
         assert us.get_user_record("bob") is not None
+
+
+def test_central_tokens_admins_only_enabled_only(tmp_path, monkeypatch):
+    """central_tokens surfaces ENABLED ADMINS' mcp_keys only — the E3
+    multi-admin credential map for the central API."""
+    from tools.shared import users_store
+
+    store = {"version": 1, "users": {
+        "root": {"username": "root", "role": "admin", "enabled": True,
+                 "mcp_key": "key-admin-1"},
+        "second": {"username": "second", "role": "admin", "enabled": True,
+                   "mcp_key": "key-admin-2"},
+        "plain": {"username": "plain", "role": "user", "enabled": True,
+                  "mcp_key": "key-user-1"},
+        "off": {"username": "off", "role": "admin", "enabled": False,
+                "mcp_key": "key-admin-disabled"},
+    }}
+    monkeypatch.setattr(users_store, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(users_store, "_store_cache",
+                        {"mtime": None, "store": store})
+
+    tokens = users_store.central_tokens()
+    assert set(tokens) == {"key-admin-1", "key-admin-2"}
+    assert tokens["key-admin-1"] == {"client_id": "root", "role": "admin"}

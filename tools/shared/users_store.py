@@ -492,6 +492,20 @@ def tokens_map_for_tool(tool_name: str, system_key: str) -> dict[str, dict]:
     return tokens
 
 
+def central_tokens() -> dict[str, dict]:
+    """E3 multi-admin: {admin mcp_key: {"client_id": username}} for ENABLED
+    admins — per-admin credentials for the central management API (8200).
+    Revocation rides the existing key lifecycle (rotate_key / set_enabled /
+    delete_user); non-admin keys never appear here."""
+    _ensure_seeded()
+    out: dict[str, dict] = {}
+    for record in load_users().get("users", {}).values():
+        if record.get("role") != "admin" or not record.get("enabled", False):
+            continue
+        out[record["mcp_key"]] = {"client_id": record["username"], "role": "admin"}
+    return out
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

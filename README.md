@@ -486,8 +486,9 @@ every tool accepts only its system key — exactly the pre-E3 behavior.
   only) — create users (shows the MCP key once), rotate keys, set passwords,
   enable/disable, delete, and an Edit-access dialog with per-server function pickers
   and data-plane grant checkboxes.
-- **Central API**: port 8200 requires `MCP_MANAGEMENT_API_KEY`; user keys are rejected
-  there by design.
+- **Central API (multi-admin)**: port 8200 accepts `MCP_MANAGEMENT_API_KEY`
+  (break-glass, attributed `system`) or any **enabled admin's** MCP key — per-admin,
+  revocable, audit-logged (`central.access user=<admin>`). Non-admin keys are rejected.
 
 ## Monitoring
 

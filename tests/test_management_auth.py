@@ -71,3 +71,49 @@ def test_unset_key_stays_open(open_server):
     client = TestClient(open_server.app)
     resp = client.get("/api/disabled-tools")  # no header at all
     assert resp.status_code == 200
+
+
+# ── E3 multi-admin: enabled admins' user keys open the central API ──
+
+@pytest.fixture()
+def _admin_central_key(monkeypatch):
+    from tools.shared import users_store
+    monkeypatch.setattr(
+        users_store, "central_tokens",
+        lambda: {"admin-central-key-1": {"client_id": "e35admin", "role": "admin"}},
+    )
+
+
+def test_admin_user_key_accepted(management_server, _admin_central_key, caplog):
+    """Multi-admin: an enabled admin's own MCP key authenticates on 8200
+    (attributed in central.access); revocation = rotate/disable."""
+    client = TestClient(management_server.app)
+    with caplog.at_level("INFO", logger="launcher.management_server"):
+        resp = client.get(
+            "/api/disabled-tools",
+            headers={"Authorization": "Bearer admin-central-key-1"},
+        )
+    assert resp.status_code == 200
+    assert any("central.access user=e35admin" in r.message for r in caplog.records)
+
+
+def test_admin_key_revoked_when_not_enabled(management_server, monkeypatch):
+    """central_tokens only surfaces ENABLED admins — an omitted key 401s."""
+    from tools.shared import users_store
+    monkeypatch.setattr(users_store, "central_tokens", lambda: {})
+    client = TestClient(management_server.app)
+    resp = client.get(
+        "/api/disabled-tools",
+        headers={"Authorization": "Bearer admin-central-key-1"},
+    )
+    assert resp.status_code == 401
+
+
+def test_non_admin_user_key_still_rejected(management_server, _admin_central_key):
+    """Only admins get central reach; role=user keys stay 401."""
+    client = TestClient(management_server.app)
+    resp = client.get(
+        "/api/disabled-tools",
+        headers={"Authorization": "Bearer some-random-user-key"},
+    )
+    assert resp.status_code == 401
