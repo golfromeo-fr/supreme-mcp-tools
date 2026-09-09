@@ -109,8 +109,6 @@ def authenticate(username: str, password: str) -> dict | None:
     _ensure_seeded()
     users = load_users().get("users", {})
     record = users.get((username or "").lower())
-    logger.warning(f"[DEBUG authenticate] username={username!r} found={record is not None} "
-                   f"store_users={list(users)}")
     stored = record.get("password_hash") if record else _dummy_hash()
     if not record or not verify_password(password or "", stored):
         return None

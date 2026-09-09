@@ -36,6 +36,11 @@ STORE_PATH = (
     else Path.home() / ".config" / "supreme-mcp-tools" / "users.json"
 )
 
+# Unique per-run marker: previous runs' e35test memories stay in the store
+# (crashed runs skip cleanup); identical texts made queryMemory top-k results
+# drift between runs. Unique texts make each run's assertions self-contained.
+RUN_ID = f"e35run{os.getpid()}{int(time.time())}"
+
 results: list[tuple[str, bool]] = []
 
 
@@ -148,7 +153,7 @@ async def main() -> int:
     print("\n── memorymcp owner scoping ──")
 
     alice_mem_raw = await mcp_call("memorymcp", alice_key, "upsertMemory", {
-        "text": "e35test alice-only memory about project architecture",
+        "text": f"{RUN_ID} alice-only memory about project architecture",
         "memory_type": "concept", "source": "e35test",
     })
     check("alice upsert ok",
@@ -156,19 +161,19 @@ async def main() -> int:
     alice_mem_id = _extract_id(alice_mem_raw)
 
     bob_mem_raw = await mcp_call("memorymcp", bob_key, "upsertMemory", {
-        "text": "e35test bob-only memory about deployment pipeline",
+        "text": f"{RUN_ID} bob-only memory about deployment pipeline",
         "memory_type": "concept", "source": "e35test",
     })
     bob_mem_id = _extract_id(bob_mem_raw)
 
     # alice queries → sees only her own
     alice_q = await mcp_call("memorymcp", alice_key, "queryMemory",
-                             {"query": "e35test", "k": 20})
+                             {"query": RUN_ID, "k": 20})
     check("alice query sees own", "alice-only" in alice_q)
     check("alice query does NOT see bob's", "bob-only" not in alice_q)
 
     bob_q = await mcp_call("memorymcp", bob_key, "queryMemory",
-                           {"query": "e35test", "k": 20})
+                           {"query": RUN_ID, "k": 20})
     check("bob query sees own", "bob-only" in bob_q)
     check("bob query does NOT see alice's", "alice-only" not in bob_q)
 
@@ -190,13 +195,15 @@ async def main() -> int:
         del_alice_on_bob = await mcp_call("memorymcp", alice_key, "deleteMemory",
                                           {"memory_id": bob_mem_id})
         check("alice cannot delete bob's memory",
-              "not found" in del_alice_on_bob.lower() or "Error" in del_alice_on_bob.lower())
+              "not found" in del_alice_on_bob.lower()
+              or "error" in del_alice_on_bob.lower()
+              or "unknown tool" in del_alice_on_bob.lower())  # masked rejection
     except Exception:
         check("alice cannot delete bob's memory", True)  # rejected = correct
 
     # alice deletes her OWN memory → allowed
     alice_own_raw = await mcp_call("memorymcp", alice_key, "upsertMemory", {
-        "text": "e35test alice temp for own-delete",
+        "text": f"{RUN_ID} alice temp for own-delete",
         "memory_type": "concept", "source": "e35test",
     })
     alice_own_id = _extract_id(alice_own_raw)
@@ -276,10 +283,14 @@ async def main() -> int:
         check("bob query via 02 denied", False)
         print(f"    err: {e}")
 
-    # disconnect: alice disconnects 02
+    # disconnect: masked for role=user by DEFAULT_USER_MASKS (shipped
+    # policy) — the call is rejected; admin performs the disconnect
     alice_d = await mcp_call("databasemcp", alice_key, "disconnect_database",
                              {"name": "02"})
-    check("alice disconnect 02", "Disconnected" in alice_d)
+    check("disconnect masked for role=user", "unknown tool" in alice_d.lower())
+    admin_d = await mcp_call("databasemcp", admin_key, "disconnect_database",
+                             {"name": "02"})
+    check("admin disconnect 02", "Disconnected" in admin_d)
 
     # reconnect for later tests
     await mcp_call("databasemcp", alice_key, "connect_preset", {"preset": "02"})
@@ -329,7 +340,9 @@ async def main() -> int:
     time.sleep(1.0)  # allow the launcher's user store cache to reload
 
     old_tools = await mcp_list_tools("simplemcp", alice_old_key)
-    check("old key rejected after rotation", isinstance(old_tools, str) and "REJECTED" in old_tools)
+    # 401 surfaces as MCPError ("Server returned an error response"); the
+    # wrapper returns a str ONLY on failure — a valid key returns a list.
+    check("old key rejected after rotation", isinstance(old_tools, str))
 
     new_tools = await mcp_list_tools("simplemcp", alice_new_key)
     check("new key works after rotation", isinstance(new_tools, list) and "double" in new_tools)
@@ -362,11 +375,11 @@ async def main() -> int:
     # ==================================================================
     print("\n── concurrent two-user access ──")
     alice_mem2 = await mcp_call("memorymcp", alice_key, "upsertMemory", {
-        "text": "e35test concurrent alice memory",
+        "text": f"{RUN_ID} concurrent alice memory",
         "memory_type": "concept", "source": "e35test",
     })
     bob_mem2 = await mcp_call("memorymcp", bob_key, "upsertMemory", {
-        "text": "e35test concurrent bob memory",
+        "text": f"{RUN_ID} concurrent bob memory",
         "memory_type": "concept", "source": "e35test",
     })
     alice_mem2_id = _extract_id(alice_mem2)
@@ -375,9 +388,9 @@ async def main() -> int:
     # simultaneous queries
     alice_cq, bob_cq = await asyncio.gather(
         mcp_call("memorymcp", alice_key, "queryMemory",
-                 {"query": "e35test concurrent", "k": 20}),
+                 {"query": f"{RUN_ID} concurrent", "k": 20}),
         mcp_call("memorymcp", bob_key, "queryMemory",
-                 {"query": "e35test concurrent", "k": 20}),
+                 {"query": f"{RUN_ID} concurrent", "k": 20}),
     )
     check("concurrent: alice sees own only", "alice" in alice_cq.lower() and "bob" not in alice_cq.lower())
     check("concurrent: bob sees own only", "bob" in bob_cq.lower() and "alice" not in bob_cq.lower())
@@ -430,8 +443,7 @@ async def main() -> int:
 
     # server-level: carol (simplemcp only) can't see memorymcp tools
     carol_mm = await mcp_list_tools("memorymcp", carol_key)
-    check("carol denied on memorymcp",
-          isinstance(carol_mm, str) and "REJECTED" in carol_mm)
+    check("carol denied on memorymcp", isinstance(carol_mm, str))
 
     # ==================================================================
     # central auth

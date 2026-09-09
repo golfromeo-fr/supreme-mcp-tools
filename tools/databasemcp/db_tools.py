@@ -555,28 +555,28 @@ def _assert_preset_grant(connection: str | None) -> None:
     Non-admin callers may only use presets granted via db_presets.
     Runs on the event loop because get_http_request() needs the HTTP
     request context. Fail-open for mono mode / non-HTTP scope."""
-    """E3.5: check preset grants ON THE EVENT LOOP (before to_thread).
-    Non-admin callers may only use presets granted via db_presets.
-    Runs on the event loop because get_http_request() needs the HTTP
-    request context. Fail-open for mono mode / non-HTTP scope."""
     if not connection:
         return
     verifier = getattr(mcp, "auth", None)
     get_tokens = getattr(verifier, "tokens", None)
     if get_tokens is None:
+        logger.warning("preset-grant check skipped: no verifier/tokens (verifier=%r)", verifier)
         return
     try:
         from fastmcp.server.dependencies import get_http_request
         request = get_http_request()
-    except Exception:
+    except Exception as e:
+        logger.warning("preset-grant check skipped: no HTTP context (%s: %s)", type(e).__name__, e)
         return
     auth = (request.headers.get("authorization", "") or "")
     token = auth[7:] if auth.lower().startswith("bearer ") else \
         request.headers.get("x-api-key")
     if not token:
+        logger.warning("preset-grant check skipped: no token in request headers")
         return
     entry = get_tokens().get(token)
     if entry is None:
+        logger.warning("preset-grant check skipped: caller token not in map (map size=%d)", len(get_tokens()))
         return
     role = entry.get("role", "admin")  # legacy mono map = admin
     if role == "admin":
@@ -584,7 +584,8 @@ def _assert_preset_grant(connection: str | None) -> None:
     granted = set(entry.get("db_presets") or [])
     try:
         preset = presets.get_preset(connection)
-    except LookupError:
+    except LookupError as e:
+        logger.warning("preset-grant check skipped: preset lookup failed: %s", e)
         return
     if preset.number not in granted and preset.name not in granted \
             and preset.connection_name not in granted:

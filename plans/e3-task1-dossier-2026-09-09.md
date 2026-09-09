@@ -160,3 +160,74 @@ reappearance as new information, not a regression of a known bug.
 - Users.json is live state: testuser/admin/tester are REAL accounts
   (testuser carries a user-set mask `simplemcp: [greet]` — do not "restore"
   over it).
+
+
+---
+
+## RESOLUTION (2026-09-09, glm-5.3 diagnosis session) — CLOSED
+
+**Verdict: 1 product bug + 1 process-state bug + 5 test-suite bugs. All fixed;
+suite 45 PASS / 0 FAIL twice back-to-back, no drift.**
+
+### Product bug (RC1) — launchmcp.py loaded .env too late (fixed)
+
+The legacy entry (`startlauncher` → `./launchmcp.py`) never calls
+`load_dotenv`. Tool modules import IN-PROCESS at discovery (one process,
+five FastMCP apps) and build their auth verifier from `MCP_AUTH_MODE` at
+import. The boot accidentally worked when any `.env`-loading tool imported
+first (ragmcp loads the root .env, polluting os.environ) — but whenever
+simplemcp (first in the arg list) imported before that, simplemcp silently
+booted MONO: static single-key verifier, every user key rejected.
+
+This one root cause explains: rotation pair, get_secret ×2, hot-reload,
+carol-on-memorymcp matchers (simplemcp URLs 401'd user keys), and the
+16h-old process rejecting even the hours-old `tester` key.
+
+Fix: `load_dotenv(root/.env)` at the top of `launchmcp.py`, before any
+launcher/tool import (mirrors `launcher/__main__.py`, which always did
+this). Boot log now shows all five tools "identity gate active".
+After the fix, key rotation converges in ~0.02 s.
+
+### Process-state bug (RC2) — databasemcp preset-grant fail-open (hardened)
+
+A probe proved the OLD 16h process let an ungranted user query via preset
+connection 02 (fail-open to admin in `_assert_preset_grant`). It did NOT
+reproduce on the restarted process with identical code — no code defect
+was isolated; classified as stale process state. Hardening: every
+fail-open early-return in `_assert_preset_grant` now logs a WARNING
+(previously all five paths were silent). Any recurrence will name its path
+in `logs/launcher.log` ("preset-grant check skipped: …").
+
+### Test-suite bugs (fixed)
+
+1. "REJECTED" matchers (old-key rotation, carol denied) — a 401 surfaces
+   through the fastmcp Client as `MCPError: Server returned an error
+   response`; the wrapper returns a str ONLY on failure → matchers now
+   assert `isinstance(result, str)`.
+2. Cross-user delete matcher missed the masked-rejection text — the gate
+   returns "Unknown tool"; matcher extended.
+3. "alice disconnect 02" expected unmasked behavior —
+   DEFAULT_USER_MASKS blocks disconnect_database for role=user (shipped,
+   veto-able policy). Suite now asserts the user rejection + admin
+   performs the disconnect.
+4. Run-to-run drift ("alice query sees own") — crashed runs left same-text
+   e35test memories in the store; queryMemory top-k over accumulated
+   duplicates made results order-dependent. All texts/queries now carry a
+   unique RUN_ID per run.
+5. bob/carol connect_preset denials passed spuriously ("already exists"
+   contains "error") — with enforcement verified live they now exercise
+   the real "not granted" path.
+
+### Debris removed
+
+- `[DEBUG authenticate]` logger.warning in `users_store.authenticate`
+  (logged usernames at WARNING on every login attempt).
+- Doubled docstring in `_assert_preset_grant`.
+
+### Operational notes
+
+- The fix required a launcher restart (done 17:06, pid superseded); if the
+  launcher is restarted again via `startlauncher` the fixes persist — they
+  are in code.
+- The "alice query via preset 02 hang" did not reproduce (0.02–0.03 s
+  responses all session). Watch item closed unless it recurs.

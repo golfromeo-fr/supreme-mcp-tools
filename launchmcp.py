@@ -15,6 +15,17 @@ import sys
 from pathlib import Path
 import uvicorn
 
+# Load .env BEFORE any launcher/tool import. Tool modules are imported
+# in-process at discovery time and build their auth verifier from
+# MCP_AUTH_MODE at import: without this, the first-imported tool sees no env
+# and silently boots mono (simplemcp rejected every user key, 2026-09-09 —
+# launcher/__main__.py, the new-style entry, already did this).
+from dotenv import load_dotenv
+
+_root_env = Path(__file__).resolve().parent / ".env"
+if _root_env.exists():
+    load_dotenv(_root_env)
+
 from launcher import (
     Config,
     PortManager,
