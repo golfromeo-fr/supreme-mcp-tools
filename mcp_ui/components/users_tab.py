@@ -151,7 +151,9 @@ def render_users_tab(container) -> None:
                 else:
                     _notify_error(response.error or "update failed")
 
-            ui.button("Save", on_click=_save).classes("w-full")
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=dialog.close).props("flat dense")
+                ui.button("Save", on_click=_save).props("outline dense")
         dialog.open()
 
     def _delete_dialog(username: str):
@@ -287,7 +289,9 @@ def render_users_tab(container) -> None:
                 else:
                     _notify_error("update failed — see notifications")
 
-            ui.button("Save", on_click=_save).props("outline dense")
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=dialog.close).props("flat dense")
+                ui.button("Save", on_click=_save).props("outline dense")
         dialog.open()
 
     def _add_user_dialog():
