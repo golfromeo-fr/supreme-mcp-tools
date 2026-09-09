@@ -19,12 +19,14 @@ that the primary CLI doesn't expose).
 
 | Tool | Port | Description |
 |------|------|-------------|
-| `oraclemcp` | 8000 | Oracle database tools to feed the LLM |
+| `databasemcp` | 8000 | Multi-database registry (Oracle / Postgres / libSQL): query, execute, schema, transactions, connection presets |
 | `webmcp` | 8001 | Web search (Brave Search, Google API), URL fetch, HTTP POST |
 | `simplemcp` | 8002 | Simple test tools (double, square, greet) |
-| `convertermcp` | 8003 | Document conversion (DOCX to TXT) |
 | `ragmcp` | 8004 | RAG-like codebase indexing using local or API embeddings |
 | `memorymcp` | 8005 | Persistent memory store with knowledge graph and semantic search |
+
+(`convertermcp` and the retired `oraclemcp` remain in `tools/` for standalone use
+but are not part of the default launcher set.)
 
 ---
 
@@ -83,6 +85,9 @@ INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
 - **CLI Interface**: Easy-to-use command-line interface
 - **Error Handling**: Best-effort approach - continues with other tools if one fails
 - **Comprehensive Logging**: Detailed logging for debugging and monitoring
+- **Multi-User Mode** (E3): per-user MCP keys, server-enforced function masks, per-user data-plane grants, and an admin Users UI
+- **Management UI**: NiceGUI dashboard (port 8400) for tool status, function masks, memory explorer, and user administration
+- **Multi-Transport Serving**: every tool serves `/mcp` (streamable), `/mcp-stateless`, and `/sse` simultaneously
 
 ## Installation
 
@@ -161,10 +166,10 @@ Port ranges and tool assignments live in `config/ports.json`:
 | 8300-8399 | Metrics (metrics_server: 8300) |
 | 8400-8499 | UI (management_ui: 8400) |
 
-Tool ports: oraclemcp 8000, webmcp 8001, simplemcp 8002, convertermcp 8003, ragmcp 8004, memorymcp 8005.
+Tool ports: databasemcp 8000, webmcp 8001, simplemcp 8002, ragmcp 8004, memorymcp 8005.
 
 The launcher starts the central management API (port 8200) by default — disable with `--no-management`.
-The NiceGUI management UI is a separate process: `python -m mcp_ui` (port 8400).
+The NiceGUI management UI is a separate process: `python -m mcp_ui` (port 8400; `startui` helper).
 
 ## Configuration
 
@@ -250,6 +255,16 @@ You can override configuration using environment variables:
 - `LAUNCHER_CONTINUE_ON_ERROR`: Continue on error (true/false)
 - `LAUNCHER_FAIL_FAST`: Fail fast on error (true/false)
 
+Multi-user / auth / UI (loaded from the root `.env`):
+
+- `MCP_AUTH_MODE`: `mono` (default — single system key per tool) or `multi` (per-user identities)
+- `MCP_MANAGEMENT_API_KEY`: required bearer key for the central management API (port 8200)
+- `MCP_UI_USERNAME` / `MCP_UI_PASSWORD`: management-UI admin bootstrap pair
+- `MCP_UI_SECRET`: persistent NiceGUI session secret (logins survive restarts)
+- `MCP_USERS_STORE`: optional alternate path for `users.json` (default `~/.config/supreme-mcp-tools/users.json`)
+- `MCP_USER_<NAME>_PASSWORD|KEY|ROLE|SERVERS|MASKED_FUNCTIONS|DB_PRESETS|RAG_COLLECTIONS`: declarative user seeding
+- `DB_PRESET_<NN>` / `DB_PRESET_<NN>_NAME` / `DB_PRESET_<NN>_DESC` / `DB_PRESET_AUTOCONNECT`: databasemcp connection presets
+
 Example:
 ```bash
 export LAUNCHER_PORT_MODE=auto
@@ -328,7 +343,7 @@ the `MCP_TRANSPORT` env var, or the `"transport"` key in `tools/<name>/config.js
 
 ## Available MCP Tools
 
-The launcher currently supports the following six MCP tools:
+The launcher currently ships the following five MCP tools:
 
 ### webmcp (Port 8001)
 A web search and URL fetch MCP server that provides:
@@ -340,23 +355,19 @@ A web search and URL fetch MCP server that provides:
 
 **Documentation**: [`tools/webmcp/README.md`](tools/webmcp/README.md)
 
-### oraclemcp (Port 8000)
-An Oracle database MCP server that provides:
-- Database query execution and schema introspection
-- SQL optimization with AI assistance
-- Explain plan analysis
-- Pro*C coding rules reference
+### databasemcp (Port 8000)
+A multi-database connection-registry MCP server (Oracle, Postgres, libSQL/SQLite) that provides:
+- **connect_database / use_database / list_connections / disconnect_database**: named connection registry (first connection becomes active)
+- **query / execute_sql**: read-only queries and DML/DDL, with row limits and timing
+- **get_schemas / list_tables / explain_plan**: schema introspection and query plans
+- **begin_transaction / commit_transaction / rollback_transaction**: interactive transactions with idle reaping
+- **connect_preset / list_presets**: `.env`-defined connection presets (`DB_PRESET_<NN>`), grantable per user
+- **get_proc_rules / get_sql_optimization_rules / get_valid_languages**: user-local rules references
 
-**Documentation**: [`tools/oraclemcp/README.md`](tools/oraclemcp/README.md)
+Per-user E3.5 grants: preset access is deny-by-default for non-admins and grantable in the Users UI; destructive
+functions (`execute_sql`, `connect_database`, `disconnect_database`) are pre-masked for `role=user` accounts.
 
-### convertermcp (Port 8003)
-A document conversion MCP server that provides:
-- **convert_docx_to_text**: Convert Microsoft Word documents (.docx) to plain text
-- Support for both local file paths and HTTP/HTTPS URLs
-- SharePoint REST API fallback for Doc.aspx URLs
-- Path security with configurable allowed root directories
-
-**Documentation**: [`tools/convertermcp/README.md`](tools/convertermcp/README.md)
+**Documentation**: [`tools/databasemcp/SKILL.md`](tools/databasemcp/SKILL.md)
 
 ### ragmcp (Port 8004)
 A RAG (Retrieval-Augmented Generation) and Code Indexing MCP server that provides:
@@ -451,6 +462,32 @@ By default (no custom config), tool ports come from the fixed assignments in `co
 ```bash
 python launchmcp.py --host 127.0.0.1 --log-level debug webmcp
 ```
+
+## Multi-User Mode (E3)
+
+Set `MCP_AUTH_MODE=multi` to enable per-user identities. In `mono` mode (default)
+every tool accepts only its system key — exactly the pre-E3 behavior.
+
+- **User store**: `~/.config/supreme-mcp-tools/users.json` (override with `MCP_USERS_STORE`).
+  Accounts carry role, enabled flag, per-server reach, per-server function masks, and
+  data-plane grants (databasemcp presets, ragmcp collections).
+- **Per-user MCP keys**: each user gets a personal bearer key; tools resolve the caller
+  per request (no cached identities). Rotation takes effect immediately; disable/enable
+  and mask edits apply on the next call. The first-imported tool's auth mode is env-order
+  sensitive — the launcher loads the root `.env` before any tool import.
+- **Function masks**: masked functions are invisible in `tools/list` and rejected as
+  unknown on call. Admins manage global masks (Functions tab); `role=user` accounts get
+  a destructive-tool mask profile by default (delete/decay/merge on memorymcp, indexing
+  controls on ragmcp, execute/connect/disconnect on databasemcp).
+- **Per-user data plane (E3.5)**: memorymcp stamps an `owner` on upserts and scopes
+  queries/lists to the caller (admins see all); ragmcp gates collections per user;
+  databasemcp denies ungranted presets per call.
+- **Admin Users UI**: the `Users` entry in the management UI (admins only, `multi` mode
+  only) — create users (shows the MCP key once), rotate keys, set passwords,
+  enable/disable, delete, and an Edit-access dialog with per-server function pickers
+  and data-plane grant checkboxes.
+- **Central API**: port 8200 requires `MCP_MANAGEMENT_API_KEY`; user keys are rejected
+  there by design.
 
 ## Monitoring
 
