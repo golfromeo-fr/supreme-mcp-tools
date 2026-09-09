@@ -16,6 +16,7 @@ Covers:
 """
 
 import asyncio
+import os
 import json
 import sys
 import time
@@ -28,6 +29,12 @@ sys.path.insert(0, str(ROOT))
 
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
+
+STORE_PATH = (
+    Path(os.environ.get("MCP_USERS_STORE"))
+    if os.environ.get("MCP_USERS_STORE")
+    else Path.home() / ".config" / "supreme-mcp-tools" / "users.json"
+)
 
 results: list[tuple[str, bool]] = []
 
@@ -338,7 +345,6 @@ async def main() -> int:
     store_raw = json.loads(STORE_PATH.read_text())
     store_raw["users"]["e35bob"]["role"] = "admin"
     STORE_PATH.write_text(json.dumps(store_raw, indent=2))
-    import time
     time.sleep(0.5)  # allow mtime cache to notice
 
     # bob (now admin) should see users-manager-type power
@@ -468,7 +474,6 @@ async def main() -> int:
     store_backup = STORE_PATH.read_text()
     # write invalid JSON
     STORE_PATH.write_text("{invalid json!!!")
-    import time
     time.sleep(0.3)  # allow mtime cache to notice
     # verify graceful fallback
     rec = users_store.get_user_record("e35alice")
@@ -500,7 +505,6 @@ async def main() -> int:
         "updated_at": "2026-09-08T00:00:00+00:00",
     }
     STORE_PATH.write_text(json.dumps(store_raw, indent=2))
-    import time
     time.sleep(0.5)  # allow mtime cache to notice
 
     # verify the new user can authenticate via the MCP surface
