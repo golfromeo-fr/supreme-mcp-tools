@@ -175,8 +175,11 @@ def render_users_tab(container) -> None:
 
     def _access_dialog(user: dict):
         """Edit one user's reach (server checkboxes), per-server function
-        masks (comma-separated deny-lists, E1 semantics scoped to the user),
-        and the E3.5 data-plane grants (db presets + rag collections)."""
+        masks (picker over the server's function inventory, E1 semantics
+        scoped to the user), and the E3.5 data-plane grants (db presets +
+        rag collections)."""
+        from .tool_settings import get_server_tools
+
         username = user.get("username", "?")
         current_servers = user.get("servers") or []
         current_masks = user.get("masked_functions") or {}
@@ -187,15 +190,23 @@ def render_users_tab(container) -> None:
         with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl"):
             ui.label(f"Access for {username}").classes("text-subtitle1")
             checks: dict = {}
-            mask_inputs: dict = {}
+            mask_selects: dict = {}
             with ui.column().classes("w-full gap-2"):
                 for srv in known_servers:
+                    # picker options = the server's function inventory
+                    # (same source the global Function Masks UI uses);
+                    # current masks stay selectable even if not listed
+                    options = sorted(set(get_server_tools(srv))
+                                     | set(current_masks.get(srv, [])))
                     with ui.row().classes("w-full items-center gap-2 flex-wrap"):
                         checks[srv] = ui.checkbox(srv, value=srv in current_servers)
-                        mask_inputs[srv] = ui.input(
-                            "masked (comma-sep)",
-                            value=", ".join(current_masks.get(srv, [])),
-                        ).classes("w-64").tooltip("Functions this user must NOT see on this server")
+                        mask_selects[srv] = ui.select(
+                            options,
+                            value=[f for f in current_masks.get(srv, []) if f in options],
+                            multiple=True,
+                            label="mask functions (pick from list)",
+                        ).classes("w-80").props("use-chips outline dense").tooltip(
+                            "Functions this user must NOT see on this server")
 
             ui.separator()
             ui.label("Data-plane grants (E3.5)").classes("text-subtitle2")
@@ -256,10 +267,12 @@ def render_users_tab(container) -> None:
 
             async def _save():
                 servers = [s for s, cb in checks.items() if cb.value]
+                # mask_selects holds ui.select ELEMENTS — read .value (the
+                # picked function list); iterating the element itself yields
+                # slots and silently saved empty lists (2026-09-09)
                 masked = {
-                    s: [f.strip() for f in (mi.value or "").split(",") if f.strip()]
-                    for s, mi in mask_inputs.items()
-                    if (mi.value or "").strip()
+                    s: sorted(set(sel.value or []))
+                    for s, sel in mask_selects.items() if sel.value
                 }
                 ok1 = await get_api_client().set_user_servers(username, servers)
                 ok2 = await get_api_client().set_user_masked_functions(username, masked)
