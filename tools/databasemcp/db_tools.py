@@ -555,6 +555,10 @@ def _assert_preset_grant(connection: str | None) -> None:
     Non-admin callers may only use presets granted via db_presets.
     Runs on the event loop because get_http_request() needs the HTTP
     request context. Fail-open for mono mode / non-HTTP scope."""
+    """E3.5: check preset grants ON THE EVENT LOOP (before to_thread).
+    Non-admin callers may only use presets granted via db_presets.
+    Runs on the event loop because get_http_request() needs the HTTP
+    request context. Fail-open for mono mode / non-HTTP scope."""
     if not connection:
         return
     verifier = getattr(mcp, "auth", None)

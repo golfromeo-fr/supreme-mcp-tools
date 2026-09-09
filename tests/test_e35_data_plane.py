@@ -298,6 +298,7 @@ async def main() -> int:
     users_store.rotate_key("e35alice")
     alice_new_key = users_store.get_user_record("e35alice")["mcp_key"]
     check("key changed on rotate", alice_old_key != alice_new_key)
+    time.sleep(1.0)  # allow the launcher's user store cache to reload
 
     old_tools = await mcp_list_tools("simplemcp", alice_old_key)
     check("old key rejected after rotation", isinstance(old_tools, str) and "REJECTED" in old_tools)
