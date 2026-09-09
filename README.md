@@ -262,6 +262,10 @@ Multi-user / auth / UI (loaded from the root `.env`):
 - `MCP_UI_USERNAME` / `MCP_UI_PASSWORD`: management-UI admin bootstrap pair
 - `MCP_UI_SECRET`: persistent NiceGUI session secret (logins survive restarts)
 - `MCP_USERS_STORE`: optional alternate path for `users.json` (default `~/.config/supreme-mcp-tools/users.json`)
+- `MCP_USERS_BACKEND`: `json` (default) or `db` — store users in the shared SQL backend
+  (`POSTGRES_*` / `TURSO_DATABASE_URL`) in a single `mcp_users_store` document table;
+  an existing `users.json` is imported once on first use, and any init failure falls
+  back to the JSON file with a loud warning
 - `MCP_USER_<NAME>_PASSWORD|KEY|ROLE|SERVERS|MASKED_FUNCTIONS|DB_PRESETS|RAG_COLLECTIONS`: declarative user seeding
 - `DB_PRESET_<NN>` / `DB_PRESET_<NN>_NAME` / `DB_PRESET_<NN>_DESC` / `DB_PRESET_AUTOCONNECT`: databasemcp connection presets
 

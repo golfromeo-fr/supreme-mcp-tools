@@ -27,6 +27,10 @@ Schema (v1):
 
 Multi-user activates ONLY when MCP_AUTH_MODE=multi (factory handles the
 mode); the store functions themselves are mode-agnostic.
+
+Backend selection (E3 multi-host prep): MCP_USERS_BACKEND=json (default,
+this file) or db - the shared SQL backend (POSTGRES_* / TURSO_DATABASE_URL),
+single-document table mcp_users_store; one-time auto-import from users.json.
 """
 
 import base64
@@ -37,6 +41,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -67,6 +72,134 @@ DEFAULT_USER_MASKS: dict[str, list[str]] = {
 }
 
 _store_cache: dict[str, Any] = {"mtime": None, "store": None}
+
+# -- E3 db backend (MCP_USERS_BACKEND=db) ---------------------------
+# Whole-document storage in the shared SQL backend: one row, one JSON doc.
+# Chosen over per-user rows because the module API is document-shaped
+# (load_users/save_users) and the user count is tiny; last-write-wins per
+# document is the same semantics the JSON file always had. Reads are always
+# fresh (no cache) so rotation/disable propagate on the next call, exactly
+# like the mtime path. Both SqlStore impls expose a DB-API ``_conn`` whose
+# execute() returns a cursor - the only dialect difference is the
+# placeholder (libsql "?", psycopg "%s"), resolved per connection.
+_db_conn_singleton: object | None = None
+_db_init_done = False
+
+
+def sys_path_tools() -> list:
+    return sys.path
+
+_DB_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS mcp_users_store ("
+    " id INTEGER PRIMARY KEY CHECK (id = 1),"
+    " data TEXT NOT NULL,"
+    " updated_at TEXT NOT NULL)",
+)
+
+
+def _users_backend() -> str:
+    return os.environ.get("MCP_USERS_BACKEND", "json").strip().lower()
+
+
+def _db_conn():
+    """DB-API connection for the users store, or None to stay on JSON.
+
+    Initialises lazily and once per process: resolves the shared SqlStore
+    singleton, grabs its raw connection, ensures the schema, and imports the
+    JSON file's data if the table is empty (one-time adoption). Any failure
+    logs loudly and permanently downgrades this process to the JSON file
+    (fail-open to the pre-E3 local behavior)."""
+    global _db_conn_singleton, _db_init_done
+    if _db_init_done:
+        return _db_conn_singleton
+    _db_init_done = True
+    try:
+        # sql_store.py imports the bare ``shared`` package internally, which
+        # requires tools/ on sys.path - guaranteed inside tool modules but
+        # NOT in plain ``tools.shared.users_store`` consumers (tests, mgmt
+        # API before discovery). Add it ourselves, idempotently.
+        _tools_dir = str(Path(__file__).resolve().parents[1])
+        if _tools_dir not in sys_path_tools():
+            sys_path_tools().insert(0, _tools_dir)
+        from tools.shared.sql_store import get_sql_store
+
+        store = get_sql_store()
+        if type(store).__name__ == "NullSqlStore" or not getattr(store, "is_available", False):
+            logger.warning(
+                "MCP_USERS_BACKEND=db but no SQL backend is configured "
+                "(POSTGRES_* / TURSO_DATABASE_URL) - staying on users.json"
+            )
+            return None
+        conn = getattr(store, "_conn", None)
+        if conn is None:
+            raise RuntimeError("SqlStore impl exposes no _conn")
+        for stmt in _DB_SCHEMA:
+            conn.execute(stmt)
+        ph = _PH(conn)
+        cur = conn.execute(
+            f"SELECT COUNT(*) FROM mcp_users_store WHERE id = {ph}", (1,))
+        row = cur.fetchone()
+        if not row or not row[0]:
+            if USERS_PATH.exists():
+                try:
+                    data = USERS_PATH.read_text(encoding="utf-8")
+                    json.loads(data)  # only import parseable files
+                    conn.execute(
+                        f"INSERT INTO mcp_users_store (id, data, updated_at) "
+                        f"VALUES (1, {ph}, {ph})",
+                        (data, _now_iso()),
+                    )
+                    logger.warning(
+                        "[E3] users store: imported existing users.json into "
+                        "the SQL backend (one-time migration; the file is now "
+                        "a backup)"
+                    )
+                except Exception as e:
+                    logger.warning(f"[E3] users store: skipped JSON import ({e})")
+        _db_conn_singleton = conn
+        logger.warning(
+            f"[E3] users store: SQL backend active "
+            f"({type(conn).__module__}.{type(conn).__name__})")
+    except Exception as e:
+        logger.warning(
+            f"MCP_USERS_BACKEND=db init failed ({type(e).__name__}: {e}) - "
+            "staying on users.json"
+        )
+        _db_conn_singleton = None
+    return _db_conn_singleton
+
+
+def _PH(conn) -> str:
+    """Placeholder style: psycopg wants %s, libsql/sqlite want ?."""
+    return "%s" if type(conn).__module__.startswith("psycopg") else "?"
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+
+
+def _db_load(conn) -> dict:
+    ph = _PH(conn)
+    cur = conn.execute(
+        f"SELECT data FROM mcp_users_store WHERE id = {ph}", (1,))
+    row = cur.fetchone()
+    if not row:
+        return {"version": 1, "users": {}}
+    store = json.loads(row[0])
+    if not isinstance(store, dict) or not isinstance(store.get("users", {}), dict):
+        raise ValueError("users store (db): 'users' must be an object")
+    return store
+
+
+def _db_save(conn, store: dict) -> None:
+    ph = _PH(conn)
+    conn.execute(
+        f"INSERT INTO mcp_users_store (id, data, updated_at) "
+        f"VALUES (1, {ph}, {ph}) "
+        f"ON CONFLICT(id) DO UPDATE SET data = excluded.data, "
+        f"updated_at = excluded.updated_at",
+        (json.dumps(store, ensure_ascii=False), _now_iso()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +275,21 @@ def _public_view(record: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def load_users() -> dict:
-    """Full store dict; missing/corrupt file → empty store + loud log."""
+    """Full store dict; missing/corrupt source → empty/last-good + loud log."""
+    if _users_backend() == "db":
+        conn = _db_conn()
+        if conn is not None:
+            try:
+                return _db_load(conn)
+            except Exception as e:
+                logger.warning(
+                    f"user store (db) unreadable ({e}) - continuing with "
+                    "last-good in-memory copy" if _store_cache["store"] is not None
+                    else f"user store (db) unreadable ({e}) - no users loaded"
+                )
+                return _store_cache["store"] if _store_cache["store"] is not None \
+                    else {"version": 1, "users": {}}
+        # db requested but unavailable at init → JSON fallback (logged there)
     try:
         mtime = USERS_PATH.stat().st_mtime_ns if USERS_PATH.exists() else None
     except OSError:
@@ -171,6 +318,14 @@ def load_users() -> dict:
 
 
 def save_users(store: dict) -> None:
+    if _users_backend() == "db":
+        conn = _db_conn()
+        if conn is not None:
+            _db_save(conn, store)
+            _store_cache["store"] = store
+            _store_cache["mtime"] = None
+            return
+        logger.warning("save_users: db backend unavailable - writing users.json")
     USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(USERS_PATH, store)
     _store_cache["mtime"] = USERS_PATH.stat().st_mtime_ns

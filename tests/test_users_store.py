@@ -265,3 +265,100 @@ def test_central_tokens_admins_only_enabled_only(tmp_path, monkeypatch):
     tokens = users_store.central_tokens()
     assert set(tokens) == {"key-admin-1", "key-admin-2"}
     assert tokens["key-admin-1"] == {"client_id": "root", "role": "admin"}
+
+
+# ── E3 db backend (MCP_USERS_BACKEND=db) ─────────────────────────────
+
+class _FakeCursor:
+    def __init__(self, state, params):
+        self._state, self._params = state, params
+
+    def fetchone(self):
+        sql = self._state["last_sql"]
+        if "COUNT(*)" in sql:
+            return [1 if self._state.get("has_row") else 0]
+        if sql.startswith("SELECT data"):
+            if self._state.get("has_row"):
+                return [self._state["data"]]
+            return None
+        return None
+
+
+class _FakeConn:
+    """Minimal DB-API connection standing in for libsql/psycopg."""
+
+    def __init__(self):
+        self.state = {"has_row": False, "data": None, "last_sql": "",
+                      "statements": []}
+
+    def execute(self, sql, params=()):
+        self.state["last_sql"] = sql
+        self.state["statements"].append((sql, params))
+        if sql.startswith("INSERT INTO mcp_users_store"):
+            self.state["has_row"] = True
+            self.state["data"] = params[0]
+        return _FakeCursor(self.state, params)
+
+
+class _FakeSqlStore:
+    is_available = True
+
+    def __init__(self):
+        self._conn = _FakeConn()
+
+
+import tools.shared.users_store as users_store  # noqa: E402
+
+
+def _activate_db_backend(monkeypatch):
+    """Point MCP_USERS_BACKEND=db at a fake SqlStore; resets singletons."""
+    import tools.shared.sql_store as sql_store_mod
+    fake = _FakeSqlStore()
+    monkeypatch.setenv("MCP_USERS_BACKEND", "db")
+    monkeypatch.setattr(sql_store_mod, "get_sql_store", lambda: fake)
+    monkeypatch.setattr(users_store, "_db_conn_singleton", None)
+    monkeypatch.setattr(users_store, "_db_init_done", False)
+    return fake
+
+
+def test_db_backend_round_trip(tmp_path, monkeypatch):
+    """save_users→load_users through the db backend preserves the document;
+    nothing is written to users.json in db mode."""
+    fake = _activate_db_backend(monkeypatch)
+    monkeypatch.setattr(users_store, "USERS_PATH", tmp_path / "users.json")
+
+    users_store.save_users({"version": 1, "users": {
+        "admin": {"username": "admin", "role": "admin", "mcp_key": "k1"}}})
+    loaded = users_store.load_users()
+    assert loaded["users"]["admin"]["mcp_key"] == "k1"
+    assert not (tmp_path / "users.json").exists()  # db is the only sink
+
+
+def test_db_backend_one_time_import_from_json(tmp_path, monkeypatch):
+    """First db use imports an existing users.json (adoption path)."""
+    fake = _activate_db_backend(monkeypatch)
+    users_json = tmp_path / "users.json"
+    users_json.write_text(json.dumps({"version": 1, "users": {
+        "admin": {"username": "admin", "role": "admin", "mcp_key": "seed"}}}))
+    monkeypatch.setattr(users_store, "USERS_PATH", users_json)
+
+    loaded = users_store.load_users()
+    assert loaded["users"]["admin"]["mcp_key"] == "seed"
+    # the imported doc landed in the table
+    assert fake._conn.state["has_row"]
+
+
+def test_db_backend_unavailable_falls_back_to_json(tmp_path, monkeypatch):
+    """db requested but no SQL backend → loud fallback to users.json."""
+    import tools.shared.sql_store as sql_store_mod
+    from tools.shared.sql_store import NullSqlStore
+
+    monkeypatch.setenv("MCP_USERS_BACKEND", "db")
+    monkeypatch.setattr(sql_store_mod, "get_sql_store", lambda: NullSqlStore())
+    monkeypatch.setattr(users_store, "_db_conn_singleton", None)
+    monkeypatch.setattr(users_store, "_db_init_done", False)
+    monkeypatch.setattr(users_store, "USERS_PATH", tmp_path / "users.json")
+
+    users_store.create_user("fallback", "fallback-pass-9")
+    assert users_store.get_user_record("fallback") is not None
+    assert (tmp_path / "users.json").exists()
