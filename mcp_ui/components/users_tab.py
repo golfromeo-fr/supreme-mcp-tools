@@ -85,18 +85,22 @@ def render_users_tab(container) -> None:
                         ui.badge(s, color="teal-7").props("outline")
                 with ui.row().classes("items-center gap-1"):
                     if enabled:
-                        ui.button(icon="toggle_off", on_click=lambda _e=False, u=username: _action(
-                            lambda: client.set_user_enabled(u, False),
-                            f"{u} disabled")).tooltip("Disable").props("flat dense")
+                        ui.button(icon="toggle_off", on_click=_action(
+                            lambda: client.set_user_enabled(username, False),
+                            f"{username} disabled")).tooltip("Disable").props("flat dense")
                     else:
-                        ui.button(icon="toggle_on", on_click=lambda _e=False, u=username: _action(
-                            lambda: client.set_user_enabled(u, True),
-                            f"{u} enabled")).tooltip("Enable").props("flat dense")
-                    ui.button(icon="key", on_click=lambda _e=False, u=username: _rotate_key(u))\
+                        ui.button(icon="toggle_on", on_click=_action(
+                            lambda: client.set_user_enabled(username, True),
+                            f"{username} enabled")).tooltip("Enable").props("flat dense")
+                    # NOTE: plain lambdas — handle_event CALLS the handler, so
+                    # a bare `_rotate_key(username)` coroutine object would
+                    # raise, and `def ..._dialog(username)` would run at
+                    # button-creation time instead of click time.
+                    ui.button(icon="key", on_click=lambda: _rotate_key(username))\
                         .tooltip("Rotate MCP key (old key dies)").props("flat dense")
-                    ui.button(icon="lock_reset", on_click=lambda _e=False, u=username: _password_dialog(u))\
+                    ui.button(icon="lock_reset", on_click=lambda: _password_dialog(username))\
                         .tooltip("Set password").props("flat dense")
-                    ui.button(icon="delete", color="negative", on_click=lambda _e=False, u=username: _delete_dialog(u))\
+                    ui.button(icon="delete", color="negative", on_click=lambda: _delete_dialog(username))\
                         .tooltip("Delete user").props("flat dense")
             masked_summary = ", ".join(
                 f"{srv}: {len(fns)}" for srv, fns in sorted(masked.items())
@@ -109,6 +113,9 @@ def render_users_tab(container) -> None:
                 .props("flat dense")
 
     def _action(fn, message: str):
+        # async handler (NOT a background task): ui.notify needs the event's
+        # slot context — notify inside asyncio_create_task dies with
+        # "slot stack for this task is empty" (UI test 2026-09-09).
         async def _run():
             response = await fn()
             if response.success:
@@ -116,7 +123,7 @@ def render_users_tab(container) -> None:
                 _rebuild()
             else:
                 _notify_error(response.error)
-        asyncio_create_task(_run())
+        return _run
 
     async def _rotate_key(username: str):
         response = await get_api_client().rotate_user_key(username)
@@ -150,34 +157,30 @@ def render_users_tab(container) -> None:
     def _delete_dialog(username: str):
         with ui.dialog() as dialog, ui.card():
             ui.label(f"Delete user {username}? This cannot be undone.")
-            with ui.row():
-                ui.button("Delete", color="negative",
-                          on_click=lambda: dialog.submit("yes"))
-                ui.button("Cancel", on_click=lambda: dialog.submit("no"))
 
-        async def _wait():
-            if await dialog == "yes":
+            async def _do_delete():
+                # async handler keeps the event's slot context — ui.notify
+                # works here (a create_task task has none: RuntimeError).
                 response = await get_api_client().delete_user(username)
+                dialog.close()
                 if response.success:
                     ui.notify(f"{username} deleted.", type="positive")
                     _rebuild()
                 else:
                     _notify_error(response.error or "delete failed")
 
-        asyncio_create_task(_wait())
+            with ui.row():
+                ui.button("Delete", color="negative", on_click=_do_delete)
+                ui.button("Cancel", on_click=dialog.close)
 
     def _access_dialog(user: dict):
         """Edit one user's reach (server checkboxes), per-server function
         masks (comma-separated deny-lists, E1 semantics scoped to the user),
         and the E3.5 data-plane grants (db presets + rag collections)."""
-        from ..management_ui import get_state
-
         username = user.get("username", "?")
         current_servers = user.get("servers") or []
         current_masks = user.get("masked_functions") or {}
-        known_servers = sorted(
-            {t.name for t in get_state().tools} | set(current_servers)
-        )
+        known_servers = sorted(set(PORTS) | set(current_servers))
         db_presets_current = list(user.get("db_presets") or [])
         rags_current = list(user.get("rag_collections") or [])
 
@@ -226,7 +229,11 @@ def render_users_tab(container) -> None:
                         for line in raw.splitlines():
                             if line.startswith("- "):
                                 num = line[2:].split(" ")[0]
-                                preset_checks[num] = ui.checkbox(num)
+                                # seed current grants — an unseeded checkbox
+                                # renders unchecked and Save would WIPE the
+                                # user's presets (UI test 2026-09-09)
+                                preset_checks[num] = ui.checkbox(
+                                    num, value=num in db_presets_current)
                 except Exception as e:
                     with presets_col:
                         ui.label(f"presets unavailable: {e}").classes("text-negative text-caption")
@@ -239,7 +246,8 @@ def render_users_tab(container) -> None:
                     with rags_col:
                         for c in data:
                             name = c if isinstance(c, str) else c.get("name", "?")
-                            rags_checks[name] = ui.checkbox(name)
+                            rags_checks[name] = ui.checkbox(
+                                name, value=name in rags_current)
                 except Exception as e:
                     with rags_col:
                         ui.label(f"collections unavailable: {e}").classes("text-negative text-caption")
@@ -270,9 +278,10 @@ def render_users_tab(container) -> None:
         dialog.open()
 
     def _add_user_dialog():
-        from ..management_ui import get_state
-
-        known_servers = sorted({t.name for t in get_state().tools})
+        # PORTS (ports.json mcp assignments) — NOT get_state().tools, which is
+        # only populated by the Overview page's loader and is EMPTY when the
+        # user lands directly on /users (zero checkboxes, UI test 2026-09-09).
+        known_servers = sorted(PORTS)
         with ui.dialog() as dialog, ui.card().classes("w-96"):
             ui.label("Add user").classes("text-subtitle1")
             username = ui.input("Username (a-z, 0-9, - _)").classes("w-full")
@@ -301,14 +310,21 @@ def render_users_tab(container) -> None:
                     return
                 key = response.data.get("mcp_key") if isinstance(response.data, dict) else None
                 dialog.close()
-                with ui.dialog() as key_dialog, ui.card().classes("w-96"):
+                with ui.dialog() as key_dialog, ui.card():
                     ui.label(f"MCP key for {username.value}").classes("text-subtitle1")
                     ui.label(key or "?").classes("font-mono text-sm whitespace-pre-wrap")
                     ui.label("Copy it now — it will not be shown again.")\
                         .classes("text-caption text-negative")
-                    ui.button("Close", on_click=key_dialog.close)
+
+                    def _close_and_refresh():
+                        key_dialog.close()
+                        _rebuild()
+
+                    ui.button("Close", on_click=_close_and_refresh)
+                # NOTE: _rebuild must run ONLY after the key dialog closes —
+                # container.clear() deletes an open dialog before it renders
+                # (once-only key was invisible, UI test 2026-09-09).
                 key_dialog.open()
-                _rebuild()
 
             with ui.row():
                 ui.button("Create", on_click=_create).props("outline dense")
