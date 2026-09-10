@@ -1,7 +1,9 @@
 # M4 — Multi-host design (2026-09-08)
 
-> STATUS: design doc — no code. Builds on E3 (identity/multi-user) and the
-> 12-surface inventory (`plans/e3-m1-identity-spike-2026-09-07.md`).
+> STATUS: H1 + H2(masks/inventory) BUILT on `feature/m4-multihost`
+> (2026-09-10). See "Build status" at the bottom. Builds on E3
+> (identity/multi-user) and the 12-surface inventory
+> (`plans/e3-m1-identity-spike-2026-09-07.md`).
 > Goal: run **N launcher nodes** serving the same tools/data behind a load
 > balancer, with a single consistent identity/config plane.
 
@@ -187,3 +189,58 @@ machinery (single-instance multi-user is NOT limited by the JSON store).
   TTL/poll catches up (bounded, logged).
 - This remains a DESIGN — none of H1–H4 is built; E3's mono/multi flag and
   the users_store interface are the only multi-host-ready pieces that exist.
+
+
+---
+
+## Build status (feature/m4-multihost, 2026-09-10)
+
+### H1 — DONE, with a design deviation (improvement)
+
+Shipped on main as `MCP_USERS_BACKEND=db` (859537b): the whole users
+document lives in ONE row (`mcp_users_store`) of the shared SqlStore
+instead of the per-user table envisioned here. Deviation rationale:
+- the module API is document-shaped (load_users/save_users), so the
+  whole-doc row is the natural mapping and needs no ORM layer;
+- the "JSON deletes are lossy / tombstones" caveat disappears by
+  construction — every save is a full-document reconcile;
+- reads are fresh per call (no cache), so rotation/disable propagate on
+  the next request on ANY node;
+- seeds converge across nodes (seed_from_env only ADDS missing users and
+  syncs declarative env-pinned keys — verified idempotent).
+
+### H2 — masks + inventory DONE (masks half)
+
+`tools/shared/state_docs.py`: named JSON documents in the shared SqlStore
+(table `mcp_state_docs`), selected by `MCP_STATE_BACKEND=db` (json default).
+Routed through it: `launcher/tools_config.py` (load/save),
+`tools/shared/function_masks.py` (per-boot mask reads),
+`mcp_ui/components/tool_settings.py` (delegated to launcher.tools_config —
+duplicate implementation removed).
+
+**Self-destruct class KILLED as a side effect:** the live recovery during
+this build proved `update_config_with_discovered_tools` replaced inventory
+from masked `tools/list` (get_secret vanished from simplemcp's inventory on
+a real re-discovery — E3 lesson re-confirmed in the wild). It now UNIONS
+discovered tools with existing inventory, so enforcement can never narrow
+the cluster inventory.
+
+Verified: two independent processes sharing one Turso file — node A writes
+masks+inventory, node B reads them via `load_tools_config` and
+`function_masks.masked_tools`; json default untouched; suite 881, e35 45/0.
+
+### H2b — env/auth key-value: DEFERRED
+
+Per-tool `config.json` env/auth values stay node-local this slice: they are
+the tools' import-time bootstrap (a node must be able to boot before any
+central read). Multi-host v1 contract: nodes carry IDENTICAL tool
+config.json files (deployment concern, same as .env). Revisit when a real
+second node demands central mutation of env/auth.
+
+### Honest limits (current)
+
+- Runtime mask push (E1) applies to the node that received the API call;
+  other nodes pick the mask up at next boot (or H2v2 fan-out).
+- Writes are last-writer-wins per document.
+- Only ONE node may run the inventory sync until discovery reads through a
+  mask-immune surface (union merge already bounds the damage).

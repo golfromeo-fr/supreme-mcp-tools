@@ -101,7 +101,9 @@ def test_parse_env_vars_keeps_value_raw():
 # === UI-8: atomic, lock-protected tools_config.json save ===
 
 def test_save_tools_config_atomic(monkeypatch, tmp_path):
-    monkeypatch.setattr(tool_settings, "TOOLS_CONFIG_FILE",
+    monkeypatch.setenv("MCP_STATE_BACKEND", "json")  # file mode for this test
+    import launcher.tools_config as ltc
+    monkeypatch.setattr(ltc, "_DEFAULT_CONFIG_FILE",
                         tmp_path / "tools_config.json")
     config = {"disabled_tools": {"webmcp": ["brave_search_web"]}, "tools": {}, "version": 1}
     tool_settings._save_tools_config(config)

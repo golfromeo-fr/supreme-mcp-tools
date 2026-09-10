@@ -6,6 +6,7 @@ This allows disabling specific tools per MCP server without modifying code.
 """
 
 import json
+import os
 import asyncio
 import logging
 import httpx
@@ -23,16 +24,35 @@ def _ensure_config_dir() -> None:
     _DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _state_backend_active(config_path: Path | None) -> bool:
+    """M4/H2: MCP_STATE_BACKEND=db routes the tools_config document to the
+    shared SQL backend (cluster-wide masks + inventory). Explicit
+    config_path arguments always mean "this file" (tests, overrides)."""
+    return (
+        config_path is None
+        and os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db"
+    )
+
+
 def load_tools_config(config_path: Path | None = None) -> dict:
     """
-    Load tools configuration from JSON file.
+    Load tools configuration: the shared SQL backend in db mode, else the
+    local JSON file.
 
     Args:
-        config_path: Optional path to config file
+        config_path: Optional path to config file (forces file mode)
 
     Returns:
         Dictionary with disabled_tools configuration
     """
+    if _state_backend_active(config_path):
+        from tools.shared import state_docs
+
+        doc = state_docs.load_doc("tools_config")
+        if doc is not None:
+            return doc
+        # None = no row yet OR backend unavailable → file/default below
+
     path = config_path or _DEFAULT_CONFIG_FILE
 
     if not path.exists():
@@ -55,6 +75,15 @@ def save_tools_config(config: dict, config_path: Path | None = None) -> None:
         config: Configuration dictionary to save
         config_path: Optional path to config file
     """
+    if _state_backend_active(config_path):
+        from tools.shared import state_docs
+
+        if state_docs.save_doc("tools_config", config):
+            return
+        logger.warning(
+            "save_tools_config: state backend unavailable - writing local file"
+        )
+
     from tools.shared.atomic_io import atomic_write_json
 
     path = Path(config_path or _DEFAULT_CONFIG_FILE)
@@ -325,8 +354,15 @@ def update_config_with_discovered_tools(
     if "tools" not in config:
         config["tools"] = {}
 
+    # UNION, not replace: discovery runs through the RUNNING servers, where
+    # E1 global masks hide tools from every caller (admin included). A
+    # replace would shrink the inventory and — via validate_and_cleanup —
+    # eventually destroy the masks themselves (the E3 "mask self-destruct",
+    # 07bdb1a). Union keeps previously-seen functions listed; stale entries
+    # are harmless (they only widen the Users-UI picker).
     for server_name, tools in discovered.items():
-        config["tools"][server_name] = tools
+        existing = config["tools"].get(server_name) or []
+        config["tools"][server_name] = sorted(set(existing) | set(tools))
 
     save_tools_config(config, config_path)
     return discovered

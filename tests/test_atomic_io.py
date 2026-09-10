@@ -171,6 +171,10 @@ class TestConvertedCallSites:
         assert "atomic_write_json" in source
 
     def test_ui_writer_delegates_to_shared_helper(self):
+        """The UI delegates tools_config saves to launcher.tools_config
+        (M4/H2: which routes to the shared state backend in db mode); the
+        atomic write itself lives there."""
         source = (PROJECT_ROOT / "mcp_ui/components/tool_settings.py").read_text()
-        assert "from tools.shared.atomic_io import atomic_write_json" in source
+        assert "from launcher.tools_config import save_tools_config" in source
+        assert "atomic_write_json" not in source
         assert "fcntl" not in source

@@ -70,28 +70,21 @@ async def apply_function_mask(
 
 
 def _load_tools_config() -> dict:
-    """Load tools configuration from file."""
-    if not TOOLS_CONFIG_FILE.exists():
-        return {"disabled_tools": {}, "tools": {}, "version": 1}
+    """Load tools configuration (file, or the shared state doc in db mode).
 
-    try:
-        with Path(TOOLS_CONFIG_FILE).open() as f:
-            return json.load(f)
-    except Exception:
-        return {"disabled_tools": {}, "tools": {}, "version": 1}
+    Delegates to the launcher module so the UI and the management API share
+    ONE source of truth — including the M4/H2 cluster backend."""
+    from launcher.tools_config import load_tools_config
+
+    return load_tools_config()
 
 
 def _save_tools_config(config: dict) -> None:
-    """Save tools configuration atomically under an exclusive lock.
+    """Save tools configuration atomically (file mode) or centrally (db
+    mode) — same delegation rationale as _load_tools_config."""
+    from launcher.tools_config import save_tools_config
 
-    The launcher and browser sessions can write this file concurrently; a bare
-    open('w') truncated the JSON on crash and lost concurrent updates. Delegates
-    to the shared helper (same pattern the launcher-side writer has used since
-    D2, 2026-09-05).
-    """
-    from tools.shared.atomic_io import atomic_write_json
-
-    atomic_write_json(TOOLS_CONFIG_FILE, config)
+    save_tools_config(config)
 
 
 def get_server_tools(server_name: str) -> list[str]:
