@@ -229,13 +229,17 @@ Verified: two independent processes sharing one Turso file — node A writes
 masks+inventory, node B reads them via `load_tools_config` and
 `function_masks.masked_tools`; json default untouched; suite 881, e35 45/0.
 
-### H2b — env/auth key-value: DEFERRED
+### H2b — env/auth: MIRROR shipped (adopt-only)
 
-Per-tool `config.json` env/auth values stay node-local this slice: they are
-the tools' import-time bootstrap (a node must be able to boot before any
-central read). Multi-host v1 contract: nodes carry IDENTICAL tool
-config.json files (deployment concern, same as .env). Revisit when a real
-second node demands central mutation of env/auth.
+`env_manager.snapshot_env_auth()` mirrors raw env values + auth sections to
+the shared doc `env_auth_snapshot`; `restore_missing_env_vars()` bootstraps
+a second node ADDITIVELY (missing vars only — existing lines and node-local
+identity values are never touched; dry-run supported). Runbook:
+`plans/m4-h4-runbook-2026-09-10.md`.
+
+Contract: the snapshot path NEVER writes .env (read-only mirror — .env is
+the one file with a mystery-truncation history). Central MUTATION of
+env/auth stays deferred until a real second node demands it.
 
 ### Honest limits (current)
 

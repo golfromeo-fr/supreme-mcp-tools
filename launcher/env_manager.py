@@ -549,3 +549,94 @@ def load_auth_config(tool_name: str) -> dict[str, Any]:
         return {}
 
     return config.get("auth", {})
+
+
+# ============================================================================
+# M4/H2b — cluster snapshot (MIRROR-ONLY)
+# ============================================================================
+# Snapshots of env + auth values travel to the shared backend so a SECOND
+# node can bootstrap. Contract:
+#   - this code NEVER writes .env on the snapshot path (read-only mirror);
+#   - restore is ADDITIVE: only variables missing from the node's .env are
+#     appended (existing lines — and the history comments around them — are
+#     never touched);
+#   - raw secrets travel in the snapshot: same trust domain as users_store
+#     (plaintext mcp_keys). Network backend only, never a public store.
+
+
+def _schema_tools() -> list[str]:
+    """Tool names that have a config.json (schema source)."""
+    tools_dir = PROJECT_ROOT / "tools"
+    if not tools_dir.exists():
+        return []
+    return sorted(d.name for d in tools_dir.iterdir()
+                  if d.is_dir() and (d / "config.json").exists())
+
+
+def snapshot_env_auth() -> dict:
+    """Raw env values for all schema-known variables + per-tool auth sections.
+
+    The mirror a second node bootstraps from. Secrets are raw (see contract)."""
+    snapshot: dict[str, Any] = {
+        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+        "node": os.uname().nodename,
+        "env": {},
+        "auth": {},
+    }
+    for tool_name in _schema_tools():
+        schema = load_env_schema(tool_name)
+        for var_name in schema:
+            raw = os.environ.get(var_name, "")
+            if raw:
+                snapshot["env"].setdefault(var_name, raw)
+        auth = load_auth_config(tool_name)
+        if auth:
+            snapshot["auth"][tool_name] = auth
+    return snapshot
+
+
+def save_env_auth_snapshot(snapshot: dict | None = None) -> bool:
+    """Mirror the snapshot to the shared backend (db mode). True = stored."""
+    from tools.shared import state_docs
+
+    return state_docs.save_doc(
+        "env_auth_snapshot", snapshot or snapshot_env_auth())
+
+
+def load_env_auth_snapshot() -> dict | None:
+    """Latest shared snapshot; None = none stored / backend unavailable."""
+    from tools.shared import state_docs
+
+    return state_docs.load_doc("env_auth_snapshot")
+
+
+def restore_missing_env_vars(snapshot: dict, env_path: Path | None = None,
+                             apply: bool = True) -> dict:
+    """ADDITIVE bootstrap: append snapshot variables missing from this
+    node's .env. Existing variables (set in the file OR the environment)
+    are never modified — this node keeps its own identity/bootstrap values.
+
+    Returns a report {added: [...], kept: [...], skipped_present_env: [...]}.
+    apply=False dry-runs (report only)."""
+    path = env_path or find_env_file()
+    report: dict[str, list[str]] = {"added": [], "kept": [], "skipped_present_env": []}
+
+    for var_name, value in sorted((snapshot.get("env") or {}).items()):
+        if os.environ.get(var_name):
+            report["skipped_present_env"].append(var_name)
+            continue
+        if path is not None and path.exists():
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if any(line.strip().startswith(f"{var_name}=")
+                   for line in content.splitlines()):
+                report["kept"].append(var_name)
+                continue
+        report["added"].append(var_name)
+        if apply:
+            _update_env_file(var_name, value, path if path is not None
+                             else find_env_file() or Path(".env"))
+
+    report["auth_note"] = (
+        "Auth sections in the snapshot are per-tool config.json bootstrap "
+        "data — apply manually per node (tools/<name>/config.json).")
+    return report
