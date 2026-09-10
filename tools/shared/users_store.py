@@ -114,39 +114,30 @@ def _db_conn():
         return _db_conn_singleton
     _db_init_done = True
     try:
-        # sql_store.py imports the bare ``shared`` package internally, which
-        # requires tools/ on sys.path - guaranteed inside tool modules but
-        # NOT in plain ``tools.shared.users_store`` consumers (tests, mgmt
-        # API before discovery). Add it ourselves, idempotently.
-        _tools_dir = str(Path(__file__).resolve().parents[1])
-        if _tools_dir not in sys_path_tools():
-            sys_path_tools().insert(0, _tools_dir)
-        from tools.shared.sql_store import get_sql_store
+        # dialect-agnostic executor from state_docs (turso _conn OR postgres
+        # pool; '?' placeholders normalized per dialect inside)
+        from tools.shared.state_docs import shared_exec
 
-        store = get_sql_store()
-        if type(store).__name__ == "NullSqlStore" or not getattr(store, "is_available", False):
+        ex = shared_exec()
+        if ex is None:
             logger.warning(
                 "MCP_USERS_BACKEND=db but no SQL backend is configured "
                 "(POSTGRES_* / TURSO_DATABASE_URL) - staying on users.json"
             )
             return None
-        conn = getattr(store, "_conn", None)
-        if conn is None:
-            raise RuntimeError("SqlStore impl exposes no _conn")
         for stmt in _DB_SCHEMA:
-            conn.execute(stmt)
-        ph = _PH(conn)
-        cur = conn.execute(
-            f"SELECT COUNT(*) FROM mcp_users_store WHERE id = {ph}", (1,))
+            ex.execute(stmt)
+        cur = ex.execute(
+            "SELECT COUNT(*) FROM mcp_users_store WHERE id = ?", (1,))
         row = cur.fetchone()
         if not row or not row[0]:
             if USERS_PATH.exists():
                 try:
                     data = USERS_PATH.read_text(encoding="utf-8")
                     json.loads(data)  # only import parseable files
-                    conn.execute(
+                    ex.execute(
                         f"INSERT INTO mcp_users_store (id, data, updated_at) "
-                        f"VALUES (1, {ph}, {ph})",
+                        f"VALUES (1, ?, ?)",
                         (data, _now_iso()),
                     )
                     logger.warning(
@@ -156,10 +147,8 @@ def _db_conn():
                     )
                 except Exception as e:
                     logger.warning(f"[E3] users store: skipped JSON import ({e})")
-        _db_conn_singleton = conn
-        logger.warning(
-            f"[E3] users store: SQL backend active "
-            f"({type(conn).__module__}.{type(conn).__name__})")
+        _db_conn_singleton = ex
+        logger.warning("[E3] users store: SQL backend active (shared exec)")
     except Exception as e:
         logger.warning(
             f"MCP_USERS_BACKEND=db init failed ({type(e).__name__}: {e}) - "
@@ -169,19 +158,13 @@ def _db_conn():
     return _db_conn_singleton
 
 
-def _PH(conn) -> str:
-    """Placeholder style: psycopg wants %s, libsql/sqlite want ?."""
-    return "%s" if type(conn).__module__.startswith("psycopg") else "?"
-
-
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
 
-def _db_load(conn) -> dict:
-    ph = _PH(conn)
-    cur = conn.execute(
-        f"SELECT data FROM mcp_users_store WHERE id = {ph}", (1,))
+def _db_load(ex) -> dict:
+    cur = ex.execute(
+        "SELECT data FROM mcp_users_store WHERE id = ?", (1,))
     row = cur.fetchone()
     if not row:
         return {"version": 1, "users": {}}
@@ -191,11 +174,10 @@ def _db_load(conn) -> dict:
     return store
 
 
-def _db_save(conn, store: dict) -> None:
-    ph = _PH(conn)
-    conn.execute(
+def _db_save(ex, store: dict) -> None:
+    ex.execute(
         f"INSERT INTO mcp_users_store (id, data, updated_at) "
-        f"VALUES (1, {ph}, {ph}) "
+        f"VALUES (1, ?, ?) "
         f"ON CONFLICT(id) DO UPDATE SET data = excluded.data, "
         f"updated_at = excluded.updated_at",
         (json.dumps(store, ensure_ascii=False), _now_iso()),

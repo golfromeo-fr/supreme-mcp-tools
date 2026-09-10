@@ -257,3 +257,4 @@ setup_opencode_mcp.sh
 /zcode-*.md
 /misc/
 /.zcode/
+deploy/node.env
