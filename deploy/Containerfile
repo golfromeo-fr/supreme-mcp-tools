@@ -1,0 +1,38 @@
+# M4 node image — ONE launcher process per container (H4, 2026-09-10).
+# Build from the repo root (context is the repo, not deploy/):
+#   podman build -f deploy/Containerfile -t mcp-node .
+# The node reads its config from a MOUNTED .env (see deploy/podman-compose.yml):
+#   "same image, one mounted .env" — no unique local state in the image.
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Dependencies first — cached unless requirements change.
+# python-docx is a DEFAULT-tool dependency since convertermcp joined the set.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Code + runtime config (ports.json, launcher_config.json live in config/)
+COPY launcher/ ./launcher/
+COPY tools/ ./tools/
+COPY mcp_ui/ ./mcp_ui/
+COPY config/ ./config/
+COPY launchmcp.py .
+
+# The shared-state backends (users + state docs) must be reachable; the
+# tools' data planes are whatever the mounted .env points at.
+# Runtime state: keep logs inside the container unless a volume is declared.
+RUN mkdir -p /app/logs
+
+# Default tool set — override with TOOLS_LIST in compose/K8s
+# (space-separated; empty entries are ignored by the shell expansion).
+ENV MCP_AUTH_MODE=multi \
+    MCP_USERS_BACKEND=db \
+    MCP_STATE_BACKEND=db \
+    TOOLS_LIST="simplemcp convertermcp webmcp"
+# NOTE: POSTGRES_HOST/USER/PASSWORD/DB and the identity/management secrets
+# come from the mounted .env — NOT baked into the image.
+
+# launchmcp.py loads the root .env BEFORE any tool import (auth-order fix,
+# 2026-09-09): the mounted /app/.env is what makes this node multi-user.
+CMD ["sh", "-c", "exec python3 ./launchmcp.py --health-check-logs disable ${TOOLS_LIST}"]

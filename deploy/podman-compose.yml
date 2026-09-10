@@ -1,0 +1,106 @@
+# M4 prototype — two launcher nodes + shared Postgres state plane.
+#
+#   cp deploy/node.env.template deploy/node.env   # fill in the secrets
+#   podman-compose -f deploy/podman-compose.yml up -d
+#   # (docker compose works identically: `docker compose -f ... up -d`)
+#
+# Layout: each node is one launcher process in its own network namespace,
+# so BOTH use the same internal ports (8000-8005 tools, 8200 central).
+# Only the CENTRAL API is published to the host, on per-node ports:
+#   node 1 central -> http://localhost:18200
+#   node 2 central -> http://localhost:19200
+# Create a user on node 1's central API, then list users on node 2 — the
+# whole point of H1/H2: one shared identity/config plane, zero drift.
+#
+# A real deployment puts an LB (TLS, health-checked) in front of the node
+# centrals; stateful /mcp clients need sticky sessions (or use
+# /mcp-stateless, which floats freely).
+
+name: mcp-multihost
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mcp
+      POSTGRES_PASSWORD: change-me-db-password
+      POSTGRES_DB: mcp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcp -d mcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  node1:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    environment:
+      # container env, NOT the mounted .env: the shell expands TOOLS_LIST
+      # before python (and its dotenv) ever runs
+      TOOLS_LIST: "simplemcp convertermcp webmcp"
+    volumes:
+      - ./node.env:/app/.env:ro
+    ports:
+      - "18200:8200"   # central API (identity/config plane)
+      - "18002:8002"   # simplemcp (stateful /mcp + /mcp-stateless + /sse)
+      - "18003:8003"   # convertermcp
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8200/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  node2:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    environment:
+      TOOLS_LIST: "simplemcp convertermcp webmcp"
+    volumes:
+      - ./node.env:/app/.env:ro
+    ports:
+      - "19200:8200"
+      - "19002:8002"
+      - "19003:8003"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8200/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  # Optional: management UI talking to node 1's central API.
+  #   podman-compose ... --profile ui up -d
+  ui:
+    profiles: ["ui"]
+    image: mcp-node:latest
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    command: ["python3", "-m", "mcp_ui.management_ui"]
+    environment:
+      MCP_API_URL: http://node1:8200
+    volumes:
+      - ./node.env:/app/.env:ro
+    ports:
+      - "18400:8400"
+    depends_on:
+      node1:
+        condition: service_started
+
+volumes:
+  pgdata:
