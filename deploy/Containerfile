@@ -3,7 +3,7 @@
 #   podman build -f deploy/Containerfile -t mcp-node .
 # The node reads its config from a MOUNTED .env (see deploy/podman-compose.yml):
 #   "same image, one mounted .env" — no unique local state in the image.
-FROM python:3.13-slim
+FROM docker.io/library/python:3.13-slim
 
 WORKDIR /app
 
@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Code + runtime config (ports.json, launcher_config.json live in config/)
 COPY launcher/ ./launcher/
+COPY monitoring/ ./monitoring/
 COPY tools/ ./tools/
 COPY mcp_ui/ ./mcp_ui/
 COPY config/ ./config/
