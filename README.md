@@ -22,11 +22,12 @@ that the primary CLI doesn't expose).
 | `databasemcp` | 8000 | Multi-database registry (Oracle / Postgres / libSQL): query, execute, schema, transactions, connection presets |
 | `webmcp` | 8001 | Web search (Brave Search, Google API), URL fetch, HTTP POST |
 | `simplemcp` | 8002 | Simple test tools (double, square, greet) |
+| `convertermcp` | 8003 | Document conversion (DOCX to text, local path or URL) |
 | `ragmcp` | 8004 | RAG-like codebase indexing using local or API embeddings |
 | `memorymcp` | 8005 | Persistent memory store with knowledge graph and semantic search |
 
-(`convertermcp` and the retired `oraclemcp` remain in `tools/` for standalone use
-but are not part of the default launcher set.)
+(the retired `oraclemcp` remains in `tools/` for standalone use but is not part
+of the default launcher set.)
 
 ---
 
@@ -166,7 +167,7 @@ Port ranges and tool assignments live in `config/ports.json`:
 | 8300-8399 | Metrics (metrics_server: 8300) |
 | 8400-8499 | UI (management_ui: 8400) |
 
-Tool ports: databasemcp 8000, webmcp 8001, simplemcp 8002, ragmcp 8004, memorymcp 8005.
+Tool ports: databasemcp 8000, webmcp 8001, simplemcp 8002, convertermcp 8003, ragmcp 8004, memorymcp 8005.
 
 The launcher starts the central management API (port 8200) by default — disable with `--no-management`.
 The NiceGUI management UI is a separate process: `python -m mcp_ui` (port 8400; `startui` helper).
@@ -347,7 +348,7 @@ the `MCP_TRANSPORT` env var, or the `"transport"` key in `tools/<name>/config.js
 
 ## Available MCP Tools
 
-The launcher currently ships the following five MCP tools:
+The launcher currently ships the following six MCP tools:
 
 ### webmcp (Port 8001)
 A web search and URL fetch MCP server that provides:
@@ -372,6 +373,12 @@ Per-user E3.5 grants: preset access is deny-by-default for non-admins and granta
 functions (`execute_sql`, `connect_database`, `disconnect_database`) are pre-masked for `role=user` accounts.
 
 **Documentation**: [`tools/databasemcp/SKILL.md`](tools/databasemcp/SKILL.md)
+
+### convertermcp (Port 8003)
+A document conversion MCP server that provides:
+- **convert_docx_to_text**: Convert Microsoft Word documents (.docx) to plain text, from a local path or an HTTP(S) URL, with optional output file
+- Path security via configurable allowed root directories (`allowed_roots` in `tools/convertermcp/config.json`)
+- Size limits (`max_docx_size_mb`) and header pass-through for authenticated URLs
 
 ### ragmcp (Port 8004)
 A RAG (Retrieval-Augmented Generation) and Code Indexing MCP server that provides:

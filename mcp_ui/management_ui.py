@@ -288,7 +288,8 @@ def try_login_user(username: str, password: str) -> dict:
         try:
             created = users_store.create_user(
                 admin_name, password, role="admin",
-                servers=["simplemcp", "ragmcp", "webmcp", "memorymcp", "databasemcp"],
+                servers=["simplemcp", "ragmcp", "webmcp", "memorymcp",
+                            "databasemcp", "convertermcp"],
             )
             logger.warning(
                 f"[E3] store admin '{admin_name}' bootstrapped from legacy env "

@@ -94,7 +94,8 @@
     "api_key": "convertermcp-test-key-ijkl"
   },
   "allowed_roots": [
-    "/workspaces"
+    "/home/gr/supreme-mcp-tools",
+    "/tmp"
   ],
   "max_docx_size_mb": 20
 }

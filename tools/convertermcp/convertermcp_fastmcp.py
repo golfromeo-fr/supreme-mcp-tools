@@ -8,6 +8,7 @@ FEF V3 integration preserved from original implementation.
 """
 import sys
 import os
+import json
 import tempfile
 import logging
 import time
@@ -54,7 +55,22 @@ logger = logging.getLogger(TOOL_NAME)
 # Configuration
 # ============================================================================
 
-ALLOWED_ROOTS = [Path("/workspaces")]
+def _load_allowed_roots() -> list[Path]:
+    """Allowed read/write roots from config.json ``allowed_roots`` (falls
+    back to the historical devcontainer default). ``~`` expands per user."""
+    try:
+        cfg = json.loads((Path(__file__).parent / "config.json").read_text())
+        roots = cfg.get("allowed_roots") or ["/workspaces"]
+    except Exception:
+        roots = ["/workspaces"]
+    out = []
+    for root in roots:
+        root = str(root)
+        out.append(Path(root).expanduser().resolve())
+    return out
+
+
+ALLOWED_ROOTS = _load_allowed_roots()
 MAX_DOCX_SIZE_MB = 20
 
 # ============================================================================
