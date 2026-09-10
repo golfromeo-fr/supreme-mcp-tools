@@ -234,6 +234,10 @@ async def convert_docx_to_text(source: str, output_path: str | None = None, head
                         success=False, duration_ms=elapsed_ms
                     )
                 return f"Error: File not found: {docx_path}"
+            size_mb = docx_path.stat().st_size / (1024 * 1024)
+            if size_mb > MAX_DOCX_SIZE_MB:
+                return (f"Error: DOCX size {size_mb:.2f} MB exceeds limit "
+                        f"of {MAX_DOCX_SIZE_MB} MB")
             if not is_under_allowed_roots(docx_path, ALLOWED_ROOTS):
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
                 if fef_manager is not None:

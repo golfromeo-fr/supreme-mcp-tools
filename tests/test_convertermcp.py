@@ -5,6 +5,7 @@ on real deployments, silently rejecting every local-path conversion
 (2026-09-09). Roots now load from config.json; these tests lock that in.
 """
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -90,3 +91,20 @@ def test_extract_docx_text_round_trip(tmp_path):
 
     text = extract_docx_text(f)
     assert "alpha beta" in text and "gamma delta" in text
+
+
+def test_local_size_cap_enforced(tmp_path, monkeypatch):
+    """Local-path conversions enforce MAX_DOCX_SIZE_MB (URL downloads
+    already did; local files previously bypassed it)."""
+    import tools.convertermcp
+    from tools.convertermcp.convertermcp_fastmcp import (
+        convert_docx_to_text, ALLOWED_ROOTS)
+
+    big = tmp_path / "big.docx"
+    big.write_bytes(b"x" * (21 * 1024 * 1024))
+    monkeypatch.setattr(sys.modules["tools.convertermcp.convertermcp_fastmcp"],
+                        "MAX_DOCX_SIZE_MB", 20)
+
+    coro = convert_docx_to_text(str(big))
+    result = asyncio.run(coro)
+    assert "exceeds limit" in result
