@@ -19,6 +19,7 @@ COPY tools/ ./tools/
 COPY mcp_ui/ ./mcp_ui/
 COPY config/ ./config/
 COPY launchmcp.py .
+COPY deploy/healthcheck.py ./healthcheck.py
 
 # The shared-state backends (users + state docs) must be reachable; the
 # tools' data planes are whatever the mounted .env points at.
