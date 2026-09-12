@@ -1,0 +1,21 @@
+# Topology: EMBEDDED POSTGRES — the shared state plane runs here.
+# Selected by: startlauncher-podman pg
+# node.env must set: MCP_USERS_BACKEND=db, MCP_STATE_BACKEND=db,
+#                    POSTGRES_HOST=db, POSTGRES_USER/PASSWORD/DB
+# Credentials come from node.env via env_file (single source of truth).
+
+services:
+  db:
+    image: docker.io/library/postgres:16-alpine
+    env_file:
+      - node.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

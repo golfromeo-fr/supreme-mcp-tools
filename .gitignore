@@ -258,3 +258,4 @@ setup_opencode_mcp.sh
 /misc/
 /.zcode/
 deploy/node.env
+startlauncher-podman

@@ -11,22 +11,39 @@ local file.
 | File | Purpose |
 |---|---|
 | `Containerfile` | One launcher process per container. Reads `/app/.env` (mounted). |
-| `podman-compose.yml` | `db` (postgres:16) + `node1` + `node2` (+ optional `ui` profile). |
-| `node.env.template` | The mounted `.env` — copy to `node.env` and fill in. |
+| `compose-common.yml` | `node1` + `node2` (+ optional `ui` profile) — always used. |
+| `compose-pg.yml` | Topology: embedded postgres state plane. |
+| `compose-turso.yml` | Topology: embedded Turso/libSQL (sqld) state plane. |
+| `node.env.template` | The mounted `.env` — copy to `node.env` and fill in (secrets + the state-plane block matching your topology). |
+
+## Topologies (first arg of `startlauncher-podman`)
+
+| Topology | State plane | db container | Use when |
+|---|---|---|---|
+| `pg` (default) | embedded postgres | yes (`compose-pg.yml`) | self-contained demo/cluster |
+| `turso` | embedded libsql-server (sqld) | yes (`compose-turso.yml`) | same engine family as the tools' Turso stores |
+| `external-pg` | your Postgres (managed/HA) | no | DB operated elsewhere |
+| `external-turso` | Turso cloud / TCP sqld | no | cloud libSQL |
+
+Each embedded backend owns its volume (`pgdata` / `sqldata`) — switching
+topologies switches datasets; nothing is lost.
 
 ## Quickstart
 
 ```bash
 cd deploy
-cp node.env.template node.env       # then fill in the change-me secrets
-
-podman-compose -f podman-compose.yml up -d
-# (docker compose -f podman-compose.yml up -d works identically)
+cp node.env.template node.env       # fill in secrets + keep ONE state-plane block
+cd ..
+./startlauncher-podman pg           # or: turso | external-pg | external-turso
 
 # node centrals:
 #   node 1 -> http://localhost:18200/health
 #   node 2 -> http://localhost:19200/health
 ```
+
+(Manual equivalent, without the script:
+`podman-compose -f compose-common.yml -f compose-pg.yml up -d` — the script
+adds code pull, stale-image removal, and health waiting.)
 
 Tool endpoints on the host (stateless URLs float across nodes):
 `localhost:18002` / `18003` (node 1) and `19002` / `19003` (node 2) for

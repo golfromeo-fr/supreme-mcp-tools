@@ -1,0 +1,22 @@
+# Topology: EMBEDDED TURSO — the shared state plane is a libsql-server
+# (sqld) container. Same engine family as the tools' local "Turso" file
+# store, but NETWORK-reachable (a file: URL can never be shared).
+# Selected by: startlauncher-podman turso
+# node.env must set: MCP_USERS_BACKEND=db, MCP_STATE_BACKEND=db,
+#                    TURSO_DATABASE_URL=http://db:8080
+# (no auth token: the container runs open inside the podman network only)
+
+services:
+  db:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    volumes:
+      - sqldata:/var/lib/sqld
+    healthcheck:
+      test: ["CMD-SHELL",
+             "curl -sf http://127.0.0.1:8080/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  sqldata:
