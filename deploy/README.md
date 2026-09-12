@@ -1,6 +1,22 @@
-# M4 deploy — two-node podman/compose prototype
+# deploy — podman environments (startcluster)
 
-One shared Postgres (identity + config state plane), two identical launcher
+Two ISOLATED podman environments, managed by the (local) `startcluster`
+script:
+
+| Environment | Purpose | Ports | Data |
+|---|---|---|---|
+| `work`   | pod-based DAILY DRIVER (alternative to host startlauncher) | canonical 8000-8005, central 8200, UI 8400 (profile) | own pgvector state plane + YOUR real data planes (host .env, host turso dir, host users.json imported once) |
+| `test`   | M4 multi-host test bench (two light nodes) | 18200 / 19200 (+18xxx/19xxx tools) | own volumes (pgdata / sqldata) |
+
+Isolation rules:
+- separate compose projects (`mcp-work` / `mcp-multihost`) and volumes;
+- the work cluster and the host `startlauncher` are mutually exclusive
+  (same canonical ports) — the script refuses to start one while the other
+  holds the ports;
+- automated tests target the canonical ports: stop the work cluster before
+  running the suite, or the suite tests the work environment (it is
+  self-cleaning).
+
 nodes, optional management UI. This is the H4 practical step: it gives you a
 real second node so the shared-state code paths (`MCP_USERS_BACKEND=db`,
 `MCP_STATE_BACKEND=db`) run against a real network backend instead of a

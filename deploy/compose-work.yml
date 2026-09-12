@@ -1,0 +1,76 @@
+# WORK environment — the pod-based daily driver.
+#
+# One launcher node serving ALL SIX tools on the CANONICAL ports
+# (8000-8005, central 8200) with host networking — so existing client
+# configurations (localhost:800x/mcp-stateless) keep working unchanged.
+#
+# Identity/config plane: its OWN pgvector Postgres (users + state docs;
+# pgvector so memory/rag vector data can also live here if configured).
+#   -> first boot imports the HOST users.json (mounted read-only): same
+#      accounts, same API keys — ZCode bindings keep working.
+# Data planes: EXACTLY the host .env's (work.env is generated from it),
+# with the host turso data dir mounted at the SAME path, so file: URLs
+# and presets resolve identically to the host launcher.
+#
+# Run:      startcluster work
+# Isolation: project mcp-work (own volumes); do NOT run the host
+# startlauncher at the same time (same ports). Automated tests target the
+# canonical ports too — stop this cluster (startcluster work stop) or the
+# suite tests this environment.
+
+services:
+  db:
+    image: docker.io/pgvector/pgvector:pg16
+    env_file:
+      - work.env
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - work_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  work:
+    image: mcp-node:latest
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    network_mode: host            # canonical ports + host-side DSNs/presets
+    environment:
+      TOOLS_LIST: "simplemcp convertermcp webmcp memorymcp ragmcp databasemcp"
+    volumes:
+      - ./work.env:/app/.env:ro
+      # one-time identity adoption: same accounts/keys as the host stack
+      - ${HOST_CONFIG_DIR}/users.json:/root/.config/supreme-mcp-tools/users.json:ro
+      - ${HOST_CONFIG_DIR}/tools_config.json:/root/.config/supreme-mcp-tools/tools_config.json:ro
+      # real memory data plane at the SAME path the host .env references
+      - ${HOST_TURSO_DIR}:${HOST_TURSO_DIR}
+      # local embedding model cache — no re-download in the container
+      - ${HOST_HF_CACHE}:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ui:
+    profiles: ["ui"]
+    image: mcp-node:latest
+    command: ["python3", "-m", "mcp_ui.management_ui"]
+    network_mode: host            # serves on 8400; conflicts with host startui
+    volumes:
+      - ./work.env:/app/.env:ro
+    environment:
+      MCP_API_URL: http://127.0.0.1:8200
+    restart: unless-stopped
+
+volumes:
+  work_pgdata:
