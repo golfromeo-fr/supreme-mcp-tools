@@ -90,37 +90,33 @@ async def mcp_list_tools(tool: str, key: str,
 
 
 async def main() -> int:
-    from tools.shared import users_store
+    from identity_admin import IdentityAdmin
 
-    # ── setup: three test users with distinct grants ─────────────────
+    # ── setup: test users via the CENTRAL API — environment-agnostic
+    # (works against the host launcher, the work pod, any node holding the
+    # canonical ports). The host users.json is never written.
+    admin = IdentityAdmin()
     for u in ("e35admin", "e35alice", "e35bob", "e35carol"):
         try:
-            users_store.delete_user(u)
+            admin.delete(u)
         except Exception:
             pass
 
-    users_store.create_user("e35admin", "e35-admin-pass-9", role="admin",
-                            servers=["simplemcp", "memorymcp", "ragmcp",
-                                     "databasemcp", "webmcp"])
-    users_store.create_user("e35alice", "e35-alice-pass-9", role="user",
-                            servers=["memorymcp", "ragmcp", "databasemcp", "simplemcp"],
-                            db_presets=["02"],
-                            rag_collections=[])
-    users_store.create_user("e35bob", "e35-bob-pass-9", role="user",
-                            servers=["memorymcp", "ragmcp", "databasemcp"],
-                            db_presets=[],
-                            rag_collections=[])
-    # carol: simplemcp only — tests server-level denial for others
-    users_store.create_user("e35carol", "e35-carol-pass-9", role="user",
-                            servers=["simplemcp"])
-
-    def _uk(name: str) -> str:
-        return users_store.get_user_record(name)["mcp_key"]
-
-    admin_key = _uk("e35admin")
-    alice_key = _uk("e35alice")
-    bob_key = _uk("e35bob")
-    carol_key = _uk("e35carol")
+    rec = admin.create("e35admin", "e35-admin-pass-9", role="admin",
+                       servers=["simplemcp", "memorymcp", "ragmcp",
+                                "databasemcp", "webmcp"])
+    admin_key = rec["mcp_key"]
+    alice = admin.create("e35alice", "e35-alice-pass-9", role="user",
+                         servers=["memorymcp", "ragmcp", "databasemcp", "simplemcp"],
+                         db_presets=["02"], rag_collections=[])
+    alice_key = alice["mcp_key"]
+    bob = admin.create("e35bob", "e35-bob-pass-9", role="user",
+                       servers=["memorymcp", "ragmcp", "databasemcp"],
+                       db_presets=[], rag_collections=[])
+    bob_key = bob["mcp_key"]
+    carol = admin.create("e35carol", "e35-carol-pass-9", role="user",
+                         servers=["simplemcp"])
+    carol_key = carol["mcp_key"]
 
     print("\n" + "=" * 60)
     print("E3.5 per-user data-plane integration")
@@ -334,10 +330,11 @@ async def main() -> int:
     # ==================================================================
     print("\n── key rotation lifecycle ──")
     alice_old_key = alice_key
-    users_store.rotate_key("e35alice")
-    alice_new_key = users_store.get_user_record("e35alice")["mcp_key"]
-    check("key changed on rotate", alice_old_key != alice_new_key)
-    time.sleep(1.0)  # allow the launcher's user store cache to reload
+    rot = admin.rotate("e35alice")
+    alice_new_key = rot["mcp_key"]
+    check("key changed on rotate", bool(alice_new_key)
+          and alice_old_key != alice_new_key)
+    time.sleep(0.5)  # allow the per-request store snapshot to reload
 
     old_tools = await mcp_list_tools("simplemcp", alice_old_key)
     # 401 surfaces as MCPError ("Server returned an error response"); the
@@ -352,23 +349,13 @@ async def main() -> int:
     # ==================================================================
     # role transition
     # ==================================================================
-    print("\n── role transition ──")
-    record = users_store.get_user_record("e35bob")
-    record["role"] = "admin"
-    store_raw = json.loads(STORE_PATH.read_text())
-    store_raw["users"]["e35bob"]["role"] = "admin"
-    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
-    time.sleep(0.5)  # allow mtime cache to notice
-
-    # bob (now admin) should see users-manager-type power
-    bob_rec = users_store.get_user_record("e35bob")
-    check("bob promoted to admin", bob_rec["role"] == "admin")
-
-    # demote back
-    store_raw = json.loads(STORE_PATH.read_text())
-    store_raw["users"]["e35bob"]["role"] = "user"
-    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
-    time.sleep(0.3)
+    print("\n── role transition (central API) ──")
+    admin.set_role("e35bob", "admin")
+    check("bob promoted to admin",
+          admin.get("e35bob").get("role") == "admin")
+    admin.set_role("e35bob", "user")
+    check("bob demoted back",
+          admin.get("e35bob").get("role") == "user")
 
     # ==================================================================
     # concurrent two-user access
@@ -473,63 +460,57 @@ async def main() -> int:
         check("central no key → 401", r.status_code == 401)
 
         # E3 multi-admin: an enabled admin's own key opens the central API
-        admin_rec = users_store.get_user_record("e35admin")
         r = await hc.get("http://127.0.0.1:8200/api/tools",
-                         headers={"Authorization": f"Bearer {admin_rec['mcp_key']}"})
+                         headers={"Authorization": f"Bearer {admin_key}"})
         check("central accepts admin user key (multi-admin)", r.status_code == 200)
 
-    # ==================================================================
-    # store corruption resilience
-    # ==================================================================
-    print("\n── store corruption resilience ──")
-    # save the current store
-    store_backup = STORE_PATH.read_text()
-    # write invalid JSON
-    STORE_PATH.write_text("{invalid json!!!")
-    time.sleep(0.3)  # allow mtime cache to notice
-    # verify graceful fallback
-    rec = users_store.get_user_record("e35alice")
-    check("corrupt store → graceful fallback", rec is None or isinstance(rec, dict))
-    # restore
-    STORE_PATH.write_text(store_backup)
-    time.sleep(0.3)
-    rec = users_store.get_user_record("e35alice")
-    check("store restored after corruption test", rec is not None)
+    if not admin.shares_host_identity:
+        print("\n── file-plane sections SKIPPED (isolated identity plane: "
+              "work pod / db-backed store) ──")
 
-    # ==================================================================
-    # store hot-reload (external edit propagates)
-    # ==================================================================
-    print("\n── store hot-reload ──")
-    # add a user directly to the file (external edit)
-    store_raw = json.loads(STORE_PATH.read_text())
-    store_raw["users"]["e35hotreload"] = {
-        "username": "e35hotreload",
-        "password_hash": users_store.hash_password("hot-reload-pass"),
-        "role": "user",
-        "mcp_key": "hot-reload-test-key-12345",
-        "servers": ["simplemcp"],
-        "masked_functions": {},
-        "db_presets": [],
-        "rag_collections": [],
-        "enabled": True,
-        "created_at": "2026-09-08T00:00:00+00:00",
-        "key_rotated_at": "2026-09-08T00:00:00+00:00",
-        "updated_at": "2026-09-08T00:00:00+00:00",
-    }
-    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
-    time.sleep(0.5)  # allow mtime cache to notice
+    if admin.shares_host_identity:
+        # ==============================================================
+        # store corruption resilience (host json identity plane only)
+        # ==============================================================
+        print("\n── store corruption resilience ──")
+        store_backup = STORE_PATH.read_text()
+        STORE_PATH.write_text("{invalid json!!!")
+        time.sleep(0.3)  # allow mtime cache to notice
+        rec = _host_get_user("e35alice")
+        check("corrupt store → graceful fallback",
+              rec is None or isinstance(rec, dict))
+        STORE_PATH.write_text(store_backup)
+        time.sleep(0.3)
+        rec = _host_get_user("e35alice")
+        check("store restored after corruption test", rec is not None)
 
-    # verify the new user can authenticate via the MCP surface
-    hot_tools = await mcp_list_tools("simplemcp", "hot-reload-test-key-12345")
-    check("hot-reload user works (external edit picked up)",
-          isinstance(hot_tools, list) and "double" in hot_tools)
+        # ==============================================================
+        # store hot-reload (external edit propagates) — host json only
+        # ==============================================================
+        print("\n── store hot-reload ──")
+        store_raw = json.loads(STORE_PATH.read_text())
+        store_raw["users"]["e35hotreload"] = {
+            "username": "e35hotreload",
+            "password_hash": _host_hash("hot-reload-pass"),
+            "role": "user",
+            "mcp_key": "hot-reload-test-key-12345",
+            "servers": ["simplemcp"],
+            "masked_functions": {}, "db_presets": [], "rag_collections": [],
+            "enabled": True,
+            "created_at": "2026-09-08T00:00:00+00:00",
+            "key_rotated_at": "2026-09-08T00:00:00+00:00",
+            "updated_at": "2026-09-08T00:00:00+00:00",
+        }
+        STORE_PATH.write_text(json.dumps(store_raw, indent=2))
+        time.sleep(0.5)  # allow mtime cache to notice
 
-    # cleanup hot-reload user
-    store_raw = json.loads(STORE_PATH.read_text())
-    store_raw["users"].pop("e35hotreload", None)
-    STORE_PATH.write_text(json.dumps(store_raw, indent=2))
+        hot_tools = await mcp_list_tools("simplemcp", "hot-reload-test-key-12345")
+        check("hot-reload user works (external edit picked up)",
+              isinstance(hot_tools, list) and "double" in hot_tools)
 
-    # ==================================================================
+        store_raw = json.loads(STORE_PATH.read_text())
+        store_raw["users"].pop("e35hotreload", None)
+        STORE_PATH.write_text(json.dumps(store_raw, indent=2))
     # cleanup
     # ==================================================================
     print("\n── cleanup ──")
@@ -540,13 +521,8 @@ async def main() -> int:
         await mcp_call("memorymcp", admin_key, "deleteMemory",
                        {"memory_id": bob_mem_id})
 
-    for u in ("e35admin", "e35alice", "e35bob", "e35carol"):
-        try:
-            users_store.delete_user(u)
-        except Exception:
-            pass
-
-    print("test users removed, test memories deleted")
+    admin.cleanup()
+    print("test users removed via the central API, test memories deleted")
 
     passed = sum(1 for _, s in results if s)
     failed = sum(1 for _, s in results if not s)
@@ -554,6 +530,22 @@ async def main() -> int:
     print(f"  {passed} PASS / {failed} FAIL")
     print(f"{'=' * 50}")
     return 1 if failed else 0
+
+
+def _host_get_user(username: str):
+    """Read a user straight from the HOST users.json (file-plane checks)."""
+    try:
+        store = json.loads(STORE_PATH.read_text())
+        return store.get("users", {}).get(username)
+    except Exception:
+        return None
+
+
+def _host_hash(password: str):
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from tools.shared.users_store import hash_password
+    return hash_password(password)
 
 
 def _extract_id(raw: str) -> str:

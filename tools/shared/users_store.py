@@ -401,6 +401,21 @@ def set_enabled(username: str, enabled: bool) -> None:
     save_users(store)
 
 
+def set_role(username: str, role: str) -> None:
+    """Change a user's role (user|admin). Refuses to demote the last admin."""
+    if role not in ("admin", "user"):
+        raise ValueError("role must be 'admin' or 'user'")
+    record = _require(get_user_record(username), username)
+    store = load_users()
+    record = store["users"][record["username"]]
+    if record["role"] == "admin" and role != "admin":
+        _refuse_last_admin(store, username)
+    record["role"] = role
+    _touch(record)
+    save_users(store)
+    logger.info(f"user '{username}' role -> {role}")
+
+
 def set_password(username: str, password: str) -> None:
     if not password or len(password) < 8:
         raise ValueError("password must be at least 8 characters")

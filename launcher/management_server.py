@@ -133,6 +133,11 @@ class MutateRequest(BaseModel):
     params: dict[str, Any]
 
 
+class UserRoleRequest(BaseModel):
+    """Role change (user|admin); refuses to demote the last admin."""
+    role: str
+
+
 class MaskPushRequest(BaseModel):
     """M4: sibling mask fan-out."""
     server_name: str
@@ -147,7 +152,10 @@ class UserCreateRequest(BaseModel):
     password: str
     role: str = "user"
     servers: list[str] = []
-    masked_functions: dict[str, list[str]] = {}
+    # None → the store applies DEFAULT_USER_MASKS for role=user ({} would
+    # silently skip the protective profile — UI/API-created users must get
+    # the same default denial posture as store-created ones)
+    masked_functions: dict[str, list[str]] | None = None
 
 
 class UserPasswordRequest(BaseModel):
@@ -622,6 +630,16 @@ class ManagementServer:
                                              _: bool = Depends(self._verify_api_key)):
             try:
                 users_store.set_password(username, request.password)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"ok": True}
+
+        @self.app.put("/api/users/{username}/role")
+        async def set_user_role_endpoint(username: str,
+                                         request: UserRoleRequest,
+                                         _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.set_role(username, request.role)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             return {"ok": True}
