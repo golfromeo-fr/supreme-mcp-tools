@@ -44,17 +44,71 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
-async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool) -> dict:
+async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool,
+                             fanout: bool = True) -> dict:
     """E1: push a just-persisted mask to the RUNNING server (same process —
     the per-tool registry holds its FastMCP instance). File-first already
-    happened; a failed push still converges at the tool's next restart."""
+    happened; a failed push still converges at the tool's next restart.
+
+    M4: masks persist to the SHARED state (db mode) — after the local
+    apply, fan out to every other registered cluster node so the whole
+    cluster converges immediately, not at their next boot."""
     from .tool_extensions.registry import get_registry_for_tool
     from tools.shared.function_masks import apply_mask_at_runtime
 
     registry = await get_registry_for_tool(server_name)
     mcp = getattr(registry, "mcp_instance", None) if registry else None
     result = apply_mask_at_runtime(mcp, server_name, tool_name, masked)
+
+    if fanout:
+        _schedule_mask_fanout(server_name, tool_name, masked)
+
     return {"runtime_applied": result["applied"], "runtime_note": result["reason"]}
+
+
+def _schedule_mask_fanout(server_name: str, tool_name: str, masked: bool) -> None:
+    """Fire-and-forget fan-out to sibling cluster nodes (never blocks the
+    API response; failures only log — boot-time adoption converges)."""
+    import os
+
+    if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() != "db":
+        return
+    node_name = os.environ.get("MCP_NODE_NAME")
+    if not node_name:
+        return  # single-node / mono deployment
+
+    import asyncio
+
+    async def _fanout():
+        import httpx
+
+        from tools.shared import cluster
+
+        siblings = cluster.sibling_nodes(node_name)
+        if not siblings:
+            return
+        key = os.environ.get("MCP_MANAGEMENT_API_KEY")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        body = {"server_name": server_name, "tool_name": tool_name,
+                "masked": masked, "fanout": True}
+        applied, failed = [], []
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for peer, url in siblings.items():
+                try:
+                    r = await client.post(f"{url.rstrip('/')}/api/internal/mask-push",
+                                          json=body, headers=headers)
+                    (applied if r.status_code == 200 else failed).append(peer)
+                except Exception:
+                    failed.append(peer)
+        if applied or failed:
+            logging.getLogger(__name__).info(
+                f"[M4] mask fan-out {tool_name}({'masked' if masked else 'enabled'}) "
+                f"-> applied: {applied or '[]'} failed: {failed or '[]'}")
+
+    try:
+        asyncio.get_running_loop().create_task(_fanout())
+    except RuntimeError:
+        pass
 
 
 # Request/Response Models
@@ -66,6 +120,14 @@ class QueryRequest(BaseModel):
 class MutateRequest(BaseModel):
     """Request model for mutating configuration."""
     params: dict[str, Any]
+
+
+class MaskPushRequest(BaseModel):
+    """M4: sibling mask fan-out."""
+    server_name: str
+    tool_name: str
+    masked: bool
+    fanout: bool = False
 
 
 class UserCreateRequest(BaseModel):
@@ -480,6 +542,19 @@ class ManagementServer:
                 "runtime": runtime_results,
             }
 
+        @self.app.post("/api/internal/mask-push")
+        async def internal_mask_push(
+            request: MaskPushRequest,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """M4: receive a fan-out mask push from a sibling node. Applies
+            LOCALLY only (fanout=False) — no re-propagation, no loop."""
+            result = await _push_runtime_mask(
+                request.server_name, request.tool_name, request.masked,
+                fanout=False)
+            return {"node": os.environ.get("MCP_NODE_NAME", "unknown"),
+                    **result}
+
         @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/disable")
         async def disable_tool_endpoint(
             server_name: str,
@@ -735,6 +810,15 @@ class ManagementServer:
             from tools.shared.atomic_io import atomic_write_json
 
             atomic_write_json(config_path, config)
+
+            # M4: mirror to the shared state — every node adopts at boot
+            import os as _os
+            if _os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+                try:
+                    from tools.shared import cluster
+                    cluster.mirror_auth(tool_name, request.api_key)
+                except Exception as e:
+                    logger.warning(f"[M4] auth mirror failed for {tool_name}: {e}")
 
             return {"success": True}
 

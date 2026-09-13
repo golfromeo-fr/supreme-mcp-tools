@@ -26,6 +26,18 @@ _root_env = Path(__file__).resolve().parent / ".env"
 if _root_env.exists():
     load_dotenv(_root_env)
 
+# M4: adopt cluster env/auth overrides BEFORE tool discovery — in db mode
+# the shared state is authoritative for centrally-mutated values (best-
+# effort: if the state backend is unreachable, local values are used).
+if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+    try:
+        from launcher.env_manager import adopt_cluster_overrides
+        _adopted = adopt_cluster_overrides()
+        if any(_adopted.values()):
+            print(f"[M4] adopted cluster overrides: {_adopted}", flush=True)
+    except Exception as _e:
+        print(f"[M4] cluster override adoption failed: {_e}", flush=True)
+
 from launcher import (
     Config,
     PortManager,
@@ -633,7 +645,23 @@ async def start_management_api_server(
             host=DEFAULT_HOST,
             api_key=management_api_key,
         )
-        
+
+        # M4: register this node in the cluster registry (runtime mask
+        # fan-out targets). No-op outside db mode / without node identity.
+        if (os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db"
+                and os.environ.get("MCP_NODE_NAME")
+                and os.environ.get("MCP_NODE_CENTRAL_URL")):
+            try:
+                from tools.shared import cluster
+                cluster.register_node(
+                    os.environ["MCP_NODE_NAME"],
+                    os.environ["MCP_NODE_CENTRAL_URL"])
+                logging.info(
+                    f"[M4] node '{os.environ['MCP_NODE_NAME']}' registered "
+                    "in the cluster registry")
+            except Exception as e:
+                logging.warning(f"[M4] node registration failed: {e}")
+
         logging.info(f"Starting management API server on port {port}")
         
         # Start management server
