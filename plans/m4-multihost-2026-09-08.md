@@ -1,9 +1,11 @@
 # M4 — Multi-host design (2026-09-08)
 
-> STATUS: H1 + H2(masks/inventory) BUILT on `feature/m4-multihost`
-> (2026-09-10). See "Build status" at the bottom. Builds on E3
-> (identity/multi-user) and the 12-surface inventory
-> (`plans/e3-m1-identity-spike-2026-09-07.md`).
+> STATUS: M4 COMPLETE on `feature/m4-multihost` (2026-09-13) — H1, H2,
+> H2b (mirror + central mutation + boot adoption), H4, node registry +
+> runtime mask fan-out, artifact durability. All live-verified on the
+> two-node test cluster; a `work` pod env runs as daily driver
+> (`startcluster work`). See "Build status" at the bottom and
+> `plans/post-m4-roadmap-2026-09-13.md` for what comes next.
 > Goal: run **N launcher nodes** serving the same tools/data behind a load
 > balancer, with a single consistent identity/config plane.
 
@@ -248,3 +250,28 @@ env/auth stays deferred until a real second node demands it.
 - Writes are last-writer-wins per document.
 - Only ONE node may run the inventory sync until discovery reads through a
   mask-immune surface (union merge already bounds the damage).
+
+
+### Update 2026-09-13 — cluster runtime completion (5052707)
+
+- **Node registry**: nodes register in `cluster_nodes` at central-API
+  start (MCP_NODE_NAME/MCP_NODE_CENTRAL_URL). GOTCHA: registration must
+  live in launchmcp's `start_management_api_server` — ManagementServer
+  .start() is never called by the launcher.
+- **Runtime mask fan-out**: toggles fan out to registered siblings via
+  POST /api/internal/mask-push (local-only apply). Live proof: disable via
+  node1 → node2's tools/list converged in seconds.
+- **Central env/auth mutation**: mutations mirror to env_overrides /
+  auth_overrides docs; ALL nodes adopt at boot (os.environ before tool
+  imports; config.json before discovery). GOTCHA found+fixed: default
+  tools dir was doubled (/app/tools/tools) — cluster.py lives at
+  tools/shared/, parents[1] is already tools/. Live proof: rotated
+  convertermcp key adopted by node2 on restart and enforced.
+- **.env read-only mounts**: persist failures are non-fatal in db mode
+  (shared doc authoritative; adoption re-applies).
+- **H3 (work env)**: artifacts on a declared named volume.
+- **startcluster**: two ISOLATED environments — `work` (pod daily driver,
+  canonical ports, host identity/data adopted) and `test` (multi-host
+  bench). Suite note: the e35 suite manages identity via the host
+  users.json → it tests whichever environment holds the canonical ports
+  (see post-M4 roadmap Phase A for the env-aware suite fix).
