@@ -68,9 +68,22 @@ def _parse_vector(text: Any) -> list[float]:
         return []
 
 
+_IDENTIFIER_SAFE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
 def _s(name: str) -> str:
-    """Sanitize collection name for use as SQL identifier (handles hyphens, dots)."""
-    return name.replace("-", "_").replace(".", "_").replace("/", "_")
+    """Sanitize a collection name for use as an SQL identifier.
+
+    Identifiers cannot be parameterized, so replacement alone is not
+    enough: anything that would not be a bareword after separator
+    normalization raises instead of reaching the SQL text.
+    """
+    cleaned = name.replace("-", "_").replace(".", "_").replace("/", "_")
+    if not cleaned or not _IDENTIFIER_SAFE.match(cleaned):
+        raise ValueError(
+            f"invalid collection name {name!r}: after -/._ normalization "
+            "identifiers may contain only letters, digits, underscores")
+    return cleaned
 
 
 def _rrf_fuse(dense_hits: list[ScoredPoint], sparse_hits: list[ScoredPoint],

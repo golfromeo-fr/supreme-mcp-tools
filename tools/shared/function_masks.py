@@ -22,9 +22,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Same file the launcher (launcher/tools_config.py) and mcp_ui
-# (mcp_ui/components/tool_settings.py) write. Collapsing these three
-# constants onto one is tracked as design-pass D2 follow-up.
+# Canonical path (launcher/tools_config.py owns the constant and ALL
+# writes; the mcp_ui duplicate was removed when tool_settings delegated).
+# This module keeps its own copy BY LAYERING: it loads inside tool
+# processes at import time and must not import the launcher.
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "supreme-mcp-tools" / "tools_config.json"
 
 

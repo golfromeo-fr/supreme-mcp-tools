@@ -150,3 +150,34 @@ def test_register_node_survives_concurrent_writer(db_backend, monkeypatch):
     doc = state_docs.load_doc(cluster.DOC_NODES)
     assert doc["node1"]["central_url"] == "http://node1:8200"
     assert doc["ghost"]["central_url"] == "http://ghost:8200"
+
+
+def test_unreachable_marking_and_recovery(db_backend):
+    """Failed fan-out peers drop out of sibling_nodes until re-registered."""
+    cluster.register_node("n1", "http://n1:8200")
+    cluster.register_node("n2", "http://n2:8200")
+    assert cluster.sibling_nodes("n1") == {"n2": "http://n2:8200"}
+
+    assert cluster.mark_unreachable("n2")
+    assert cluster.sibling_nodes("n1") == {}  # excluded from fan-out
+    # but still visible when asked (debug/ops)
+    assert cluster.sibling_nodes("n1", include_unreachable=True) == \
+        {"n2": "http://n2:8200"}
+
+    # n2 boots again → re-registration clears the mark
+    cluster.register_node("n2", "http://n2:8200")
+    assert cluster.sibling_nodes("n1") == {"n2": "http://n2:8200"}
+
+
+def test_mark_unreachable_unknown_node_is_noop(db_backend):
+    assert cluster.mark_unreachable("ghost") is False
+
+
+def test_register_node_clears_stale_mark(db_backend):
+    cluster.register_node("n1", "http://n1:8200")
+    cluster.mark_unreachable("n1")
+    doc = state_docs.load_doc(cluster.DOC_NODES)
+    assert "unreachable_since" in doc["n1"]
+    cluster.register_node("n1", "http://n1:8200")
+    doc = state_docs.load_doc(cluster.DOC_NODES)
+    assert "unreachable_since" not in doc["n1"]

@@ -14,7 +14,6 @@ from ..logging_config import get_logger
 logger = get_logger(__name__)
 
 # Config file location
-TOOLS_CONFIG_FILE = Path.home() / ".config" / "supreme-mcp-tools" / "tools_config.json"
 
 REPO_TOOLS_DIR = Path(__file__).resolve().parent.parent.parent / "tools"
 

@@ -80,20 +80,49 @@ def _update_doc(name: str, mutate) -> bool:
 # ---------------------------------------------------------------------------
 
 def register_node(name: str, central_url: str) -> bool:
-    """Add/update this node in the cluster registry (idempotent)."""
+    """Add/update this node in the cluster registry (idempotent). Boot-time
+    registration also CLEARS any unreachable mark — a node that comes back
+    rejoins the fan-out set without manual cleanup."""
     def _mutate(doc: dict) -> bool:
-        doc[name] = {"central_url": central_url, "registered_at": _now()}
+        entry = doc.get(name) if isinstance(doc.get(name), dict) else {}
+        entry.update({"central_url": central_url,
+                      "registered_at": _now()})
+        entry.pop("unreachable_since", None)
+        doc[name] = entry
         return True
     return _update_doc(DOC_NODES, _mutate)
 
 
-def sibling_nodes(exclude_name: str | None = None) -> dict[str, str]:
-    """{node_name: central_url} for every OTHER registered node."""
+def sibling_nodes(exclude_name: str | None = None,
+                  include_unreachable: bool = False) -> dict[str, str]:
+    """{node_name: central_url} for every OTHER registered node. Nodes
+    marked unreachable (fan-out failures) are excluded unless asked —
+    they rejoin via their next boot registration."""
     from tools.shared import state_docs
 
     doc = state_docs.load_doc(DOC_NODES) or {}
-    return {n: e["central_url"] for n, e in doc.items()
-            if n != exclude_name and isinstance(e, dict) and e.get("central_url")}
+    out = {}
+    for n, e in doc.items():
+        if n == exclude_name or not isinstance(e, dict):
+            continue
+        if not e.get("central_url"):
+            continue
+        if not include_unreachable and e.get("unreachable_since"):
+            continue
+        out[n] = e["central_url"]
+    return out
+
+
+def mark_unreachable(name: str) -> bool:
+    """Stamp first-failure time on a node (kept in the registry for
+    visibility; excluded from fan-out until it re-registers)."""
+    def _mutate(doc: dict) -> bool:
+        entry = doc.get(name)
+        if not isinstance(entry, dict):
+            return False  # unknown/gone — nothing to mark
+        entry.setdefault("unreachable_since", _now())
+        return True
+    return _update_doc(DOC_NODES, _mutate)
 
 
 # ---------------------------------------------------------------------------

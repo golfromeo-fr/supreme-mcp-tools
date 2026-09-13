@@ -101,10 +101,18 @@ def _schedule_mask_fanout(server_name: str, tool_name: str, masked: bool) -> Non
                         (applied if r.status_code == 200 else failed).append(peer)
                     except Exception:
                         failed.append(peer)
+            # M4: failed peers are marked unreachable and drop out of
+            # future fan-outs until their next boot re-registers them.
+            for peer in failed:
+                try:
+                    cluster.mark_unreachable(peer)
+                except Exception:
+                    pass
             if applied or failed:
                 logging.getLogger(__name__).info(
                     f"[M4] mask fan-out {tool_name}({'masked' if masked else 'enabled'}) "
-                    f"-> applied: {applied or '[]'} failed: {failed or '[]'}")
+                    f"-> applied: {applied or '[]'} failed: {failed or '[]'}"
+                    + (" (marked unreachable)" if failed else ""))
         except Exception as e:
             logging.getLogger(__name__).warning(
                 f"[M4] mask fan-out crashed before reaching any sibling "
