@@ -34,15 +34,15 @@ def masked_tools(server_name: str, config_path: Path | None = None) -> list[str]
     M4/H2: in db mode (MCP_STATE_BACKEND=db, no explicit config_path) the
     masks come from the shared state doc — cluster-wide masks read fresh on
     every tool import/boot."""
-    if config_path is None and \
-            os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+    if config_path is None:
         from tools.shared import state_docs
 
-        doc = state_docs.load_doc("tools_config")
-        if doc is not None:
-            disabled = doc.get("disabled_tools", {}).get(server_name, [])
-            return [name for name in disabled if isinstance(name, str) and name]
-        # None = no row yet OR backend unavailable → file path below
+        if state_docs.is_db_mode():
+            doc = state_docs.load_doc("tools_config")
+            if doc is not None:
+                disabled = doc.get("disabled_tools", {}).get(server_name, [])
+                return [name for name in disabled if isinstance(name, str) and name]
+            # None = no row yet OR backend unavailable → file path below
 
     path = Path(
         config_path

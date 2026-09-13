@@ -27,7 +27,7 @@ from .tools_config import (
     enable_tool,
     disable_tool,
 )
-from tools.shared import users_store
+from tools.shared import cluster, users_store
 from .env_manager import (
     get_env_values,
     get_all_env_values,
@@ -66,49 +66,60 @@ async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool,
     return {"runtime_applied": result["applied"], "runtime_note": result["reason"]}
 
 
+# Strong references to in-flight background tasks — the event loop holds
+# only weak ones, so an unreferenced task can be garbage-collected mid-flight.
+_mask_fanout_tasks: set = set()
+
+
 def _schedule_mask_fanout(server_name: str, tool_name: str, masked: bool) -> None:
     """Fire-and-forget fan-out to sibling cluster nodes (never blocks the
     API response; failures only log — boot-time adoption converges)."""
-    import os
-
-    if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() != "db":
+    if not cluster.is_db_mode():
         return
     node_name = os.environ.get("MCP_NODE_NAME")
     if not node_name:
         return  # single-node / mono deployment
 
-    import asyncio
-
     async def _fanout():
-        import httpx
+        try:
+            import httpx
 
-        from tools.shared import cluster
-
-        siblings = cluster.sibling_nodes(node_name)
-        if not siblings:
-            return
-        key = os.environ.get("MCP_MANAGEMENT_API_KEY")
-        headers = {"Authorization": f"Bearer {key}"} if key else {}
-        body = {"server_name": server_name, "tool_name": tool_name,
-                "masked": masked, "fanout": True}
-        applied, failed = [], []
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for peer, url in siblings.items():
-                try:
-                    r = await client.post(f"{url.rstrip('/')}/api/internal/mask-push",
-                                          json=body, headers=headers)
-                    (applied if r.status_code == 200 else failed).append(peer)
-                except Exception:
-                    failed.append(peer)
-        if applied or failed:
-            logging.getLogger(__name__).info(
-                f"[M4] mask fan-out {tool_name}({'masked' if masked else 'enabled'}) "
-                f"-> applied: {applied or '[]'} failed: {failed or '[]'}")
+            siblings = cluster.sibling_nodes(node_name)
+            if not siblings:
+                return
+            key = os.environ.get("MCP_MANAGEMENT_API_KEY")
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            body = {"server_name": server_name, "tool_name": tool_name,
+                    "masked": masked, "fanout": True}
+            applied, failed = [], []
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for peer, url in siblings.items():
+                    try:
+                        r = await client.post(
+                            f"{url.rstrip('/')}/api/internal/mask-push",
+                            json=body, headers=headers)
+                        (applied if r.status_code == 200 else failed).append(peer)
+                    except Exception:
+                        failed.append(peer)
+            if applied or failed:
+                logging.getLogger(__name__).info(
+                    f"[M4] mask fan-out {tool_name}({'masked' if masked else 'enabled'}) "
+                    f"-> applied: {applied or '[]'} failed: {failed or '[]'}")
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"[M4] mask fan-out crashed before reaching any sibling "
+                f"(they keep their previous masks until boot adoption): {e}")
 
     try:
-        asyncio.get_running_loop().create_task(_fanout())
+        task = asyncio.get_running_loop().create_task(_fanout())
     except RuntimeError:
-        pass
+        # Only reachable from a sync caller outside the event loop — say so
+        # instead of silently dropping the fan-out.
+        logging.getLogger(__name__).warning(
+            "[M4] mask fan-out skipped: no running event loop")
+        return
+    _mask_fanout_tasks.add(task)
+    task.add_done_callback(_mask_fanout_tasks.discard)
 
 
 # Request/Response Models
@@ -812,10 +823,8 @@ class ManagementServer:
             atomic_write_json(config_path, config)
 
             # M4: mirror to the shared state — every node adopts at boot
-            import os as _os
-            if _os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+            if cluster.is_db_mode():
                 try:
-                    from tools.shared import cluster
                     cluster.mirror_auth(tool_name, request.api_key)
                 except Exception as e:
                     logger.warning(f"[M4] auth mirror failed for {tool_name}: {e}")

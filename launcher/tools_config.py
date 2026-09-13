@@ -28,10 +28,11 @@ def _state_backend_active(config_path: Path | None) -> bool:
     """M4/H2: MCP_STATE_BACKEND=db routes the tools_config document to the
     shared SQL backend (cluster-wide masks + inventory). Explicit
     config_path arguments always mean "this file" (tests, overrides)."""
-    return (
-        config_path is None
-        and os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db"
-    )
+    if config_path is not None:
+        return False
+    from tools.shared import state_docs
+
+    return state_docs.is_db_mode()
 
 
 def load_tools_config(config_path: Path | None = None) -> dict:

@@ -22,7 +22,8 @@ class _FakeCursor:
         sql = self._state["last_sql"]
         if sql.startswith("SELECT data"):
             name = self._state.get("last_name")
-            return (self._state["rows"][name],) if name in self._state["rows"] else None
+            return (self._state["rows"][name]
+                    if name in self._state["rows"] else None)
         return None
 
 
@@ -32,9 +33,18 @@ class _FakeConn:
 
     def execute(self, sql, params=()):
         self.state["last_sql"] = sql
+        rows = self.state["rows"]
         if sql.startswith("INSERT INTO mcp_state_docs"):
-            (name, data, _ts) = params
-            self.state["rows"][name] = data
+            (name, data, ts) = params
+            # plain CAS insert has no ON CONFLICT — a duplicate name is the
+            # create race and must fail like a real unique violation
+            if "ON CONFLICT" not in sql and name in rows:
+                raise RuntimeError("UNIQUE constraint failed: mcp_state_docs.name")
+            rows[name] = (data, ts)
+        elif sql.startswith("UPDATE mcp_state_docs"):
+            (data, ts, name, expected) = params
+            if name in rows and rows[name][1] == expected:
+                rows[name] = (data, ts)
         if sql.startswith("SELECT data"):
             self.state["last_name"] = params[0]
         return _FakeCursor(self.state, params)
@@ -110,3 +120,33 @@ def test_json_mode_is_noop(monkeypatch):
     assert cluster.register_node("x", "http://x") is False
     assert cluster.sibling_nodes("x") == {}
     assert cluster.mirror_env("V", "v") is False
+
+
+def test_is_db_mode_gate(db_backend, monkeypatch):
+    assert cluster.is_db_mode() is True
+    monkeypatch.setenv("MCP_STATE_BACKEND", "json")
+    assert cluster.is_db_mode() is False
+
+
+def test_register_node_survives_concurrent_writer(db_backend, monkeypatch):
+    """A sibling registering between our read and write must not be
+    dropped: the CAS retry re-applies our key on the winner's copy."""
+    real_cas = state_docs.save_doc_cas
+    calls = {"n": 0}
+
+    def racy_cas(name, doc, version):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # concurrent winner: registers 'ghost' against the same version
+            assert real_cas(name, {"ghost": {
+                "central_url": "http://ghost:8200",
+                "registered_at": "2026-09-13T00:00:00+00:00"}}, version)
+            return False  # our write loses the race
+        return real_cas(name, doc, version)
+
+    monkeypatch.setattr(state_docs, "save_doc_cas", racy_cas)
+    assert cluster.register_node("node1", "http://node1:8200")
+    assert calls["n"] == 2  # one lost race, one winning retry
+    doc = state_docs.load_doc(cluster.DOC_NODES)
+    assert doc["node1"]["central_url"] == "http://node1:8200"
+    assert doc["ghost"]["central_url"] == "http://ghost:8200"

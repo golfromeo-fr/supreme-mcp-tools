@@ -12,13 +12,16 @@ Three documents in the shared backend (state_docs, db mode):
                    boot into the node's local tools/<name>/config.json
                    (before discovery, so verifiers see the new key).
 
-All writes are last-writer-wins; reads are fresh. In json mode every
-helper is a no-op (single-node behavior unchanged).
+Writes go through compare-and-swap on the doc's updated_at stamp with a
+bounded retry (a lost race re-applies on the winner's copy); reads are
+fresh. In json mode every helper is a no-op (single-node behavior
+unchanged).
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -33,17 +36,43 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
 
-def _update_doc(name: str, mutate) -> bool:
-    """Read-modify-write one state doc; False = json mode/unavailable."""
+def is_db_mode() -> bool:
+    """True when the shared db state plane is selected. Delegates to
+    state_docs so the MCP_STATE_BACKEND gate lives in exactly one place."""
     from tools.shared import state_docs
 
-    doc = state_docs.load_doc(name)
-    if doc is None:
-        doc = {}
-    result = mutate(doc)
-    if result is False:
+    return state_docs.is_db_mode()
+
+
+_CAS_ATTEMPTS = 5
+_CAS_RETRY_PAUSE_S = 0.05
+
+
+def _update_doc(name: str, mutate) -> bool:
+    """Read-mutate-write one state doc under optimistic concurrency: the
+    write is a compare-and-swap on the doc's updated_at stamp and a lost
+    race retries on the winner's fresh copy (bounded — two nodes registering
+    at once both survive instead of one being silently dropped). False =
+    json mode/unavailable, or the mutate hook declined."""
+    from tools.shared import state_docs
+
+    if not state_docs.is_db_mode():
         return False
-    return state_docs.save_doc(name, doc)
+    for attempt in range(_CAS_ATTEMPTS):
+        doc, version = state_docs.load_doc_versioned(name)
+        if doc is None:
+            doc = {}
+        result = mutate(doc)
+        if result is False:
+            return False
+        if state_docs.save_doc_cas(name, doc, version):
+            return True
+        if attempt + 1 < _CAS_ATTEMPTS:
+            time.sleep(_CAS_RETRY_PAUSE_S)
+    logger.warning(
+        f"[M4] state doc '{name}' write lost after {_CAS_ATTEMPTS} "
+        "concurrent-write attempts - caller falls back to local")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +124,7 @@ def adopt_env_overrides(env: dict[str, str] | None = None) -> list[str]:
     from tools.shared import state_docs
 
     doc = state_docs.load_doc(DOC_ENV)
-    target = env if env is not None else __import__("os").environ
+    target = env if env is not None else os.environ
     applied = []
     for var, value in (doc or {}).items():
         if target.get(var) != value:
@@ -113,6 +142,7 @@ def adopt_auth_overrides(tools_dir: str | Path | None = None) -> list[str]:
     tools updated. Container note: writes to the container layer — the
     shared doc stays authoritative and is re-applied every boot."""
     from tools.shared import state_docs
+    from tools.shared.atomic_io import atomic_write_text
 
     doc = state_docs.load_doc(DOC_AUTH)
     logger.debug(f"[M4] auth adoption: doc keys={sorted((doc or {}).keys())}")
@@ -133,7 +163,10 @@ def adopt_auth_overrides(tools_dir: str | Path | None = None) -> list[str]:
             if config.get("auth", {}).get("api_key") == auth.get("api_key"):
                 continue
             config.setdefault("auth", {})["api_key"] = auth["api_key"]
-            cfg_path.write_text(json.dumps(config, indent=2) + "\n")
+            # flock+tmp+replace: config.json has several concurrent writers
+            # (launcher, central API, mcp_ui) — a plain truncate-write can
+            # corrupt it mid-crash (see tools/shared/atomic_io.py).
+            atomic_write_text(cfg_path, json.dumps(config, indent=2) + "\n")
             updated.append(tool)
             logger.warning(f"[M4] adopted cluster auth override for '{tool}'")
         except Exception as e:

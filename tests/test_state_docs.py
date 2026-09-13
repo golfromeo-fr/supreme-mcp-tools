@@ -29,7 +29,8 @@ class _FakeCursor:
         sql = self._state["last_sql"]
         if sql.startswith("SELECT data"):
             name = self._params[0]
-            return (self._state["rows"][name],) if name in self._state["rows"] else None
+            return (self._state["rows"][name]
+                    if name in self._state["rows"] else None)
         return None
 
 
@@ -40,9 +41,18 @@ class _FakeConn:
     def execute(self, sql, params=()):
         self.state["last_sql"] = sql
         self.state["statements"].append((sql, params))
+        rows = self.state["rows"]
         if sql.startswith("INSERT INTO mcp_state_docs"):
-            (name, data, _ts) = params
-            self.state["rows"][name] = data
+            (name, data, ts) = params
+            # plain CAS insert has no ON CONFLICT — a duplicate name is the
+            # create race and must fail like a real unique violation
+            if "ON CONFLICT" not in sql and name in rows:
+                raise RuntimeError("UNIQUE constraint failed: mcp_state_docs.name")
+            rows[name] = (data, ts)
+        elif sql.startswith("UPDATE mcp_state_docs"):
+            (data, ts, name, expected) = params
+            if name in rows and rows[name][1] == expected:
+                rows[name] = (data, ts)
         return _FakeCursor(self.state, params)
 
 
@@ -74,6 +84,37 @@ def test_round_trip(db_backend):
 
 def test_missing_row_returns_none(db_backend):
     assert state_docs.load_doc("never_saved") is None
+
+
+def test_versioned_round_trip_and_cas(db_backend):
+    doc, version = state_docs.load_doc_versioned("fresh")
+    assert doc is None and version is None  # absent row
+    assert state_docs.save_doc_cas("fresh", {"a": 1}, None)  # create
+    doc, version = state_docs.load_doc_versioned("fresh")
+    assert doc == {"a": 1} and version
+    # stale stamp loses the race; the row keeps the winner's payload
+    stale = "1970-01-01T00:00:00+00:00"
+    assert state_docs.save_doc_cas("fresh", {"b": 2}, stale) is False
+    assert state_docs.load_doc_versioned("fresh")[0] == {"a": 1}
+    # the current stamp wins
+    assert state_docs.save_doc_cas("fresh", {"b": 2}, version)
+    assert state_docs.load_doc_versioned("fresh")[0] == {"b": 2}
+
+
+def test_save_doc_cas_create_race(db_backend):
+    state_docs.save_doc("taken", {"x": 1})
+    # the row appeared after our read → create-insert conflicts → False,
+    # and the existing row is untouched
+    assert state_docs.save_doc_cas("taken", {"y": 2}, None) is False
+    assert state_docs.load_doc_versioned("taken")[0] == {"x": 1}
+
+
+def test_is_db_mode_gate(db_backend, monkeypatch):
+    assert state_docs.is_db_mode() is True
+    monkeypatch.setenv("MCP_STATE_BACKEND", "JSON ")  # normalization applies
+    assert state_docs.is_db_mode() is False
+    monkeypatch.setenv("MCP_STATE_BACKEND", " DB ")
+    assert state_docs.is_db_mode() is True
 
 
 def test_backend_unavailable_returns_none_false(monkeypatch, tmp_path):

@@ -367,9 +367,9 @@ def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
     logger.info(f"Set env var {var_name} (persist={persist})")
 
     # M4: mirror to the shared state — every node adopts at boot
-    if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+    from tools.shared import cluster
+    if cluster.is_db_mode():
         try:
-            from tools.shared import cluster
             cluster.mirror_env(var_name, value)
         except Exception as e:
             logger.warning(f"[M4] env mirror failed for {var_name}: {e}")
@@ -381,7 +381,7 @@ def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
         except OSError as e:
             # containers mount .env read-only — in db mode the shared doc
             # is authoritative and boot adoption re-applies the value
-            if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+            if cluster.is_db_mode():
                 logger.warning(
                     f"[M4] .env not writable ({e}); shared state doc is "
                     f"authoritative for {var_name} — adopted at next boot")
@@ -406,9 +406,9 @@ def delete_env_value(var_name: str, persist: bool = True) -> None:
         logger.info(f"Removed env var {var_name}")
 
     # M4: mirror the deletion to the shared state
-    if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+    from tools.shared import cluster
+    if cluster.is_db_mode():
         try:
-            from tools.shared import cluster
             cluster.mirror_env(var_name, None)
         except Exception as e:
             logger.warning(f"[M4] env mirror failed for {var_name}: {e}")
@@ -418,7 +418,7 @@ def delete_env_value(var_name: str, persist: bool = True) -> None:
         try:
             _comment_out_env_line(var_name, env_path)
         except OSError as e:
-            if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() == "db":
+            if cluster.is_db_mode():
                 logger.warning(
                     f"[M4] .env not writable ({e}); shared state doc is "
                     f"authoritative for {var_name} deletion")
@@ -603,9 +603,9 @@ def adopt_cluster_overrides() -> dict[str, list[str]]:
     central API. Called by the launcher BEFORE tool discovery so verifiers
     and tool imports see the cluster-authoritative values. Best-effort;
     json mode is a no-op."""
-    if os.environ.get("MCP_STATE_BACKEND", "json").strip().lower() != "db":
-        return {"env": [], "auth": []}
     from tools.shared import cluster
+    if not cluster.is_db_mode():
+        return {"env": [], "auth": []}
 
     return cluster.adopt_all()
 
