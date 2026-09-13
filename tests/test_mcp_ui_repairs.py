@@ -114,3 +114,20 @@ def test_save_tools_config_atomic(monkeypatch, tmp_path):
     # A second save over a complete file stays consistent (read-modify-write base)
     tool_settings._save_tools_config({"disabled_tools": {}, "tools": {}, "version": 1})
     assert json.loads((tmp_path / "tools_config.json").read_text())["disabled_tools"] == {}
+
+
+# === M4: deleteMemory must delete SQL metadata BEFORE the vector point ===
+
+def test_delete_memory_store_order():
+    """Deleting SQL metadata first keeps failures recoverable: a mid-delete
+    crash leaves a VISIBLE memory a retry can finish. The old order
+    (vector first) orphaned invisible SQL rows (22 found live, 2026-09-13).
+    """
+    source = (Path(__file__).resolve().parents[1] / "tools/memorymcp/memory_tools.py").read_text()
+    block = source[source.index("async def deleteMemory"):]
+    block = block[:block.index("@mcp.tool()", block.index("Deleted memory"))]
+    sql_pos = block.index("sql_store.delete_memory")
+    vec_pos = block.index("vector_store.delete(")
+    assert sql_pos < vec_pos
+    # and the SQL skip path is loud, not silent
+    assert "SQL store unavailable" in block

@@ -53,14 +53,19 @@ proven by:
 
 ## Technical debt noticed during M4 (small, opportunistic)
 
-- **memorymcp SQL/vector orphan rows (FOUND 2026-09-13, live)**: after the
-  e35 suite's cleanup sweeps deleted all its vector points, 22 SQL rows
-  remain in `memories` with no vector point (SQL 180 vs vec 158; ~25 of
-  them e35* debris). deleteMemory apparently can leave the SQL row behind
-  (partial delete across the two stores). Invisible to list/query (both
-  vector-driven) but inflates getMemoryMetrics totals. Dig the delete path
-  in memory_tools/turso_vector; consider a reconcile command (SQL rows with
-  no vector point -> delete).
+- **memorymcp SQL/vector orphan rows (FOUND + FIXED 2026-09-13)**: root
+  cause = deleteMemory deleted the VECTOR point first and skipped/gave up
+  on the SQL row (is_available flips / mid-path exceptions) — the orphan
+  was invisible so nothing ever retried it. Fix: delete order inverted
+  (SQL metadata first, vector point last) so mid-delete failures leave a
+  VISIBLE memory a retry can finish; the skip path logs loudly. The 25
+  live orphans were reconciled via the container's own libsql connection
+  (GOTCHA: raw libsql.connect() defaults autocommit OFF — set
+  conn.autocommit = True or the DELETE silently rolls back). 3 REVERSE
+  orphans remain (vector points without SQL rows, old integration-test
+  debris incl. one possibly-real memory) — visible but metadata-less;
+  left in place pending owner confirmation. Regression test:
+  test_delete_memory_store_order.
 
 - `tools_config.json` had three implementations; the UI now delegates —
   finish collapsing the remaining duplicate readers.
