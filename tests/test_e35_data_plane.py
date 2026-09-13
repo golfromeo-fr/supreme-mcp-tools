@@ -521,6 +521,40 @@ async def main() -> int:
         await mcp_call("memorymcp", admin_key, "deleteMemory",
                        {"memory_id": bob_mem_id})
 
+    # sweep EVERY memory carrying this run's marker — the concurrent
+    # section and crashed earlier runs leave fixtures the per-memory
+    # deletes above never see (the target store is shared with the user).
+    # queryMemory text has no IDs; listMemories returns {id, preview}.
+    swept = 0
+    while True:  # deletions shift positions — rescan until a pass sweeps 0
+        swept_this_pass = 0
+        offset = 0
+        while True:
+            page = await mcp_call("memorymcp", admin_key, "listMemories",
+                                  {"limit": 100, "offset": offset})
+            try:
+                data = json.loads(page)
+            except Exception:
+                print(f"  sweep: listMemories unreadable: {page[:120]}")
+                break
+            memories = data.get("memories", [])
+            for m in memories:
+                preview = m.get("preview") or ""
+                # suite-owned markers: this run's unique ID + the standing
+                # prefixes (covers debris from crashed earlier runs)
+                if RUN_ID in preview or preview.startswith(("e35run", "e35test")):
+                    await mcp_call("memorymcp", admin_key, "deleteMemory",
+                                   {"memory_id": m["id"]})
+                    swept += 1
+                    swept_this_pass += 1
+            nxt = data.get("next_offset")
+            if nxt is None or not memories:
+                break
+            offset = nxt
+        if swept_this_pass == 0:
+            break
+    print(f"  swept {swept} run-tagged memories")
+
     admin.cleanup()
     print("test users removed via the central API, test memories deleted")
 

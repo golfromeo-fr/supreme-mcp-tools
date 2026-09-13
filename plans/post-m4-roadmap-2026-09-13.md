@@ -53,6 +53,15 @@ proven by:
 
 ## Technical debt noticed during M4 (small, opportunistic)
 
+- **memorymcp SQL/vector orphan rows (FOUND 2026-09-13, live)**: after the
+  e35 suite's cleanup sweeps deleted all its vector points, 22 SQL rows
+  remain in `memories` with no vector point (SQL 180 vs vec 158; ~25 of
+  them e35* debris). deleteMemory apparently can leave the SQL row behind
+  (partial delete across the two stores). Invisible to list/query (both
+  vector-driven) but inflates getMemoryMetrics totals. Dig the delete path
+  in memory_tools/turso_vector; consider a reconcile command (SQL rows with
+  no vector point -> delete).
+
 - `tools_config.json` had three implementations; the UI now delegates —
   finish collapsing the remaining duplicate readers.
 - `cluster_nodes` entries never expire (a dead node's entry lingers until
