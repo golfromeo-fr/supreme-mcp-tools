@@ -52,6 +52,10 @@ same interface-swap pattern extends to the other state:
   to the same network backend (keyed by `server`/`name`), replacing the
   JSON files. Runtime pushes (E1) then apply locally AND persist shared —
   masks become cluster-wide automatically.
+  > SHIPPED SCOPE (2026-09-14): masks + inventory live in the shared
+  > `mcp_state_docs` backend; `.env` / per-tool `config.json` stay node-local
+  > with mirror + override docs — that remainder is the documented H2b
+  > deferral (see post-m4 roadmap).
 - `tools` inventory per server: stored centrally from the PRIMARY node's
   (unmasked) discovery, never from per-node masked lists (E3 self-destruct
   lesson generalized: inventory must come from a source that cannot be
