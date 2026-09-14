@@ -118,16 +118,51 @@ def test_save_tools_config_atomic(monkeypatch, tmp_path):
 
 # === M4: deleteMemory must delete SQL metadata BEFORE the vector point ===
 
-def test_delete_memory_store_order():
-    """Deleting SQL metadata first keeps failures recoverable: a mid-delete
-    crash leaves a VISIBLE memory a retry can finish. The old order
-    (vector first) orphaned invisible SQL rows (22 found live, 2026-09-13).
+def _load_memory_tools():
+    """Import tools/memorymcp/memory_tools.py (side-effect import: memory_core
+    initializes backend clients). Skip cleanly when the env can't support it."""
+    tools_mem = Path(__file__).resolve().parents[1] / "tools" / "memorymcp"
+    sys.path.insert(0, str(tools_mem))
+    try:
+        import memory_tools
+        return memory_tools
+    except Exception as e:  # pragma: no cover - depends on local backends
+        pytest.skip(f"memory_tools unavailable in this env: {e}")
+
+
+def test_delete_memory_store_order(monkeypatch):
+    """BEHAVIOR check (was source-string surgery): with recording fakes, the
+    SQL metadata delete must be OBSERVED before the vector point delete.
+    Deleting SQL first keeps failures recoverable: a mid-delete crash leaves
+    a VISIBLE memory a retry can finish. The old order (vector first)
+    orphaned invisible SQL rows (22 found live, 2026-09-13).
     """
-    source = (Path(__file__).resolve().parents[1] / "tools/memorymcp/memory_tools.py").read_text()
-    block = source[source.index("async def deleteMemory"):]
-    block = block[:block.index("@mcp.tool()", block.index("Deleted memory"))]
-    sql_pos = block.index("sql_store.delete_memory")
-    vec_pos = block.index("vector_store.delete(")
-    assert sql_pos < vec_pos
-    # and the SQL skip path is loud, not silent
-    assert "SQL store unavailable" in block
+    import asyncio
+    from types import SimpleNamespace
+
+    mt = _load_memory_tools()
+    calls = []
+
+    class _FakeVector:
+        def retrieve(self, collection, ids, with_payload=False):
+            return [SimpleNamespace(payload={"artifact_key": None})]
+
+        def delete(self, collection, ids=None):
+            calls.append(("vector", ids[0]))
+
+    class _FakeSql:
+        is_available = True
+
+        def delete_memory(self, memory_id):
+            calls.append(("sql", memory_id))
+
+    async def _noop_artifact(key):
+        return None
+
+    monkeypatch.setattr(mt, "vector_store", _FakeVector())
+    monkeypatch.setattr(mt, "sql_store", _FakeSql())
+    monkeypatch.setattr(mt, "_delete_artifact_key", _noop_artifact)
+
+    result = asyncio.run(mt.deleteMemory("order-check-id"))
+    assert result.startswith("Deleted memory")
+    assert calls == [("sql", "order-check-id"), ("vector", "order-check-id")]

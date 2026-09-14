@@ -21,61 +21,15 @@ if str(TOOLS_DIR) not in sys.path:
 from tools.shared import state_docs  # noqa: E402
 
 
-class _FakeCursor:
-    def __init__(self, state, params):
-        self._state, self._params = state, params
-
-    def fetchone(self):
-        sql = self._state["last_sql"]
-        if sql.startswith("SELECT data"):
-            name = self._params[0]
-            return (self._state["rows"][name]
-                    if name in self._state["rows"] else None)
-        return None
-
-
-class _FakeConn:
-    def __init__(self):
-        self.state = {"rows": {}, "last_sql": "", "statements": []}
-
-    def execute(self, sql, params=()):
-        self.state["last_sql"] = sql
-        self.state["statements"].append((sql, params))
-        rows = self.state["rows"]
-        if sql.startswith("INSERT INTO mcp_state_docs"):
-            (name, data, ts) = params
-            # plain CAS insert has no ON CONFLICT — a duplicate name is the
-            # create race and must fail like a real unique violation
-            if "ON CONFLICT" not in sql and name in rows:
-                raise RuntimeError("UNIQUE constraint failed: mcp_state_docs.name")
-            rows[name] = (data, ts)
-        elif sql.startswith("UPDATE mcp_state_docs"):
-            (data, ts, name, expected) = params
-            if name in rows and rows[name][1] == expected:
-                rows[name] = (data, ts)
-        return _FakeCursor(self.state, params)
-
-
-class _FakeSqlStore:
-    is_available = True
-
-    def __init__(self):
-        self._conn = _FakeConn()
-
-
-@pytest.fixture()
-def db_backend(monkeypatch):
-    fake = _FakeSqlStore()
-    monkeypatch.setenv("MCP_STATE_BACKEND", "db")
-    monkeypatch.setattr("tools.shared.sql_store.get_sql_store", lambda: fake)
-    monkeypatch.setattr(state_docs, "_conn_singleton", None)
-    monkeypatch.setattr(state_docs, "_init_done", False)
-    return fake
+# M5: the fake trio + db_backend fixture moved to tests/_fakes/sql_store.py
+# and tests/conftest.py (one canonical definition for all three files).
 
 
 def test_round_trip(db_backend):
-    assert state_docs.save_doc("tools_config", {"disabled_tools": {"simplemcp": ["get_secret"]}})
-    loaded = state_docs.load_doc("tools_config")
+    assert state_docs.save_doc(
+        state_docs.DOC_TOOLS_CONFIG,
+        {"disabled_tools": {"simplemcp": ["get_secret"]}})
+    loaded = state_docs.load_doc(state_docs.DOC_TOOLS_CONFIG)
     assert loaded == {"disabled_tools": {"simplemcp": ["get_secret"]}}
     # second document is independent
     state_docs.save_doc("other", {"a": 1})

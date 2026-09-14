@@ -11,7 +11,7 @@ Handles reading/writing environment variables across all tools:
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -624,7 +624,7 @@ def snapshot_env_auth() -> dict:
 
     The mirror a second node bootstraps from. Secrets are raw (see contract)."""
     snapshot: dict[str, Any] = {
-        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
         "node": os.uname().nodename,
         "env": {},
         "auth": {},
@@ -646,14 +646,14 @@ def save_env_auth_snapshot(snapshot: dict | None = None) -> bool:
     from tools.shared import state_docs
 
     return state_docs.save_doc(
-        "env_auth_snapshot", snapshot or snapshot_env_auth())
+        state_docs.DOC_ENV_AUTH_SNAPSHOT, snapshot or snapshot_env_auth())
 
 
 def load_env_auth_snapshot() -> dict | None:
     """Latest shared snapshot; None = none stored / backend unavailable."""
     from tools.shared import state_docs
 
-    return state_docs.load_doc("env_auth_snapshot")
+    return state_docs.load_doc(state_docs.DOC_ENV_AUTH_SNAPSHOT)
 
 
 def restore_missing_env_vars(snapshot: dict, env_path: Path | None = None,

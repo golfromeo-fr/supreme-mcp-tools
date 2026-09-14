@@ -18,7 +18,18 @@ never a server-startup failure.
 import json
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class MaskRequest:
+    """One mask change crossing the central → runtime/fan-out boundary
+    (M4 data-clump fix: replaces the loose (server_name, tool_name, masked)
+    tuple). Wire formats (fan-out POST body, 81xx API) stay unchanged."""
+    server_name: str
+    tool_name: str
+    masked: bool
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +50,7 @@ def masked_tools(server_name: str, config_path: Path | None = None) -> list[str]
         from tools.shared import state_docs
 
         if state_docs.is_db_mode():
-            doc = state_docs.load_doc("tools_config")
+            doc = state_docs.load_doc(state_docs.DOC_TOOLS_CONFIG)
             if doc is not None:
                 disabled = doc.get("disabled_tools", {}).get(server_name, [])
                 return [name for name in disabled if isinstance(name, str) and name]

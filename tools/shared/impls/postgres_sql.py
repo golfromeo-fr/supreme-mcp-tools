@@ -127,6 +127,24 @@ _SCHEMA_DDL = """
 """
 
 
+class _PgExecResult:
+    """Cursor stand-in over psycopg rows: dict rows (dict_row pool) are
+    normalized to positional tuples in column order — tuple(dict) would
+    yield the KEYS (live-found 2026-09-10)."""
+
+    def __init__(self, rows):
+        self._rows = [
+            tuple(r.values()) if isinstance(r, dict) else tuple(r)
+            for r in rows
+        ]
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
 # ---------------------------------------------------------------------------
 # PostgresSqlStore
 # ---------------------------------------------------------------------------
@@ -204,6 +222,19 @@ class PostgresSqlStore:
                 "pg_trgm extension not available (similarity search will "
                 f"degrade to substring match): {_safe_error(e)}"
             )
+
+    def execute(self, sql: str, params: tuple = ()) -> _PgExecResult:
+        """Dialect adapter for shared callers (state_docs): '?'-placeholders
+        in (translated to psycopg '%s'), pooled connection with explicit
+        commit, cursor-like result out."""
+        if self._pool is None and not self._connect():
+            raise RuntimeError("postgres backend unavailable")
+        pg_sql = sql.replace("?", "%s")
+        with self._pool.connection() as conn:
+            cur = conn.execute(pg_sql, params)
+            rows = cur.fetchall() if cur.description else []
+            conn.commit()
+        return _PgExecResult(rows)
 
     # ------------------------------------------------------------------
     # CRUD

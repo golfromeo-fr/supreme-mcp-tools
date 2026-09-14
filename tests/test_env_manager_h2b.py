@@ -22,51 +22,8 @@ from launcher import env_manager  # noqa: E402
 from tools.shared import state_docs  # noqa: E402
 
 
-class _FakeCursor:
-    def __init__(self, state, params):
-        self._state = state
-
-    def fetchone(self):
-        sql = self._state["last_sql"]
-        if sql.startswith("SELECT data"):
-            name = self._state.get("last_name")
-            # rows already hold the JSON string (as a real TEXT column would)
-            return (self._state["rows"][name],) \
-                if name in self._state["rows"] else None
-        return None
-
-
-class _FakeConn:
-    def __init__(self):
-        self.state = {"rows": {}, "last_sql": "", "last_name": None,
-                      "statements": []}
-
-    def execute(self, sql, params=()):
-        self.state["statements"].append((sql, params))
-        self.state["last_sql"] = sql
-        if sql.startswith("INSERT INTO mcp_state_docs"):
-            (name, data, _ts) = params
-            self.state["rows"][name] = data
-        if sql.startswith("SELECT data"):
-            self.state["last_name"] = params[0]
-        return _FakeCursor(self.state, params)
-
-
-class _FakeSqlStore:
-    is_available = True
-
-    def __init__(self):
-        self._conn = _FakeConn()
-
-
-@pytest.fixture()
-def db_backend(monkeypatch):
-    fake = _FakeSqlStore()
-    monkeypatch.setenv("MCP_STATE_BACKEND", "db")
-    monkeypatch.setattr("tools.shared.sql_store.get_sql_store", lambda: fake)
-    monkeypatch.setattr(state_docs, "_conn_singleton", None)
-    monkeypatch.setattr(state_docs, "_init_done", False)
-    return fake
+# M5: the fake trio + db_backend fixture moved to tests/_fakes/sql_store.py
+# and tests/conftest.py (one canonical definition for all three files).
 
 
 @pytest.fixture()
@@ -137,6 +94,6 @@ def test_snapshot_round_trip_through_db(db_backend, monkeypatch, schema_env):
     from tools.shared import state_docs
 
     snap = env_manager.snapshot_env_auth()
-    assert state_docs.save_doc("env_auth_snapshot", snap)
-    loaded = state_docs.load_doc("env_auth_snapshot")
+    assert state_docs.save_doc(state_docs.DOC_ENV_AUTH_SNAPSHOT, snap)
+    loaded = state_docs.load_doc(state_docs.DOC_ENV_AUTH_SNAPSHOT)
     assert loaded["env"]["BRAVE_API_KEY"] == "brave-secret-raw"

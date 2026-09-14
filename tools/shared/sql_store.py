@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Protocol, Iterator, Iterable, runtime_checkable
+from typing import Any, Protocol, Iterator, Iterable, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +54,33 @@ class SqlStore(Protocol):
     def iter_all(self) -> Iterator[dict]: ...
     def bulk_upsert(self, rows: Iterable[dict]) -> int: ...
 
+    # Raw statement execution (state_docs / cluster helpers): '?'-style
+    # placeholders in, cursor-like result (fetchone/fetchall) out; writes
+    # commit immediately. Impls translate placeholders/transaction dialect.
+    def execute(self, sql: str, params: tuple = ()) -> Any: ...
+
 
 # ---------------------------------------------------------------------------
 # No-op fallback
 # ---------------------------------------------------------------------------
 
+class _EmptyResult:
+    """Cursor stand-in for the no-op store: zero rows."""
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+
 class NullSqlStore:
     """No-op store for when no SQL backend is configured."""
 
     is_available = False
+
+    def execute(self, sql, params=()) -> _EmptyResult:
+        return _EmptyResult()
 
     def upsert_memory(self, memory_id, *a, **kw) -> str:
         return memory_id

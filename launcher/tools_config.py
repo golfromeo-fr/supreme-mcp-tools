@@ -49,7 +49,7 @@ def load_tools_config(config_path: Path | None = None) -> dict:
     if _state_backend_active(config_path):
         from tools.shared import state_docs
 
-        doc = state_docs.load_doc("tools_config")
+        doc = state_docs.load_doc(state_docs.DOC_TOOLS_CONFIG)
         if doc is not None:
             return doc
         # None = no row yet OR backend unavailable → file/default below
@@ -79,7 +79,7 @@ def save_tools_config(config: dict, config_path: Path | None = None) -> None:
     if _state_backend_active(config_path):
         from tools.shared import state_docs
 
-        if state_docs.save_doc("tools_config", config):
+        if state_docs.save_doc(state_docs.DOC_TOOLS_CONFIG, config):
             return
         logger.warning(
             "save_tools_config: state backend unavailable - writing local file"

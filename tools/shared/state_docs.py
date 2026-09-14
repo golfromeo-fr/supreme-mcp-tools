@@ -26,6 +26,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Canonical state-doc names — import these instead of repeating string
+# literals across modules (M3: single grep-able source of truth).
+DOC_TOOLS_CONFIG = "tools_config"
+DOC_ENV_AUTH_SNAPSHOT = "env_auth_snapshot"
+
 def _backend() -> str:
     return os.environ.get("MCP_STATE_BACKEND", "json").strip().lower()
 
@@ -50,64 +55,21 @@ _conn_singleton: object | None = None
 _init_done = False
 
 
-class _TursoExec:
-    """libsql/sqlite: '?' placeholders, autocommit per statement."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=()):
-        return self._conn.execute(sql, params)
-
-
-class _PgExec:
-    """psycopg_pool: '%s' placeholders, borrowed pooled connections with
-    explicit commit. The '?' of the shared call convention is converted
-    here — callers never need to know the dialect."""
-
-    def __init__(self, pool):
-        self._pool = pool
-
-    def execute(self, sql, params=()):
-        pg_sql = sql.replace("?", "%s")
-        with self._pool.connection() as conn:
-            cur = conn.execute(pg_sql, params)
-            rows = cur.fetchall() if cur.description else []
-            conn.commit()
-        # The pool is built with dict_row: rows are dicts keyed by column
-        # name — tuple(dict) would yield the KEYS (live-found 2026-09-10).
-        # Normalize to positional tuples in column order.
-        return _PgResult([
-            tuple(r.values()) if isinstance(r, dict) else tuple(r)
-            for r in rows
-        ])
-
-
-class _PgResult:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def fetchone(self):
-        return self._rows[0] if self._rows else None
-
-    def fetchall(self):
-        return self._rows
-
-
 def shared_exec():
-    """Dialect-agnostic executor over the shared SqlStore, or None to stay
-    on local files. Callers always use '?' placeholders. Writes commit
-    immediately; reads are fresh (no cache)."""
+    """Dialect-agnostic executor over the shared SqlStore — the store itself.
+    Both impls expose ``execute(sql, params)`` taking '?'-placeholders and
+    returning a cursor-like result (fetchone/fetchall); writes commit
+    immediately; reads are fresh (no cache). None = stay on local files."""
     try:
         # sql_store imports the bare ``shared`` package, which needs tools/
         # on sys.path (same fix as users_store._db_conn).
         tools_dir = str(Path(__file__).resolve().parents[1])
         if tools_dir not in sys.path:
             sys.path.insert(0, tools_dir)
-        from tools.shared.sql_store import get_sql_store
+        from tools.shared.sql_store import NullSqlStore, get_sql_store
 
         store = get_sql_store()
-        if type(store).__name__ == "NullSqlStore":
+        if isinstance(store, NullSqlStore):
             logger.warning(
                 "MCP_STATE_BACKEND=db but no SQL backend is configured "
                 "(POSTGRES_* / TURSO_DATABASE_URL) - staying on local files"
@@ -118,13 +80,9 @@ def shared_exec():
             logger.warning(
                 "shared SQL backend unreachable - staying on local files")
             return None
-        pool = getattr(store, "_pool", None)
-        if pool is not None:
-            return _PgExec(pool)
-        conn = getattr(store, "_conn", None)
-        if conn is not None:
-            return _TursoExec(conn)
-        raise RuntimeError("SqlStore impl exposes neither _pool nor _conn")
+        if not callable(getattr(store, "execute", None)):
+            raise RuntimeError("SqlStore impl does not expose execute()")
+        return store
     except Exception as e:
         logger.warning(
             f"shared SQL backend init failed ({type(e).__name__}: {e}) - "
@@ -165,12 +123,18 @@ def backend_active() -> bool:
     return is_db_mode() and _conn() is not None
 
 
+def _ready_conn():
+    """Executor or None — the shared db-mode + initialized-backend gate in
+    ONE place (M2: was a repeating ``if not is_db_mode()`` + ``conn is
+    None`` cascade at the top of every function). Callers keep their own
+    fallback values per the module's fail-open-to-local contract."""
+    return _conn() if is_db_mode() else None
+
+
 def load_doc(name: str) -> dict | None:
     """Named document from the shared backend; None = no row / backend
     unavailable / json mode (caller decides its local fallback)."""
-    if not is_db_mode():
-        return None
-    conn = _conn()
+    conn = _ready_conn()
     if conn is None:
         return None
     try:
@@ -192,9 +156,7 @@ def load_doc(name: str) -> dict | None:
 def save_doc(name: str, doc: dict) -> bool:
     """Store a named document; True = stored centrally, False = backend
     unavailable or json mode (caller should fall back to its local file)."""
-    if not is_db_mode():
-        return False
-    conn = _conn()
+    conn = _ready_conn()
     if conn is None:
         return False
     try:
@@ -217,9 +179,7 @@ def load_doc_versioned(name: str) -> tuple[dict | None, str | None]:
     """``(doc, updated_at)`` for a named document; ``(None, None)`` = no row
     / backend unavailable / json mode. The stamp is the optimistic-lock
     version for ``save_doc_cas``."""
-    if not is_db_mode():
-        return None, None
-    conn = _conn()
+    conn = _ready_conn()
     if conn is None:
         return None, None
     try:
@@ -243,9 +203,7 @@ def save_doc_cas(name: str, doc: dict, expected_updated_at: str | None) -> bool:
     ``expected_updated_at`` (``None`` = the row must not exist yet).
     True = stored; False = a concurrent writer got in first (retry on the
     fresh copy), or json mode / backend unavailable."""
-    if not is_db_mode():
-        return False
-    conn = _conn()
+    conn = _ready_conn()
     if conn is None:
         return False
     payload = json.dumps(doc, ensure_ascii=False)

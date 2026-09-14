@@ -45,6 +45,9 @@ class IdentityAdmin:
                 pass
         self.timeout = timeout
         self._created: list[str] = []
+        # Instance-level (was a class attribute: two IdentityAdmin instances
+        # in one process would share and cross-contaminate the key cache).
+        self._keys: dict[str, str] = {}
         self.shares_host_identity: bool | None = None  # detected on create
 
     # -- low level -------------------------------------------------------
@@ -109,8 +112,6 @@ class IdentityAdmin:
                     rec["mcp_key"] = self._keys.get(username)
                 return rec
         raise RuntimeError(f"user '{username}' not visible via central API")
-
-    _keys: dict[str, str] = {}
 
     def list(self) -> list[dict]:
         r = self._req("GET", "/api/users")

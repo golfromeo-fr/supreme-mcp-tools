@@ -78,6 +78,11 @@ class TursoSqlStore:
         self._ensure_schema()
         logger.info(f"TursoSqlStore initialized (url={url[:30]}...)")
 
+    def execute(self, sql: str, params: tuple = ()):
+        """Dialect adapter for shared callers (state_docs): '?'-placeholders,
+        autocommit per statement (see __init__), libsql cursor out."""
+        return self._conn.execute(sql, params)
+
     def _ensure_schema(self) -> None:
         """
         Run the DDL. libsql_experimental doesn't reliably create triggers via

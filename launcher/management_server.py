@@ -28,6 +28,7 @@ from .tools_config import (
     disable_tool,
 )
 from tools.shared import cluster, users_store
+from tools.shared.function_masks import MaskRequest
 from .env_manager import (
     get_env_values,
     get_all_env_values,
@@ -44,8 +45,7 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
-async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool,
-                             fanout: bool = True) -> dict:
+async def _push_runtime_mask(req: MaskRequest, fanout: bool = True) -> dict:
     """E1: push a just-persisted mask to the RUNNING server (same process —
     the per-tool registry holds its FastMCP instance). File-first already
     happened; a failed push still converges at the tool's next restart.
@@ -56,12 +56,12 @@ async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool,
     from .tool_extensions.registry import get_registry_for_tool
     from tools.shared.function_masks import apply_mask_at_runtime
 
-    registry = await get_registry_for_tool(server_name)
+    registry = await get_registry_for_tool(req.server_name)
     mcp = getattr(registry, "mcp_instance", None) if registry else None
-    result = apply_mask_at_runtime(mcp, server_name, tool_name, masked)
+    result = apply_mask_at_runtime(mcp, req.server_name, req.tool_name, req.masked)
 
     if fanout:
-        _schedule_mask_fanout(server_name, tool_name, masked)
+        _schedule_mask_fanout(req)
 
     return {"runtime_applied": result["applied"], "runtime_note": result["reason"]}
 
@@ -71,7 +71,7 @@ async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool,
 _mask_fanout_tasks: set = set()
 
 
-def _schedule_mask_fanout(server_name: str, tool_name: str, masked: bool) -> None:
+def _schedule_mask_fanout(req: MaskRequest) -> None:
     """Fire-and-forget fan-out to sibling cluster nodes (never blocks the
     API response; failures only log — boot-time adoption converges)."""
     if not cluster.is_db_mode():
@@ -89,8 +89,8 @@ def _schedule_mask_fanout(server_name: str, tool_name: str, masked: bool) -> Non
                 return
             key = os.environ.get("MCP_MANAGEMENT_API_KEY")
             headers = {"Authorization": f"Bearer {key}"} if key else {}
-            body = {"server_name": server_name, "tool_name": tool_name,
-                    "masked": masked, "fanout": True}
+            body = {"server_name": req.server_name, "tool_name": req.tool_name,
+                    "masked": req.masked, "fanout": True}
             applied, failed = [], []
             async with httpx.AsyncClient(timeout=5.0) as client:
                 for peer, url in siblings.items():
@@ -110,7 +110,7 @@ def _schedule_mask_fanout(server_name: str, tool_name: str, masked: bool) -> Non
                     pass
             if applied or failed:
                 logging.getLogger(__name__).info(
-                    f"[M4] mask fan-out {tool_name}({'masked' if masked else 'enabled'}) "
+                    f"[M4] mask fan-out {req.tool_name}({'masked' if req.masked else 'enabled'}) "
                     f"-> applied: {applied or '[]'} failed: {failed or '[]'}"
                     + (" (marked unreachable)" if failed else ""))
         except Exception as e:
@@ -275,6 +275,12 @@ class ManagementServer:
         self.port = port
         self.host = host
         self.api_key = api_key
+        if api_key is None:
+            logger.warning(
+                "MCP_MANAGEMENT_API_KEY is NOT set — the central management "
+                "API on %s:%s runs OPEN (no auth): user/role/env mutation is "
+                "open to ANY caller. Set MCP_MANAGEMENT_API_KEY to require "
+                "auth.", host, port)
         
         self.app = FastAPI(
             title="Supreme MCP Tools Management API",
@@ -560,9 +566,11 @@ class ManagementServer:
             after = set(disabled_list)
             runtime_results = {}
             for tool_name in sorted(after - before):
-                runtime_results[tool_name] = await _push_runtime_mask(server_name, tool_name, True)
+                runtime_results[tool_name] = await _push_runtime_mask(
+                    MaskRequest(server_name, tool_name, True))
             for tool_name in sorted(before - after):
-                runtime_results[tool_name] = await _push_runtime_mask(server_name, tool_name, False)
+                runtime_results[tool_name] = await _push_runtime_mask(
+                    MaskRequest(server_name, tool_name, False))
             return {
                 "server": server_name,
                 "disabled": disabled_list,
@@ -577,7 +585,8 @@ class ManagementServer:
             """M4: receive a fan-out mask push from a sibling node. Applies
             LOCALLY only (fanout=False) — no re-propagation, no loop."""
             result = await _push_runtime_mask(
-                request.server_name, request.tool_name, request.masked,
+                MaskRequest(request.server_name, request.tool_name,
+                            request.masked),
                 fanout=False)
             return {"node": os.environ.get("MCP_NODE_NAME", "unknown"),
                     **result}
@@ -591,7 +600,7 @@ class ManagementServer:
             """Disable a specific tool for a server (persist + push to the
             running server — E1 runtime masks)."""
             disable_tool(tool_name, server_name)
-            runtime = await _push_runtime_mask(server_name, tool_name, True)
+            runtime = await _push_runtime_mask(MaskRequest(server_name, tool_name, True))
             return {"server": server_name, "tool": tool_name, "disabled": True, **runtime}
 
         # === E3/M2: user management (admin; guard hardens in M3) ===
@@ -707,7 +716,7 @@ class ManagementServer:
             """Enable a specific tool for a server (persist + push to the
             running server — E1 runtime masks)."""
             enable_tool(tool_name, server_name)
-            runtime = await _push_runtime_mask(server_name, tool_name, False)
+            runtime = await _push_runtime_mask(MaskRequest(server_name, tool_name, False))
             return {"server": server_name, "tool": tool_name, "disabled": False, **runtime}
 
         # === Environment Variable Management ===
