@@ -210,13 +210,23 @@ test_env() { action="${1:-pg}"; shift || true
   podman rmi -f localhost/${PROJECT}_node1:latest localhost/${PROJECT}_node2:latest 2>/dev/null || true
   echo "[test] starting..."
   if [ "$WITH_DB" = 1 ]; then
-    podman-compose -p "$PROJECT" -f compose-common.yml -f "$TOPO_FILE" up -d db node1 node2
+    podman-compose -p "$PROJECT" -f compose-common.yml -f "$TOPO_FILE" \
+      -f compose-lb.yml -f compose-artifacts.yml up -d db node1 node2 lb minio
   else
-    podman-compose -p "$PROJECT" -f compose-common.yml up -d node1 node2
+    podman-compose -p "$PROJECT" -f compose-common.yml \
+      -f compose-lb.yml -f compose-artifacts.yml up -d node1 node2 lb minio
   fi
   ok=0; wait_http http://localhost:18200/health 40 && ok=1
-  [ "$ok" = 1 ] && echo "[test] UP: node1 :18200, node2 :19200 ($TOPOLOGY)" \
+  [ "$ok" = 1 ] && echo "[test] UP: node1 :18200, node2 :19200, LB :18080 ($TOPOLOGY)" \
                 || { echo "[test] nodes not healthy — podman logs ${PROJECT}_node1_1"; exit 1; }
+
+  # MinIO: create the artifacts bucket once (mc is inside the minio image)
+  if ! podman exec ${PROJECT}_minio_1 sh -c \
+        "mc alias set local http://127.0.0.1:9000 -u mcp-artifacts -p change-me-minio-secret >/dev/null 2>&1 && mc ls local/memory-artifacts >/dev/null 2>&1"; then
+    podman exec ${PROJECT}_minio_1 sh -c \
+      "mc alias set local http://127.0.0.1:9000 -u mcp-artifacts -p change-me-minio-secret >/dev/null 2>&1 && mc mb local/memory-artifacts" \
+      && echo "[test] MinIO bucket 'memory-artifacts' created"
+  fi
 }
 
 # ---------- dispatch ----------

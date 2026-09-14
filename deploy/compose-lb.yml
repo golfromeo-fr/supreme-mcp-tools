@@ -1,0 +1,12 @@
+# Phase B — LB over the node centrals (round-robin, health-checked).
+# Publishes the cluster entry point on :18080. See compose-lb.yml note.
+services:
+  lb:
+    image: docker.io/library/nginx:alpine
+    volumes:
+      - ./nginx-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "18080:80"
+    depends_on:
+      - node1
+      - node2

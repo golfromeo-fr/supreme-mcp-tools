@@ -80,6 +80,9 @@ openai>=1.30.0
 # provider; heavy (torch) but the work env must match the host behavior
 sentence-transformers>=3.0.0
 
+# memorymcp artifact S3/MinIO backend (S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY)
+boto3>=1.34.0
+
 # Optional: Redis for distributed deployment
 # redis>=5.0.0
 # hiredis>=2.2.0

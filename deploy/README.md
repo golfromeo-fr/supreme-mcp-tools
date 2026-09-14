@@ -32,6 +32,25 @@ local file.
 | `compose-turso.yml` | Topology: embedded Turso/libSQL (sqld) state plane. |
 | `node.env.template` | The mounted `.env` — copy to `node.env` and fill in (secrets + the state-plane block matching your topology). |
 
+## Phase B/C additions (2026-09-14)
+
+- **LB** (`compose-lb.yml`): nginx round-robin over the node centrals,
+  published on **:18080**. `X-Upstream` response header shows which node
+  answered. Stateful `/mcp` clients need `ip_hash` in the upstream block;
+  stateless clients float freely.
+- **MinIO shared artifacts** (`compose-artifacts.yml`): the test cluster's
+  nodes become stateless — set `S3_ENDPOINT=http://minio:9000`,
+  `S3_ACCESS_KEY=mcp-artifacts`, `S3_SECRET_KEY=change-me-minio-secret` in
+  node.env (bucket `memory-artifacts` is auto-created on cluster start).
+  MinIO console is internal (:9001); the S3 API is additionally published
+  on host **127.0.0.1:19000** for cross-environment verification.
+- **Verified live**: LB balancing (X-Upstream alternates), and a 19KB
+  memory upserted via node1 read back via node2 with its content served
+  from MinIO.
+- **Known limitation** (see post-M4 roadmap): the embedded-sqld (turso)
+  topology expires idle libsql HTTP streams (`STREAM_EXPIRED`) — pg
+  topology recommended for anything beyond boot demos.
+
 ## Topologies (first arg of `startlauncher-podman`)
 
 | Topology | State plane | db container | Use when |

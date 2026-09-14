@@ -77,7 +77,20 @@ proven by:
 - The e35 suite's per-run debris (concurrent-test memories) could be
   swept by its cleanup like the other fixtures.
 
-## Explicitly NOT planned (unless reality demands)
+## Found during Phase C verification (2026-09-14)
+
+- **turso-http topology: STREAM_EXPIRED on idle streams.** The embedded
+  sqld topology (node.env TURSO_DATABASE_URL=http://db:8080) works at
+  boot, but after idle time the libsql HTTP streams expire server-side
+  and the client does not reconnect: subsequent writes fail with
+  `Hrana: STREAM_EXPIRED` consistently (reproduced: central user create
+  failed 3/3 through stale streams; restart of the node clears it until
+  the next idle window). Needed: reconnect-on-STREAM_EXPIRED handling in
+  TursoSqlStore/TursoVectorStore (or keep-alive pings). Until fixed, the
+  turso topology is demo/boot-only; pg topology unaffected.
+- Phase C artifact verification was therefore run against the work env
+  with S3_ENDPOINT pointed at the test cluster's MinIO (published on host
+  :19000), then reverted to the durable local volume.
 
 - Distributed transactions / consensus — last-writer-wins per document is
   the documented contract; the workloads are single-writer by nature.

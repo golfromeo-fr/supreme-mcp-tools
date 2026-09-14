@@ -9,8 +9,12 @@ WORKDIR /app
 
 # Dependencies first — cached unless requirements change.
 # python-docx is a DEFAULT-tool dependency since convertermcp joined the set.
+# torch is forced to the CPU wheel BEFORE sentence-transformers so the CUDA
+# variants (multi-GB nvidia/cudnn libs) never enter the image — the host and
+# both pod environments run embeddings on CPU.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir -r requirements.txt
 
 # Code + runtime config (ports.json, launcher_config.json live in config/)
 COPY launcher/ ./launcher/
