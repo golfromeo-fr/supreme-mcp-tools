@@ -1,18 +1,22 @@
 # Phase C/H3 — shared S3 artifact store (MinIO) for the TEST cluster:
 # nodes become stateless — large-text memories upserted via one node are
-# readable via any node. node.env must add:
+# readable via any node. Credentials come from deploy/.env (gitignored):
+#   MINIO_ROOT_PASSWORD=<generate-one>          # >= 8 chars; ROTATE before
+#                                               # any non-loopback bind
+# node.env must add (same password as MINIO_ROOT_PASSWORD):
 #   S3_ENDPOINT=http://minio:9000
 #   S3_ACCESS_KEY=mcp-artifacts
-#   S3_SECRET_KEY=change-me-minio-secret
+#   S3_SECRET_KEY=<same as MINIO_ROOT_PASSWORD>
 services:
   minio:
-    image: quay.io/minio/minio:latest
+    # Digest pin = the exact image live-verified 2026-09-14; bump consciously.
+    image: quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address ":9001"
     ports:
       - "127.0.0.1:19000:9000"
     environment:
       MINIO_ROOT_USER: mcp-artifacts
-      MINIO_ROOT_PASSWORD: change-me-minio-secret
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - miniodata:/data
     healthcheck:

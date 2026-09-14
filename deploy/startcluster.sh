@@ -48,7 +48,7 @@ work_env() { action="${1:-up}"; shift || true
     ts=$(date +%Y%m%d-%H%M%S)
     out="${HOME}/supreme-mcp-tools-backups/work-pg-$ts.sql"
     mkdir -p "$(dirname "$out")"
-    podman exec mcp-work_db_1 pg_dump -U mcp -d mcp > "$out" \
+    podman exec "${PROJECT}_db_1" pg_dump -U mcp -d mcp > "$out" \
       && echo "[work] backup -> $out ($(wc -c < "$out") bytes)" \
       || { echo "[work] backup FAILED — is the work env running?"; exit 1; }
     exit 0
@@ -64,25 +64,20 @@ work_env() { action="${1:-up}"; shift || true
     ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml up -d db ) \
       || ( cd deploy && podman-compose -p "$PROJECT" up -d db )
     sleep 8
-    podman exec -i mcp-work_db_1 psql -U mcp -d mcp < "$f" >/dev/null \
+    podman exec -i "${PROJECT}_db_1" psql -U mcp -d mcp < "$f" >/dev/null \
       && echo "[work] restore imported — starting the node..." \
       || { echo "[work] restore import FAILED"; exit 1; }
     ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml up -d work ) \
       || ( cd deploy && podman-compose -p "$PROJECT" up -d work )
-    if wait_http http://localhost:8200/health 50; then
+    if wait_http http://127.0.0.1:8200/health 50; then
       echo "[work] restored and healthy"
     else
       echo "[work] node not healthy yet — check podman logs ${PROJECT}_work_1"; exit 1
     fi
     exit 0
   fi
-  if [ "$action" = clean ]; then
-    ( cd deploy && podman-compose -p "$PROJECT" down ) 2>/dev/null || true
-    podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
-    podman rm -f "${PROJECT}_work_1" "${PROJECT}_db_1" "${PROJECT}_ui_1" 2>/dev/null || true
-    echo "[work] removed (data volume ${PROJECT}_work_pgdata KEPT; wipe: podman volume rm $PROJECT)"
-    exit 0
-  fi
+  # `clean` is handled by the case below: it WIPES containers AND the state
+  # volume after an explicit 'wipe' confirmation.
 
   # first-run bootstrap: work.env generated from the host .env
   if [ ! -f deploy/work.env ]; then
@@ -96,6 +91,8 @@ work_env() { action="${1:-up}"; shift || true
       echo "POSTGRES_HOST=127.0.0.1"
       echo "POSTGRES_PORT=5433"
       echo "POSTGRES_USER=mcp"
+      # Generated ONCE on first boot; rotation = edit deploy/work.env, then
+      # `startcluster work clean` (wipes state) + `up` to re-bootstrap.
       echo "POSTGRES_PASSWORD=work-$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')"
       echo "POSTGRES_DB=mcp"
     } >> deploy/work.env
@@ -103,7 +100,8 @@ work_env() { action="${1:-up}"; shift || true
   fi
 
   # concrete compose (host paths inlined — no interpolation dependency)
-  HOST_TURSO_DIR=$(grep -oP '^TURSO_DATABASE_URL=file:\K[^ ]+' .env | xargs dirname 2>/dev/null || true)
+  # POSIX sed (no GNU grep -oP — busybox/BSD-safe); falls back to /nonexistent
+  HOST_TURSO_DIR=$(sed -n 's/^TURSO_DATABASE_URL=file:\([^ ]*\).*/\1/p' .env | xargs dirname 2>/dev/null || true)
   export HOST_CONFIG_DIR="$CONFIG_DIR"
   export HOST_TURSO_DIR="${HOST_TURSO_DIR:-/nonexistent}"
   export HOST_HF_CACHE="${HOME}/.cache/huggingface"
@@ -124,7 +122,7 @@ work_env() { action="${1:-up}"; shift || true
     logs)  podman logs --tail "${3:-40}" "${PROJECT}_${2:-work}_1"; exit 0 ;;
     status)
       ( cd deploy && podman-compose -p "$PROJECT" ps ) || true
-      printf "central: "; curl -sf http://localhost:8200/health || echo "not answering"
+      printf "central: "; curl -sf http://127.0.0.1:8200/health || echo "not answering"
       echo; exit 0 ;;
   esac
 
@@ -148,7 +146,7 @@ work_env() { action="${1:-up}"; shift || true
   ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml up -d db work )
 
   echo "[work] waiting for the node central on :8200..."
-  if ! wait_http http://localhost:8200/health 50; then
+  if ! wait_http http://127.0.0.1:8200/health 50; then
     echo "[work] node not healthy — check: podman logs ${PROJECT}_work_1"; exit 1
   fi
 
@@ -157,16 +155,16 @@ work_env() { action="${1:-up}"; shift || true
 import sys, json
 sys.path.insert(0, '/app'); sys.path.insert(0, '/app/tools')
 from tools.shared import state_docs
-if state_docs.load_doc('tools_config') is None:
+if state_docs.load_doc(state_docs.DOC_TOOLS_CONFIG) is None:
     src = json.load(open('/root/.config/supreme-mcp-tools/tools_config.json'))
-    state_docs.save_doc('tools_config', src)
+    state_docs.save_doc(state_docs.DOC_TOOLS_CONFIG, src)
     print('[work] masks+inventory imported from the host tools_config.json')
 else:
     print('[work] state docs already present')
 " 2>/dev/null || echo "[work] (mask seeding skipped — run again later if needed)"
 
   echo "[work] UP — canonical surface:"
-  curl -s http://localhost:8200/health; echo
+  curl -s http://127.0.0.1:8200/health; echo
   echo "  tools: 8000-8005 | central: 8200 | UI (opt.): startcluster work ui -> 8400"
 }
 
@@ -184,8 +182,8 @@ test_env() { action="${1:-pg}"; shift || true
     logs)  podman logs --tail "${3:-40}" "${PROJECT}_${2:-node1}_1"; exit 0 ;;
     status)
       podman pod ls | grep "$PROJECT" || echo "[test] not created"
-      printf "node1: "; curl -sf http://localhost:18200/health || echo "down"
-      echo; printf "node2: "; curl -sf http://localhost:19200/health || echo "down"
+      printf "node1: "; curl -sf http://127.0.0.1:18200/health || echo "down"
+      echo; printf "node2: "; curl -sf http://127.0.0.1:19200/health || echo "down"
       echo; exit 0 ;;
   esac
   TOPOLOGY="$action"
@@ -209,23 +207,36 @@ test_env() { action="${1:-pg}"; shift || true
   cd deploy
   podman rmi -f localhost/${PROJECT}_node1:latest localhost/${PROJECT}_node2:latest 2>/dev/null || true
   echo "[test] starting..."
+  # MinIO credentials live in deploy/.env (gitignored) — compose reads the
+  # same file for ${MINIO_ROOT_PASSWORD} interpolation in compose-artifacts.yml.
   if [ "$WITH_DB" = 1 ]; then
+    if [ ! -f deploy/.env ] || ! grep -q '^MINIO_ROOT_PASSWORD=..' deploy/.env; then
+      echo "[test] FATAL: deploy/.env missing or MINIO_ROOT_PASSWORD unset —"
+      echo "       add 'MINIO_ROOT_PASSWORD=<generate-one>' to deploy/.env (see deploy/README.md)"
+      exit 1
+    fi
+    . ./deploy/.env
     podman-compose -p "$PROJECT" -f compose-common.yml -f "$TOPO_FILE" \
       -f compose-lb.yml -f compose-artifacts.yml up -d db node1 node2 lb minio
   else
+    # external-* topologies: no embedded state plane AND no shared artifacts
     podman-compose -p "$PROJECT" -f compose-common.yml \
-      -f compose-lb.yml -f compose-artifacts.yml up -d node1 node2 lb minio
+      -f compose-lb.yml up -d node1 node2 lb
   fi
-  ok=0; wait_http http://localhost:18200/health 40 && ok=1
+  ok=0; wait_http http://127.0.0.1:18200/health 40 && ok=1
   [ "$ok" = 1 ] && echo "[test] UP: node1 :18200, node2 :19200, LB :18080 ($TOPOLOGY)" \
                 || { echo "[test] nodes not healthy — podman logs ${PROJECT}_node1_1"; exit 1; }
 
-  # MinIO: create the artifacts bucket once (mc is inside the minio image)
-  if ! podman exec ${PROJECT}_minio_1 sh -c \
-        "mc alias set local http://127.0.0.1:9000 -u mcp-artifacts -p change-me-minio-secret >/dev/null 2>&1 && mc ls local/memory-artifacts >/dev/null 2>&1"; then
-    podman exec ${PROJECT}_minio_1 sh -c \
-      "mc alias set local http://127.0.0.1:9000 -u mcp-artifacts -p change-me-minio-secret >/dev/null 2>&1 && mc mb local/memory-artifacts" \
-      && echo "[test] MinIO bucket 'memory-artifacts' created"
+  # MinIO artifacts bucket (credentials from deploy/.env — NOT hardcoded).
+  # MC_HOST_* env form avoids -p on the command line; stat-or-create is one
+  # idempotent shot (no unreliable `mc ls`-to-detect-absence dance).
+  if [ "$WITH_DB" = 1 ]; then
+    wait_http http://127.0.0.1:19000/minio/health/live 10 \
+      || echo "[test] WARNING: MinIO health endpoint not answering yet"
+    podman exec -e MC_HOST_local="http://mcp-artifacts:${MINIO_ROOT_PASSWORD}@127.0.0.1:9000" \
+      ${PROJECT}_minio_1 sh -c 'mc stat local/memory-artifacts >/dev/null 2>&1 || mc mb local/memory-artifacts' \
+      && echo "[test] MinIO bucket 'memory-artifacts' ready" \
+      || echo "[test] WARNING: MinIO bucket bootstrap failed — check MINIO_ROOT_PASSWORD in deploy/.env"
   fi
 }
 

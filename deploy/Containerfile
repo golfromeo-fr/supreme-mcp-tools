@@ -3,7 +3,8 @@
 #   podman build -f deploy/Containerfile -t mcp-node .
 # The node reads its config from a MOUNTED .env (see deploy/podman-compose.yml):
 #   "same image, one mounted .env" — no unique local state in the image.
-FROM docker.io/library/python:3.13-slim
+# Digest pin = the exact base live-verified 2026-09-14; bump consciously.
+FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
 WORKDIR /app
 
@@ -41,4 +42,6 @@ ENV MCP_AUTH_MODE=multi \
 
 # launchmcp.py loads the root .env BEFORE any tool import (auth-order fix,
 # 2026-09-09): the mounted /app/.env is what makes this node multi-user.
-CMD ["sh", "-c", "exec python3 ./launchmcp.py --health-check-logs disable ${TOOLS_LIST}"]
+# ${TOOLS_LIST:-...} guard: an empty/override TOOLS_LIST must not fall back
+# to the launcher's full discovered set — keep the light trio instead.
+CMD ["sh", "-c", "exec python3 ./launchmcp.py --health-check-logs disable ${TOOLS_LIST:-simplemcp convertermcp webmcp}"]

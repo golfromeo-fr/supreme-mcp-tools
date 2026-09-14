@@ -260,3 +260,5 @@ setup_opencode_mcp.sh
 deploy/node.env
 startcluster
 deploy/work.env
+deploy/.env
+deploy/compose-*.run.yml
