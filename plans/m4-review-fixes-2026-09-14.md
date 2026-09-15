@@ -69,9 +69,23 @@ H2 section), M13 (already flagged in the post-M4 roadmap — nothing to do),
 M14-M18 (disposition: KEPT on the branch deliberately — retroactive commit
 surgery is churn; documented here as accepted scope creep).
 
-**Deferred (executor):** L10-L12 (graphify hygiene — interactive
-query/path sessions + GEMINI_API_KEY; separate session), L1's optional
-regression-guard test (reviewer-added extra, not from any source).
+**Deferred → COMPLETED 2026-09-15:** L11 (dead `tools/shared/oauth_fix.py`
+DELETED — nothing imported it; AGENTS.md list updated) and L1 (guard test
+shipped as `tests/test_deploy_configs.py`: request-header reflection guard
+PLUS positive pins for the C1/H1/H2 fixes).
+
+**Deferred (still open, CORRECTED):** L10-L12 need a doc-side graph
+refresh. The original "requires Gemini key" note was WRONG (subagent
+over-read a generic tip line): graphify 0.9.61 is multi-provider —
+`--backend` accepts gemini (default), openai (+OPENAI_BASE_URL for any
+OpenAI-compatible gateway), claude, kimi, deepseek, azure, bedrock, ollama
+(local, keyless), claude-cli. AND the doc pass is designed to be driven by
+the orchestrating assistant ("run /graphify --update in your AI assistant")
+— no API key needed at all, the agent does the semantic extraction. What
+remains is a sequencing decision: refresh the 82 changed docs first, THEN
+verify L10's INFERRED edges (they regenerate on rebuild — verifying first
+wastes the walk), then L12's doc/code node merge. A session-sized job,
+kept out of the code-fix band.
 
 **Gate:** full `pytest tests/` run recorded in the commit message; deploy
 band committed separately from code+tests per the protocol above.

@@ -58,7 +58,7 @@ tools/shared/      # cross-tool libraries:
                    #   store_factory.py   — config resolution
                    #   hashing.py         — text_hash (pure function)
                    #   pii_redactor, relevance_scorer, server_factory, artifact_store, cache, html_utils
-                   #   memory_models, oauth_fix, utils, migrate_store
+                   #   memory_models, utils, migrate_store
                    #   impls/             — concrete backends (postgres_sql, turso_sql, qdrant_vector, turso_vector, postgres_vector)
 config/            # ports.json (port ranges+assignments), launcher_config.json, monitoring_config.json
 plans/             # design docs (FEF V3, backend abstraction)
