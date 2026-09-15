@@ -87,6 +87,28 @@ verify L10's INFERRED edges (they regenerate on rebuild — verifying first
 wastes the walk), then L12's doc/code node merge. A session-sized job,
 kept out of the code-fix band.
 
+**Post-doc-graph addendum (2026-09-15):** after the assistant-driven doc-side
+graph refresh (6648 nodes), the report's new leads were triaged:
+- Cache "duplication" lead (`CacheManager (FEF)` ↔ `TTLCache`) → **FALSE
+  POSITIVE, closed.** `tools/shared/cache.py` IS the deliberate plan-C1
+  consolidation ("ONE implementation repo-wide"); `CacheManager`
+  (distributed_registry) and `SimpleCache` (webmcp) verified as thin
+  delegating facades. cachetools swap rejected: it is required by nothing
+  here, and the hand-rolled core has features cachetools.TTLCache lacks
+  natively (per-entry TTL, get_stats, MAX_SIZE subclass hook).
+- 448/3094 isolated nodes → categorized, no red flag: 218 plan-doc
+  entities, the rest AST-invisible leaves (test functions,
+  decorator-registered endpoints, metric formatters) + the known L12
+  doc/code split.
+- Dead-module sweep (alias+relative-import aware, CLIs/subprocess scripts
+  vetted): **zero dead modules** — oauth_fix.py was the only one; the 4
+  zero-importer survivors (`launcher/debug|migration|sync_tools_config`,
+  `ragmcp/indexer/incremental_indexer`) are alive as `python -m` CLIs or
+  subprocess scripts.
+- `register_common_extensions()` new top bridge (betweenness 0.056) →
+  informational; import-cycle check stays green. Prime suspect if a
+  startup-order bug ever appears, nothing to change now.
+
 **Gate:** full `pytest tests/` run recorded in the commit message; deploy
 band committed separately from code+tests per the protocol above.
 
