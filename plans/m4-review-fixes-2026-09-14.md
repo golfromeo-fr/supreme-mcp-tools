@@ -109,6 +109,22 @@ graph refresh (6648 nodes), the report's new leads were triaged:
   informational; import-cycle check stays green. Prime suspect if a
   startup-order bug ever appears, nothing to change now.
 
+**Deferred → COMPLETED 2026-09-15 (L10 + L12):** doc-side graph refreshed
+(assistant-driven, 10 extraction chunks), then L12 merged **68 doc-shadow
+nodes** into their real `.py` code counterparts (backend-abstraction plan
+types → `store_models`, BACKENDS.md shadows → `impls/`, FEF plan concepts →
+launcher classes; guards: unique-label match + generic-heading stoplist +
+citation evidence — two false-merge attempts caught and reverted from the
+backup before the final run). L10 then verified the god-node INFERRED edges
+on the consolidated graph: **61 upgraded INFERRED→EXTRACTED** (literal
+citations + the 6 launcher-config nested classes verified structurally),
+5 restored as EXTRACTED (bidirectional symbol evidence), 1 re-added as
+honest INFERRED 0.85 (migrate_store ↔ TursoVectorStore via factory), and
+only 3 dropped (2 sibling `semantically_similar_to` redundant with the
+ABC implements-edges, 1 symbol edge already covered by a direct import).
+Final graph: 6580 nodes / 11181 edges / 335 communities, EXTRACTED 10331 ·
+INFERRED 846 · AMBIGUOUS 4, health gate clean (0 dangling/missing/self-loops).
+
 **Gate:** full `pytest tests/` run recorded in the commit message; deploy
 band committed separately from code+tests per the protocol above.
 
