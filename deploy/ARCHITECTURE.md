@@ -1,5 +1,7 @@
 # Pod architecture — the podman environments explained
 
+> Plain-language version: [PODS-EXPLAINED.md](PODS-EXPLAINED.md).
+
 This document describes the pods you see in Podman Desktop, container by
 container: what each is for, what it is connected to, and why. It covers the
 two pods `startcluster` manages plus the classic host stack, so the whole
