@@ -1,5 +1,9 @@
 # deploy — podman environments (startcluster)
 
+> **Start here:** [ARCHITECTURE.md](ARCHITECTURE.md) — the pods,
+> containers, connections and ports explained with diagrams.
+
+
 Two ISOLATED podman environments, managed by the (local) `startcluster`
 script:
 
