@@ -262,3 +262,4 @@ startcluster
 deploy/work.env
 deploy/.env
 deploy/compose-*.run.yml
+.mimosa/
