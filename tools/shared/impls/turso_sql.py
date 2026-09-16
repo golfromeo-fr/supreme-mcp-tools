@@ -69,10 +69,12 @@ class TursoSqlStore:
         # throughput without improving correctness. If a future build drops the
         # internal mutex, switch to a small Python connection pool (libsql
         # supports multiple connect()s to the same URL).
-        if auth_token:
-            self._conn = libsql.connect(url, auth_token=auth_token)
-        else:
-            self._conn = libsql.connect(url)
+        # HTTP (hrana) URLs die server-side on idle (STREAM_EXPIRED) and
+        # libsql never reconnects — use the reconnecting wrapper (no-op for
+        # local file: URLs). See tools/shared/impls/libsql_reconnect.py.
+        from shared.impls.libsql_reconnect import connect_with_reconnect
+
+        self._conn = connect_with_reconnect(url, auth_token)
         self._conn.autocommit = True
         self.is_available = True
         self._ensure_schema()

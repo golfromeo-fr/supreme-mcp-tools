@@ -114,10 +114,12 @@ class TursoVectorStore:
         # keeps statements independent so threads don't block on implicit txns.
         # No threading.Lock needed (would only reduce throughput); see the note
         # in TursoSqlStore.__init__ for the full rationale.
-        if auth_token:
-            self._conn = libsql.connect(url, auth_token=auth_token)
-        else:
-            self._conn = libsql.connect(url)
+        # HTTP (hrana) URLs die server-side on idle (STREAM_EXPIRED) and
+        # libsql never reconnects — use the reconnecting wrapper (no-op for
+        # local file: URLs). See tools/shared/impls/libsql_reconnect.py.
+        from shared.impls.libsql_reconnect import connect_with_reconnect
+
+        self._conn = connect_with_reconnect(url, auth_token)
         self._conn.autocommit = True
         # Detect vector support
         self._has_vector = self._detect_vector_support()

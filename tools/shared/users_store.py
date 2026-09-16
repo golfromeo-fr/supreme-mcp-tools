@@ -148,7 +148,7 @@ def _db_conn():
                 except Exception as e:
                     logger.warning(f"[E3] users store: skipped JSON import ({e})")
         _db_conn_singleton = ex
-        logger.warning("[E3] users store: SQL backend active (shared exec)")
+        logger.info("[E3] users store: SQL backend active (shared exec)")
     except Exception as e:
         logger.warning(
             f"MCP_USERS_BACKEND=db init failed ({type(e).__name__}: {e}) - "

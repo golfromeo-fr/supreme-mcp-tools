@@ -4,7 +4,19 @@
 # The node reads its config from a MOUNTED .env (see deploy/podman-compose.yml):
 #   "same image, one mounted .env" — no unique local state in the image.
 # Digest pin = the exact base live-verified 2026-09-14; bump consciously.
+#
+# Version stamping: pass build args (deploy/publish-image.sh and startcluster
+# do this automatically):
+#   --build-arg IMAGE_VERSION=<git describe> --build-arg GIT_SHA=<sha>
 FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
+
+ARG IMAGE_VERSION=dev
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.title="supreme-mcp-tools node" \
+      org.opencontainers.image.description="One-process MCP launcher node (all tools, CPU torch, multi-user)" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.source="https://github.com/golfromeo-fr/supreme-mcp-tools"
 
 WORKDIR /app
 

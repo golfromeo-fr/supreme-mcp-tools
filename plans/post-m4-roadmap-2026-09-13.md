@@ -79,15 +79,19 @@ proven by:
 
 ## Found during Phase C verification (2026-09-14)
 
-- **turso-http topology: STREAM_EXPIRED on idle streams.** The embedded
-  sqld topology (node.env TURSO_DATABASE_URL=http://db:8080) works at
-  boot, but after idle time the libsql HTTP streams expire server-side
-  and the client does not reconnect: subsequent writes fail with
-  `Hrana: STREAM_EXPIRED` consistently (reproduced: central user create
-  failed 3/3 through stale streams; restart of the node clears it until
-  the next idle window). Needed: reconnect-on-STREAM_EXPIRED handling in
-  TursoSqlStore/TursoVectorStore (or keep-alive pings). Until fixed, the
-  turso topology is demo/boot-only; pg topology unaffected.
+- **turso-http topology: STREAM_EXPIRED on idle streams (FIXED
+  2026-09-16).** Root cause: the embedded sqld expires idle HTTP streams
+  server-side and libsql_experimental never reconnects — every later
+  statement failed forever. Fix: tools/shared/impls/libsql_reconnect.py —
+  a connect-proxy that detects the stale-stream error signature and
+  replays the statement ONCE on a fresh connection (local file: URLs
+  unaffected; unknown errors not retried). Wired into both Turso impls;
+  unit tests + LIVE proof on the turso compose topology (boot create OK,
+  5-minute idle, post-idle write OK through the healed connection).
+  NOTE from the debugging: a misconfigured state plane (POSTGRES_* active
+  while the sqld topology runs) produces connection-refused TIMEOUTS at
+  boot — different signature; the startcluster topology warnings exist
+  for exactly this, read them.
 - Phase C artifact verification was therefore run against the work env
   with S3_ENDPOINT pointed at the test cluster's MinIO (published on host
   :19000), then reverted to the durable local volume.

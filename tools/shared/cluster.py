@@ -160,8 +160,8 @@ def adopt_env_overrides(env: dict[str, str] | None = None) -> list[str]:
             target[var] = value
             applied.append(var)
     if applied:
-        logger.warning(f"[M4] adopted {len(applied)} env override(s) from the "
-                       f"cluster state: {sorted(applied)}")
+        logger.info(f"[M4] adopted {len(applied)} env override(s) from the "
+                    f"cluster state: {sorted(applied)}")
     return applied
 
 
@@ -197,7 +197,7 @@ def adopt_auth_overrides(tools_dir: str | Path | None = None) -> list[str]:
             # corrupt it mid-crash (see tools/shared/atomic_io.py).
             atomic_write_text(cfg_path, json.dumps(config, indent=2) + "\n")
             updated.append(tool)
-            logger.warning(f"[M4] adopted cluster auth override for '{tool}'")
+            logger.info(f"[M4] adopted cluster auth override for '{tool}'")
         except Exception as e:
             logger.warning(f"[M4] auth adoption failed for '{tool}': {e}")
     return updated

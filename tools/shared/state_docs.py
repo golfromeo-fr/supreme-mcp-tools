@@ -108,7 +108,7 @@ def _conn():
         for stmt in _SCHEMA:
             ex.execute(stmt)
         _conn_singleton = ex
-        logger.warning("[M4] state docs: SQL backend active")
+        logger.info("[M4] state docs: SQL backend active")
     except Exception as e:
         logger.warning(
             f"MCP_STATE_BACKEND=db init failed ({type(e).__name__}: {e}) - "
