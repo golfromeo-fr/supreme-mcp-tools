@@ -23,6 +23,11 @@ python launchmcp.py --dry-run webmcp         # preview without starting
 # UI
 python -m mcp_ui                             # NiceGUI management UI (port 8400)
 
+# Podman environments + config bundles (plans/pod-config-bundle-2026-09-17.md)
+./startcluster work|test ...                 # the two pod environments (see deploy/README.md)
+./startcluster harvest                       # snapshot working-tree config into a bundle folder/zip
+./startcluster work --config-bundle <path>   # seed the pod from a bundle (same for `test`)
+
 # Backend migration
 python -m tools.shared.migrate_store export --out backup.jsonl
 python -m tools.shared.migrate_store import --in backup.jsonl --backend turso+turso

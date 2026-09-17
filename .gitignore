@@ -263,3 +263,10 @@ deploy/work.env
 deploy/.env
 deploy/compose-*.run.yml
 .mimosa/
+
+# config-bundle working files (plans/pod-config-bundle-2026-09-17.md)
+deploy/compose-work.bundle.yml
+deploy/compose-test.bundle.yml
+deploy/.bundle-tmp/
+deploy/work.env.bak-*
+deploy/node.env.bak-*
