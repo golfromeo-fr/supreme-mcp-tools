@@ -140,6 +140,12 @@ path ending in `.zip` is unzipped to `deploy/.bundle-tmp/<name>/` first.
 `startcluster harvest …` is added as an alias subcommand that execs
 `deploy/harvest-config.sh "$@"` (single entry point for discoverability).
 
+> **Amendment (2026-09-17, post-build):** `-b <path>` is accepted everywhere
+> as the short form of `--config-bundle <path>` (both may also feed the
+> hidden `bundle-node-env` subcommand). `harvest`'s BUNDLE_PATH positional
+> is optional — default
+> `~/supreme-mcp-tools-bundles/config-bundle-<UTC timestamp>`.
+
 ---
 
 ## 3. Implementation spec

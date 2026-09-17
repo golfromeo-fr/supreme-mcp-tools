@@ -16,8 +16,8 @@
 #  ports: stop the work cluster first, or the suite tests the work env.
 #
 #  usage:
-#    startcluster work [up|stop|start|status|clean|logs [svc]] [--config-bundle <path>]
-#    startcluster test [pg|turso|external-pg|external-turso|stop|start|status|clean|logs [svc]] [--config-bundle <path>]
+#    startcluster work [up|stop|start|status|clean|logs [svc]] [-b|--config-bundle <path>]
+#    startcluster test [pg|turso|external-pg|external-turso|stop|start|status|clean|logs [svc]] [-b|--config-bundle <path>]
 set -euo pipefail
 ORIG_PWD="$PWD"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -31,20 +31,22 @@ CONFIG_DIR="${HOME}/.config/supreme-mcp-tools"
 # ---------- shared helpers ----------
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; cat <<'HELP'
 
-  usage: startcluster work [up|stop|start|status|backup|restore <file>|clean|logs [svc]] [--config-bundle <path>]
-         startcluster test [pg|turso|external-pg|external-turso|status|stop|start|clean|logs [svc]] [--config-bundle <path>]
+  usage: startcluster work [up|stop|start|status|backup|restore <file>|clean|logs [svc]] [-b|--config-bundle <path>]
+         startcluster test [pg|turso|external-pg|external-turso|status|stop|start|clean|logs [svc]] [-b|--config-bundle <path>]
          startcluster harvest [--zip|--redact|--from-work-db|--list] [BUNDLE_PATH]
 
   work:  daily-driver pod (canonical ports 8000-8005/8200; UI: startcluster work ui)
   test:  M4 two-node bench (node centrals 18200/19200)
   backup/restore: pg_dump of the work state plane <-> ~/supreme-mcp-tools-backups/
 
-  --config-bundle <path|host>  seed the environment from a harvested config bundle
-      (made by: startcluster harvest). 'host' (the default) keeps today's behavior:
-      derive from the live host files. In test mode, file: data-plane lines are
-      stripped for safety (--keep-dataplanes overrides).
+  -b <path> | --config-bundle <path|host>  seed the environment from a harvested
+      config bundle (made by: startcluster harvest). 'host' (the default) keeps
+      today's behavior: derive from the live host files. In test mode, file:
+      data-plane lines are stripped for safety (--keep-dataplanes overrides).
   bundle-node-env <bundle> <work|pg|turso|external-pg|external-turso>
       print the env file a bundle would generate (debug/tests, no podman).
+  harvest [BUNDLE_PATH]  harvest to that folder; default:
+      ~/supreme-mcp-tools-bundles/config-bundle-<UTC timestamp>
 HELP
 }
 wait_http() { # url, tries
@@ -393,6 +395,9 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "FATAL: --config-bundle needs a bundle path (or 'host')"; exit 1; }
       BUNDLE_RAW="$2"; shift 2 ;;
     --config-bundle=*) BUNDLE_RAW="${1#*=}"; shift ;;
+    -b)
+      [ $# -ge 2 ] || { echo "FATAL: -b needs a bundle path (or 'host')"; exit 1; }
+      BUNDLE_RAW="$2"; shift 2 ;;
     --keep-dataplanes) KEEP_DATAPLANES=1; shift ;;
     *) positional+=("$1"); shift ;;
   esac
@@ -407,10 +412,17 @@ case "${1:-}" in
   harvest) shift; exec "$REPO_ROOT/deploy/harvest-config.sh" "$@" ;;
   bundle-node-env)   # hidden: print the env a bundle generates (tests/debug, no podman)
     shift
-    [ $# -ge 2 ] || { echo "usage: startcluster bundle-node-env <bundle> <work|pg|turso|external-pg|external-turso> [existing_env_file]"; exit 1; }
-    BUNDLE_RAW="$1"; shift
-    MODE="$1"; shift
-    EXISTING="${1:-}"
+    # the bundle may come as a positional OR via -b/--config-bundle
+    case "${1:-}" in
+      "")
+        echo "usage: startcluster bundle-node-env [<bundle>|(-b <bundle>)] <work|pg|turso|external-pg|external-turso> [existing_env_file]"; exit 1 ;;
+      work|pg|turso|external-pg|external-turso)
+        [ "$BUNDLE_RAW" != "host" ] || { echo "FATAL: no bundle given — pass <bundle> or -b/--config-bundle <path>"; exit 1; }
+        MODE="$1"; EXISTING="${2:-}" ;;
+      *)
+        BUNDLE_RAW="$1"; MODE="${2:-}"; EXISTING="${3:-}"
+        [ -n "$MODE" ] || { echo "FATAL: bundle-node-env needs a mode (work|pg|turso|external-pg|external-turso)"; exit 1; } ;;
+    esac
     resolve_bundle
     bundle_node_env "$BUNDLE_DIR" "$MODE" "$EXISTING" "$(minio_password)" "$KEEP_DATAPLANES"
     exit 0 ;;

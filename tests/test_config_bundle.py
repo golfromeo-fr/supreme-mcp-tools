@@ -258,6 +258,25 @@ def test_missing_bundle_fails_loudly(tmp_path):
     assert "not found" in (r.stdout + r.stderr)
 
 
+def test_short_flag_b(harvested):
+    r = startcluster("-b", harvested, "bundle-node-env", "pg", env_extra={"BUNDLE_MINIO_PW": ""})
+    assert r.returncode == 0, r.stderr
+    assert "POSTGRES_HOST=db" in r.stdout
+
+
+def test_long_flag_feeds_bundle_node_env(harvested):
+    r = startcluster("--config-bundle", harvested, "bundle-node-env", "pg",
+                     env_extra={"BUNDLE_MINIO_PW": ""})
+    assert r.returncode == 0, r.stderr
+    assert "POSTGRES_HOST=db" in r.stdout
+
+
+def test_bundle_node_env_without_any_bundle_fails():
+    r = startcluster("bundle-node-env", "pg")
+    assert r.returncode == 1
+    assert "no bundle given" in (r.stdout + r.stderr)
+
+
 def test_zip_bundle_resolves(tmp_path, harvested):
     zpath = tmp_path / "b.zip"
     with zipfile.ZipFile(zpath, "w") as z:
