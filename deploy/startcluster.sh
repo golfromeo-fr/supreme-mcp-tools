@@ -211,24 +211,29 @@ work_env() { action="${1:-up}"; shift || true
   fi
 
   case "$action" in
-    stop)  ( cd deploy && podman-compose -p "$PROJECT" stop ) ; exit 0 ;;
-    start) ( cd deploy && podman-compose -p "$PROJECT" start ) ; sleep 5 ;;
+    stop)  ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml stop ) ; exit 0 ;;
+    start) ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml start ) ; sleep 5 ;;
     clean)
       echo "[work] this removes containers AND the state volume (users/masks) — type 'wipe' to confirm:"
       read -r ans; [ "$ans" = "wipe" ] || { echo "aborted"; exit 1; }
-      ( cd deploy && podman-compose -p "$PROJECT" down -v ) 2>/dev/null || true
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml down -v ) 2>/dev/null || true
       podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
       echo "[work] fully wiped"; exit 0 ;;
     logs)  podman logs --tail "${3:-40}" "${PROJECT}_${2:-work}_1"; exit 0 ;;
+    ui)
+      # work env must be up; bring up only the ui service on top of the existing pod
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml --profile ui up -d ui )
+      printf "UI: "; curl -sf http://127.0.0.1:8400/ -o /dev/null -w '%{http_code}\n' || echo "not answering"
+      exit 0 ;;
     status)
-      ( cd deploy && podman-compose -p "$PROJECT" ps ) || true
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml ps ) || true
       printf "central: "; curl -sf http://127.0.0.1:8200/health || echo "not answering"
       echo; exit 0 ;;
   esac
 
   # default action: up (rebuild) — stop the running work env first
   echo "[work] stopping the running work env (volumes kept)..."
-  ( cd deploy && podman-compose -p "$PROJECT" down ) 2>/dev/null || true
+  ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml down ) 2>/dev/null || true
   podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
   echo "[work] preflight: canonical ports must be free (host launcher down?)..."
   BUSY=$(ss -ltn | grep -cE ":(8000|8001|8002|8003|8004|8005|8200)\b" || true)
@@ -273,10 +278,14 @@ else:
 test_env() { action="${1:-pg}"; shift || true
   PROJECT="$TEST_PROJECT"
   case "$action" in
-    stop)  ( cd deploy && podman-compose -p "$PROJECT" stop ) ; exit 0 ;;
-    start) ( cd deploy && podman-compose -p "$PROJECT" start ) ; sleep 5 ; exit 0 ;;
+    # podman-compose 1.3.0 doesn't auto-discover the per-topology files (it
+    # only looks for compose.yml/compose.yaml/docker-compose.yml); the explicit
+    # -f chain below mirrors the `up` line so stop/start/clean/status/logs
+    # work the same way they always did
+    stop)  ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml stop ) ; exit 0 ;;
+    start) ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml start ) ; sleep 5 ; exit 0 ;;
     clean)
-      ( cd deploy && podman-compose -p "$PROJECT" down ) 2>/dev/null || true
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml -f compose-pg.yml down ) 2>/dev/null || true
       podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
       podman rm -f "${PROJECT}_node1_1" "${PROJECT}_node2_1" "${PROJECT}_db_1" 2>/dev/null || true
       echo "[test] removed (volumes pgdata/sqldata kept)"; exit 0 ;;
