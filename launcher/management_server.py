@@ -389,7 +389,7 @@ class ManagementServer:
             FileHandler's file, so this works wherever the launcher runs —
             host repo or /app inside the node image. grep filters case-
             insensitively BEFORE the tail (filter-then-tail, one pass)."""
-            tail = max(1, min(tail, 5000))
+            tail = max(1, min(tail, 20000))
             path = self._launcher_log_path()
             if path is None:
                 return {"file": None, "lines": [], "total_lines": 0,

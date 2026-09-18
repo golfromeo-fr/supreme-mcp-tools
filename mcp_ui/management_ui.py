@@ -324,35 +324,93 @@ def users_page() -> None:
         render_users_tab(_users_container)
 
 
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    """Clamped int from the environment (MCP_UI_LOG_* view defaults)."""
+    raw = str(os.environ.get(name, "")).strip()
+    try:
+        return max(lo, min(hi, int(raw))) if raw else default
+    except ValueError:
+        return default
+
+
 @ui.page("/logs")
 async def logs_page() -> None:
     """Launcher log viewer — admin only (central /api/logs is admin-gated).
     Reads the log through the central API, so it shows the launcher's own
-    view of the world whether it runs on the host or in the node image."""
+    view of the world whether it runs on the host or in the node image.
+    View defaults (tail/font/cols/rows/max) come from MCP_UI_LOG_* in .env;
+    the in-page controls adjust the live session."""
     if not (nicegui_app.storage.user.get("authenticated", False)
             and nicegui_app.storage.user.get("role", "user") == "admin"):
         ui.navigate.to("/")
         return
 
-    tail_size = {"value": 500}
+    view = {
+        "font": _env_int("MCP_UI_LOG_FONT", 12, 8, 24),   # px
+        "cols": _env_int("MCP_UI_LOG_COLS", 160, 40, 1000),   # characters per line
+        "rows": _env_int("MCP_UI_LOG_ROWS", 30, 10, 400),   # lines
+        "max": os.environ.get("MCP_UI_LOG_MAX", "").strip().lower() in ("1", "true", "yes", "on"),
+    }
+    tail_default = _env_int("MCP_UI_LOG_TAIL", 500, 50, 20000)
+    tail_size = {"value": tail_default}
+    nums: dict = {}
 
-    with ui.column().classes("w-full max-w-6xl p-4 gap-2 mx-auto"):
+    with ui.column().classes("w-full p-4 gap-2"):
         with ui.row().classes("w-full items-center gap-2"):
             ui.button("Back", icon="arrow_back",
                       on_click=lambda: ui.navigate.to("/")).props("flat dense")
             ui.label("Launcher log").classes("text-h6")
             ui.space()
             auto = ui.switch("Auto", value=True)
-            ui.select({200: "200", 500: "500", 1000: "1000", 2000: "2000"},
-                      value=500, label="tail",
+            # NOTE: the select's value MUST be one of its option keys
+            # (NiceGUI raises at page build otherwise — the 500 lesson)
+            tail_options = sorted({200, 500, 1000, 2000, 5000, 10000, tail_default})
+            ui.select({v: str(v) for v in tail_options}, value=tail_default,
+                      label="tail",
                       on_change=lambda e: tail_size.update(value=e.value),
-                      ).classes("w-32").props("dense outlined")
+                      ).classes("w-28").props("dense outlined")
         with ui.row().classes("w-full items-center gap-2"):
             grep_input = ui.input(placeholder="filter (substring, case-insensitive)")
             grep_input.classes("w-96").props("dense outlined clearable")
             ui.button("Refresh", icon="refresh", on_click=lambda: refresh())
+            ui.space()
+            ui.switch("Max out", value=view["max"], on_change=lambda e: set_max(e.value))
+            for label, key in (("font", "font"), ("cols", "cols"), ("rows", "rows")):
+                ui.label(label).classes("text-caption opacity-60")
+                ui.button(icon="remove", on_click=lambda k=key: bump(k, -1)) \
+                    .props("flat dense size=sm").tooltip(f"smaller {label}")
+                num = ui.number(value=view[key], format="%.0f",
+                                on_change=lambda e, k=key: set_value(k, e.value))
+                num.classes("w-24").props("dense outlined hide-bottom-space")
+                nums[key] = num
+                ui.button(icon="add", on_click=lambda k=key: bump(k, +1)) \
+                    .props("flat dense size=sm").tooltip(f"bigger {label}")
         meta = ui.label("").classes("text-caption opacity-60")
-        log_view = ui.log(max_lines=2500).classes("w-full h-[36rem] font-mono text-xs")
+        log_view = ui.log(max_lines=20000).classes("w-full font-mono")
+
+    def apply_view() -> None:
+        if view["max"]:
+            css = "width:100%; height:calc(100vh - 250px);"
+        else:
+            height = int(view["rows"] * view["font"] * 1.35)
+            css = f"width:{view['cols']}ch; height:{height}px;"
+        css += f"font-size:{view['font']}px; line-height:1.35;"
+        log_view.style(replace=css)
+
+    def set_value(key: str, value) -> None:
+        if value is None:
+            return
+        view[key] = int(value)
+        apply_view()
+
+    def bump(key: str, delta: int) -> None:
+        bounds = {"font": (8, 24), "cols": (40, 1000), "rows": (10, 400)}[key]
+        view[key] = max(bounds[0], min(bounds[1], view[key] + delta))
+        nums[key].value = view[key]  # routes through set_value -> apply_view
+
+    def set_max(enabled: bool) -> None:
+        view["max"] = bool(enabled)
+        apply_view()
 
     async def refresh() -> None:
         response = await get_api_client().get_logs(
@@ -373,6 +431,7 @@ async def logs_page() -> None:
         if auto.value:
             await refresh()
 
+    apply_view()
     await refresh()
     ui.timer(5.0, auto_tick)
 

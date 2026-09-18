@@ -81,7 +81,7 @@ def test_tail_clamps_to_reasonable_maximum(server, log_file):
     client = TestClient(server.app)
     r = client.get("/api/logs", params={"tail": 10_000_000}, headers=AUTH)
     assert r.status_code == 200
-    assert r.json()["tail"] == 5000
+    assert r.json()["tail"] == 20000
 
 
 def test_requires_the_admin_key(server, log_file):
