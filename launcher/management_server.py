@@ -324,23 +324,36 @@ class ManagementServer:
         
         if credentials is None:
             raise HTTPException(status_code=401, detail="Missing API key")
-        
+
         token = credentials.credentials
         if hmac.compare_digest(token, self.api_key):
             self._audit_access(request, "system")
             return "system"
-        
+
         from tools.shared import users_store
         for key, entry in users_store.central_tokens().items():
             if hmac.compare_digest(token, key):
                 self._audit_access(request, entry["client_id"])
                 return entry["client_id"]
-        
+
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
-    @staticmethod
-    def _audit_access(request: Request, who: str) -> None:
-        logger.info(f"central.access user={who} {request.method} {request.url.path}")
+
+    # polled reads (the UI's status poller / Logs auto-refresh) audit at DEBUG:
+    # at INFO they would out-shout everything else in the launcher log — the
+    # Logs tab's own 5s polling was ~720 lines/hour of its own access lines.
+    # Everything else (users, masks, config, env, every mutation) stays INFO.
+    _POLLED_READS = {("GET", "/api/logs"), ("GET", "/api/tools")}
+
+    @classmethod
+    def _audit_level(cls, request: Request) -> int:
+        return (logging.DEBUG
+                if (request.method, request.url.path) in cls._POLLED_READS
+                else logging.INFO)
+
+    @classmethod
+    def _audit_access(cls, request: Request, who: str) -> None:
+        logger.log(cls._audit_level(request),
+                   f"central.access user={who} {request.method} {request.url.path}")
 
     @staticmethod
     def _launcher_log_path() -> Path | None:

@@ -101,6 +101,30 @@ def test_missing_log_file_is_not_an_error(server, monkeypatch):
     assert body["file"] is None and body["lines"] == []
 
 
+def test_polled_reads_audit_at_debug_not_info(server, log_file, caplog):
+    """The Logs tab polls /api/logs every 5s — its central.access lines must
+    be DEBUG (invisible at the default INFO), or the log view fills with its
+    own polling noise (~720 lines/hour). /api/tools (status poller) likewise."""
+    client = TestClient(server.app)
+    with caplog.at_level(logging.DEBUG, logger="launcher.management_server"):
+        client.get("/api/logs", params={"tail": 1}, headers=AUTH)
+        client.get("/api/tools", headers=AUTH)
+        client.get("/api/disabled-tools", headers=AUTH)  # consequential GET stays INFO
+    records = [r for r in caplog.records if "central.access" in r.getMessage()]
+    by_path = {r.getMessage().split()[-1]: r.levelno for r in records}
+    assert by_path["/api/logs"] == logging.DEBUG
+    assert by_path["/api/tools"] == logging.DEBUG
+    assert by_path["/api/disabled-tools"] == logging.INFO
+
+
+def test_log_view_does_not_show_its_own_polling(server, log_file):
+    """End-to-end shape of the user complaint: at the default INFO level,
+    serving /api/logs adds no central.access lines for the next call to show."""
+    client = TestClient(server.app)
+    r1 = client.get("/api/logs", params={"tail": 5}, headers=AUTH)
+    assert all("central.access" not in line for line in r1.json()["lines"])
+
+
 def test_launcher_log_path_prefers_the_file_handler(tmp_path, monkeypatch):
     """Resolution: root-logger FileHandler wins; else logs/launcher.log only
     if it exists; else None."""
