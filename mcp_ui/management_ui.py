@@ -334,7 +334,7 @@ async def logs_page() -> None:
         ui.navigate.to("/")
         return
 
-    tail_size = {"value": 300}
+    tail_size = {"value": 500}
 
     with ui.column().classes("w-full max-w-6xl p-4 gap-2 mx-auto"):
         with ui.row().classes("w-full items-center gap-2"):
@@ -344,7 +344,7 @@ async def logs_page() -> None:
             ui.space()
             auto = ui.switch("Auto", value=True)
             ui.select({200: "200", 500: "500", 1000: "1000", 2000: "2000"},
-                      value=300, label="tail",
+                      value=500, label="tail",
                       on_change=lambda e: tail_size.update(value=e.value),
                       ).classes("w-32").props("dense outlined")
         with ui.row().classes("w-full items-center gap-2"):
