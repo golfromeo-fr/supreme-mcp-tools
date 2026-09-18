@@ -231,7 +231,9 @@ work_env() { action="${1:-up}"; shift || true
       echo; exit 0 ;;
   esac
 
-  # default action: up (rebuild) — stop the running work env first
+  # default action: up (rebuild) — stop the running work env first.
+  # NOTE: the down is project-wide and removes the ui container too, so the
+  # up below must bring ui back (8400 is part of the daily surface).
   echo "[work] stopping the running work env (volumes kept)..."
   ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml down ) 2>/dev/null || true
   podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
@@ -249,7 +251,7 @@ work_env() { action="${1:-up}"; shift || true
   podman rmi -f localhost/mcp-node:latest localhost/mcp-work_work:latest \
               localhost/mcp-work-work_work:latest >/dev/null 2>&1 || true
   ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml \
-      ${BUNDLE_F[@]+"${BUNDLE_F[@]}"} up -d db work )
+      ${BUNDLE_F[@]+"${BUNDLE_F[@]}"} --profile ui up -d db work ui )
 
   echo "[work] waiting for the node central on :8200..."
   if ! wait_http http://127.0.0.1:8200/health 50; then

@@ -54,6 +54,9 @@ services:
       - ${HOST_HF_CACHE}:/root/.cache/huggingface
       # H3: memory artifacts survive container rebuilds (declared volume)
       - work_artifacts:/root/.memorymcp/artifacts
+      # launcher log persists across container recreation (host-equivalent of
+      # logs/launcher.log; tail it: ./startcluster work logs or the volume path)
+      - work_logs:/app/logs
     healthcheck:
       test: ["CMD", "python3", "/app/healthcheck.py"]
       interval: 15s
@@ -79,3 +82,4 @@ services:
 volumes:
   work_pgdata:
   work_artifacts:
+  work_logs:
