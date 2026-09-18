@@ -324,6 +324,59 @@ def users_page() -> None:
         render_users_tab(_users_container)
 
 
+@ui.page("/logs")
+async def logs_page() -> None:
+    """Launcher log viewer — admin only (central /api/logs is admin-gated).
+    Reads the log through the central API, so it shows the launcher's own
+    view of the world whether it runs on the host or in the node image."""
+    if not (nicegui_app.storage.user.get("authenticated", False)
+            and nicegui_app.storage.user.get("role", "user") == "admin"):
+        ui.navigate.to("/")
+        return
+
+    tail_size = {"value": 300}
+
+    with ui.column().classes("w-full max-w-6xl p-4 gap-2 mx-auto"):
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.button("Back", icon="arrow_back",
+                      on_click=lambda: ui.navigate.to("/")).props("flat dense")
+            ui.label("Launcher log").classes("text-h6")
+            ui.space()
+            auto = ui.switch("Auto", value=True)
+            ui.select({200: "200", 500: "500", 1000: "1000", 2000: "2000"},
+                      value=300, label="tail",
+                      on_change=lambda e: tail_size.update(value=e.value),
+                      ).classes("w-32").props("dense outlined")
+        with ui.row().classes("w-full items-center gap-2"):
+            grep_input = ui.input(placeholder="filter (substring, case-insensitive)")
+            grep_input.classes("w-96").props("dense outlined clearable")
+            ui.button("Refresh", icon="refresh", on_click=lambda: refresh())
+        meta = ui.label("").classes("text-caption opacity-60")
+        log_view = ui.log(max_lines=2500).classes("w-full h-[36rem] font-mono text-xs")
+
+    async def refresh() -> None:
+        response = await get_api_client().get_logs(
+            tail=tail_size["value"], grep=(grep_input.value or "").strip() or None)
+        log_view.clear()
+        if response.success and isinstance(response.data, dict):
+            lines = response.data.get("lines", [])
+            for line in lines:
+                log_view.push(line)
+            shown = f"{len(lines)} lines"
+            if response.data.get("grep"):
+                shown += f" (of {response.data.get('total_lines')} in file)"
+            meta.set_text(f"{response.data.get('file') or '(no log file)'} · {shown}")
+        else:
+            meta.set_text(response.error or "failed to read the launcher log")
+
+    async def auto_tick() -> None:
+        if auto.value:
+            await refresh()
+
+    await refresh()
+    ui.timer(5.0, auto_tick)
+
+
 # =============================================================================
 # Page Functions
 # =============================================================================
@@ -735,6 +788,12 @@ async def main_page() -> None:
                         icon="groups",
                         on_click=lambda: ui.navigate.to("/users"),
                     ).classes("w-full").tooltip("Manage user accounts (E3 multi-user)")
+                if is_admin:
+                    ui.button(
+                        "Logs",
+                        icon="receipt_long",
+                        on_click=lambda: ui.navigate.to("/logs"),
+                    ).classes("w-full").tooltip("Tail the launcher log (admin)")
                 # E3: global mask editing is an admin operation — hide the
                 # entry for non-admin sessions (surface-level; central also
                 # gates in M3 style).

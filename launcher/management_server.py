@@ -9,6 +9,8 @@ import asyncio
 import hmac
 import logging
 import os
+from collections import deque
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
@@ -339,7 +341,18 @@ class ManagementServer:
     @staticmethod
     def _audit_access(request: Request, who: str) -> None:
         logger.info(f"central.access user={who} {request.method} {request.url.path}")
-    
+
+    @staticmethod
+    def _launcher_log_path() -> Path | None:
+        """Active launcher log: the root logger's FileHandler target when one
+        is configured (works wherever the launcher runs — repo cwd or /app in
+        the node image), else logs/launcher.log if it exists, else None."""
+        for h in logging.getLogger().handlers:
+            if isinstance(h, logging.FileHandler):
+                return Path(h.baseFilename)
+        p = Path("logs/launcher.log")
+        return p if p.exists() else None
+
     def _register_routes(self) -> None:
         """Register all API routes."""
         
@@ -352,6 +365,33 @@ class ManagementServer:
                 "tools_count": len(tools),
                 "tools": tools
             }
+
+        @self.app.get("/api/logs")
+        async def get_logs(
+            tail: int = 200,
+            grep: str | None = None,
+            _: bool = Depends(self._verify_api_key),
+        ):
+            """Tail the launcher log (admin key). Reads the active root-logger
+            FileHandler's file, so this works wherever the launcher runs —
+            host repo or /app inside the node image. grep filters case-
+            insensitively BEFORE the tail (filter-then-tail, one pass)."""
+            tail = max(1, min(tail, 5000))
+            path = self._launcher_log_path()
+            if path is None:
+                return {"file": None, "lines": [], "total_lines": 0,
+                        "tail": tail, "grep": grep}
+            shown: deque[str] = deque(maxlen=tail)
+            total = 0
+            needle = grep.lower() if grep else None
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for raw in f:
+                    total += 1
+                    if needle is not None and needle not in raw.lower():
+                        continue
+                    shown.append(raw.rstrip("\n"))
+            return {"file": str(path), "lines": list(shown),
+                    "total_lines": total, "tail": tail, "grep": grep}
         
         @self.app.get("/api/tools")
         async def list_tools(_: bool = Depends(self._verify_api_key)):
