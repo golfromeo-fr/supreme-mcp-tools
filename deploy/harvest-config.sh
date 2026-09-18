@@ -16,6 +16,9 @@
 # usage:
 #   deploy/harvest-config.sh [options] [BUNDLE_PATH]
 #
+# BUNDLE_PATH: a path as-is, or a BARE NAME -> <cwd>/my-bundles/<name>.
+# Default: <cwd>/my-bundles/bundle-<UTC YYYYMMDD-HHMM>
+#
 # options:
 #   --zip            also write <BUNDLE_PATH>.zip (chmod 600) — transport copy
 #   --redact         blank out secret values (__REDACTED__) — for sharing; default OFF
@@ -29,8 +32,11 @@ set -euo pipefail
 shopt -s nullglob
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CFG_DIR="${HOME}/.config/supreme-mcp-tools"
+# bare bundle names resolve against the INVOKING directory (startcluster cd's
+# to the repo root before exec'ing us, so it hands us its ORIG_PWD)
+BASE_PWD="${HARVEST_INVOCATION_PWD:-$PWD}"
 
-usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
 
 LIST=0; ZIP=0; REDACT=0; FROM_DB=0
 BUNDLE=""
@@ -46,7 +52,14 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$BUNDLE" ] || BUNDLE="${HOME}/supreme-mcp-tools-bundles/config-bundle-$(date -u +%Y%m%d-%H%M)"
+if [ -z "$BUNDLE" ]; then
+  BUNDLE="$BASE_PWD/my-bundles/bundle-$(date -u +%Y%m%d-%H%M)"
+else
+  case "$BUNDLE" in
+    */*) : ;;                            # explicit path (absolute or relative) — as given
+    *)  BUNDLE="$BASE_PWD/my-bundles/$BUNDLE" ;;   # bare name -> <cwd>/my-bundles/<name>
+  esac
+fi
 
 # ---------- the copy list (source, bundle-relative destination, required?) ----------
 SRCS=(); DSTS=(); REQS=()

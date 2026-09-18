@@ -143,8 +143,14 @@ path ending in `.zip` is unzipped to `deploy/.bundle-tmp/<name>/` first.
 > **Amendment (2026-09-17, post-build):** `-b <path>` is accepted everywhere
 > as the short form of `--config-bundle <path>` (both may also feed the
 > hidden `bundle-node-env` subcommand). `harvest`'s BUNDLE_PATH positional
-> is optional — default
-> `~/supreme-mcp-tools-bundles/config-bundle-<UTC timestamp>`.
+> is optional. **Amendment 2 (2026-09-18, user preference):** the default
+> location is no longer `~/supreme-mcp-tools-bundles/` — a bare NAME lands
+> in `<invocation cwd>/my-bundles/<NAME>` and no argument defaults to
+> `<cwd>/my-bundles/bundle-<UTC ts>` (prefix "bundle" chosen over the
+> user's "bunconfig"/"config" suggestions; one-line switch in
+> harvest-config.sh). `my-bundles/` is gitignored (bundles hold real
+> secrets); startcluster passes its ORIG_PWD via HARVEST_INVOCATION_PWD so
+> "cwd" means where the user invoked ./startcluster.
 
 ---
 

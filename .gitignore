@@ -270,3 +270,4 @@ deploy/compose-test.bundle.yml
 deploy/.bundle-tmp/
 deploy/work.env.bak-*
 deploy/node.env.bak-*
+my-bundles/

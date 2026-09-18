@@ -25,7 +25,7 @@ python -m mcp_ui                             # NiceGUI management UI (port 8400)
 
 # Podman environments + config bundles (plans/pod-config-bundle-2026-09-17.md)
 ./startcluster work|test ...                 # the two pod environments (see deploy/README.md)
-./startcluster harvest [BUNDLE_PATH]         # snapshot working-tree config into a bundle folder/zip
+./startcluster harvest [NAME|PATH]           # snapshot config → <cwd>/my-bundles/<NAME> (default: bundle-<UTC ts>)
 ./startcluster work -b <path>                # seed the pod from a bundle (-b = short --config-bundle; same for test)
 
 # Backend migration

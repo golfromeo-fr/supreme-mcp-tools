@@ -45,8 +45,8 @@ usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; cat <<'HELP'
       data-plane lines are stripped for safety (--keep-dataplanes overrides).
   bundle-node-env <bundle> <work|pg|turso|external-pg|external-turso>
       print the env file a bundle would generate (debug/tests, no podman).
-  harvest [BUNDLE_PATH]  harvest to that folder; default:
-      ~/supreme-mcp-tools-bundles/config-bundle-<UTC timestamp>
+  harvest [BUNDLE_PATH]  harvest into BUNDLE_PATH; a bare NAME goes to
+      <cwd>/my-bundles/<NAME>; default: <cwd>/my-bundles/bundle-<UTC ts>
 HELP
 }
 wait_http() { # url, tries
@@ -409,7 +409,7 @@ case "${1:-}" in
   work)  shift; resolve_bundle; work_env "$@" ;;
   test)  shift; resolve_bundle; test_env "$@" ;;
   pg|turso|external-pg|external-turso) resolve_bundle; test_env "$@" ;;   # legacy shorthand = test
-  harvest) shift; exec "$REPO_ROOT/deploy/harvest-config.sh" "$@" ;;
+  harvest) shift; HARVEST_INVOCATION_PWD="$ORIG_PWD" exec "$REPO_ROOT/deploy/harvest-config.sh" "$@" ;;
   bundle-node-env)   # hidden: print the env a bundle generates (tests/debug, no podman)
     shift
     # the bundle may come as a positional OR via -b/--config-bundle

@@ -178,6 +178,34 @@ def test_zip_round_trip(sandbox, tmp_path):
     assert "b/env/.env" in z.namelist() or "env/.env" in z.namelist()
 
 
+def test_bundle_location_resolution(sandbox, tmp_path, monkeypatch):
+    import os
+    script = str(sandbox / "deploy" / "harvest-config.sh")
+    inv = tmp_path / "inv"
+    inv.mkdir()
+    monkeypatch.chdir(inv)
+
+    # default: <cwd>/my-bundles/bundle-<UTC ts>
+    assert run(["bash", script]).returncode == 0
+    made = list((inv / "my-bundles").iterdir())
+    assert len(made) == 1 and made[0].name.startswith("bundle-")
+
+    # bare name: <cwd>/my-bundles/<name>
+    assert run(["bash", script, "toto"]).returncode == 0
+    assert (inv / "my-bundles" / "toto" / "manifest.json").exists()
+
+    # startcluster hands us its ORIG_PWD — bare names resolve there, not repo-root
+    other = tmp_path / "other"
+    env = dict(os.environ, HARVEST_INVOCATION_PWD=str(other))
+    r = subprocess.run(["bash", script, "from-startcluster"], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert (other / "my-bundles" / "from-startcluster" / "manifest.json").exists()
+
+    # explicit paths (absolute or containing /) pass through unchanged
+    assert run(["bash", script, str(tmp_path / "explicit")]).returncode == 0
+    assert (tmp_path / "explicit" / "manifest.json").exists()
+
+
 # ------------------------------------------------- bundle-node-env (P2)
 
 
