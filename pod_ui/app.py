@@ -27,16 +27,18 @@ def main() -> None:
 
     from . import auth
     from .pages import backups, bundles, dashboard, logs, operations  # noqa: F401 (register pages)
+    from .pages_v2 import bundles as bundles_v2, env as env_v2, home as home_v2  # noqa: F401
 
     auth.register_login_page()
 
+    # ---- v1 (current layout) ----
     @ui.page("/")
     def index() -> None:
         dashboard.page()
 
     @ui.page("/logs")
-    async def logs_page() -> None:
-        await logs.page()
+    def logs_page() -> None:
+        logs.page()
 
     @ui.page("/operations")
     def operations_page() -> None:
@@ -49,6 +51,19 @@ def main() -> None:
     @ui.page("/backups")
     def backups_page() -> None:
         backups.page()
+
+    # ---- v2 (candidate layout, same process so the console sees all ops) ----
+    @ui.page("/v2")
+    def v2_home() -> None:
+        home_v2.page()
+
+    @ui.page("/v2/env/{env_key}")
+    def v2_env(env_key: str) -> None:
+        env_v2.page(env_key)
+
+    @ui.page("/v2/bundles")
+    def v2_bundles() -> None:
+        bundles_v2.page()
 
     ui.run(title="Pod Manager", host=host, port=port,
            storage_secret=secret, reload=False, show=False,
