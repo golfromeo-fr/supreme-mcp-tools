@@ -64,6 +64,9 @@ def frame(title: str):
             ui.button("try the v2 layout", icon="bolt",
                       on_click=lambda: ui.navigate.to("/v2")).classes("w-full") \
                 .props("flat align=left").tooltip("candidate redesign — same backend")
+            ui.button("try the v3 layout", icon="hub",
+                      on_click=lambda: ui.navigate.to("/v3")).classes("w-full") \
+                .props("flat align=left").tooltip("cluster-map redesign — current candidate")
             ui.button("Logout", icon="logout", on_click=logout).classes("w-full").props("flat")
     body = ui.column().classes("w-full p-4 gap-3")
     return body

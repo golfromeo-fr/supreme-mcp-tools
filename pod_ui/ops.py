@@ -151,3 +151,14 @@ class OpRunner:
 
 
 runner = OpRunner()
+
+
+def fire(env_key: str | None, action: str, *args) -> None:
+    """UI-button op launch: refuses while one runs, else starts it in the
+    background so click handlers never block; notifications via NiceGUI
+    (lazy import keeps this module importable from pure tests)."""
+    if runner.running():
+        from nicegui import ui
+        ui.notify("an operation is already running — watch the console", type="warning")
+        return
+    asyncio.ensure_future(runner.start(env_key, action, *args))
