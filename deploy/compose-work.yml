@@ -38,6 +38,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
     network_mode: host            # canonical ports + host-side DSNs/presets
     environment:
       TOOLS_LIST: "simplemcp convertermcp webmcp memorymcp ragmcp databasemcp"

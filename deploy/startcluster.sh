@@ -307,6 +307,10 @@ OWN
   git pull --ff-only || echo "[work] WARNING: pull failed — deploying local code"
 
   echo "[work] (re)building node image + starting work env..."
+  # stamp the image with the real version (podman-compose passes env through
+  # to build.args; without this the labels stay 'dev / unknown')
+  export IMAGE_VERSION="${IMAGE_VERSION:-$(git describe --tags --always --dirty)}"
+  export GIT_SHA="${GIT_SHA:-$(git rev-parse HEAD)}"
   # compose reuses the tagged image if present — drop it so the build runs
   podman rmi -f localhost/mcp-node:latest localhost/mcp-work_work:latest \
               localhost/mcp-work-work_work:latest >/dev/null 2>&1 || true
@@ -496,6 +500,8 @@ OWN
   echo "[test] tearing down old cluster (volumes kept)..."
   cleanup_cluster
   cd deploy
+  export IMAGE_VERSION="${IMAGE_VERSION:-$(git describe --tags --always --dirty)}"
+  export GIT_SHA="${GIT_SHA:-$(git rev-parse HEAD)}"
   podman rmi -f localhost/${PROJECT}_node1:latest localhost/${PROJECT}_node2:latest 2>/dev/null || true
   echo "[test] starting..."
   # MinIO credentials live in deploy/.env (gitignored) — compose reads the

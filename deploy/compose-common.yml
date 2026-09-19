@@ -24,6 +24,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
     environment:
       TOOLS_LIST: "simplemcp convertermcp webmcp"
       MCP_NODE_NAME: node1
@@ -46,6 +49,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
     environment:
       TOOLS_LIST: "simplemcp convertermcp webmcp"
       MCP_NODE_NAME: node2
@@ -70,6 +76,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
     command: ["python3", "-m", "mcp_ui.management_ui"]
     environment:
       MCP_API_URL: http://node1:8200
