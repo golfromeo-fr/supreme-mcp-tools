@@ -39,12 +39,18 @@ BASE_PWD="${HARVEST_INVOCATION_PWD:-$PWD}"
 usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
 
 LIST=0; ZIP=0; REDACT=0; FROM_DB=0
-BUNDLE=""
+BUNDLE=""; FROM_POD=""; ENV_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --zip) ZIP=1 ;;
     --redact) REDACT=1 ;;
     --from-work-db) FROM_DB=1 ;;
+    --from-pod)
+      [ $# -ge 2 ] || { echo "[harvest] --from-pod needs the env's db container name"; exit 1; }
+      FROM_POD="$2"; shift ;;
+    --env-file)
+      [ $# -ge 2 ] || { echo "[harvest] --env-file needs a path"; exit 1; }
+      ENV_FILE="$2"; shift ;;
     --list) LIST=1 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "[harvest] unknown option '$1'"; usage; exit 1 ;;
@@ -64,7 +70,8 @@ fi
 # ---------- the copy list (source, bundle-relative destination, required?) ----------
 SRCS=(); DSTS=(); REQS=()
 add_pair() { SRCS+=("$1"); DSTS+=("$2"); REQS+=("${3:-optional}"); }
-add_pair "$ROOT/.env" "env/.env" required
+ENV_SRC="${ENV_FILE:-$ROOT/.env}"
+add_pair "$ENV_SRC" "env/.env" required
 add_pair "$CFG_DIR/users.json" "identity/users.json"
 add_pair "$CFG_DIR/tools_config.json" "identity/tools_config.json"
 for f in "$ROOT"/config/*.json; do
@@ -87,13 +94,14 @@ if [ "$LIST" = 1 ]; then
     [ "${REQS[$i]}" = required ] && printf "        (required — harvest fails without it)\n"
   done
   [ "$FROM_DB" = 1 ] && echo "  [--from-work-db] users/masks would be pulled from the mcp-work DB if reachable"
+  [ -n "$FROM_POD" ] && echo "  [--from-pod $FROM_POD] users/masks pulled from that db container; env from ENV_SRC (stripped of generator content)"
   [ "$REDACT" = 1 ] && echo "  [--redact] secret values would be replaced with __REDACTED__"
-  [ -f "$ROOT/.env" ] || { echo "FATAL: $ROOT/.env missing"; exit 2; }
+  [ -f "$ENV_SRC" ] || { echo "FATAL: $ENV_SRC missing"; exit 2; }
   exit 0
 fi
 
 # ---------- real harvest ----------
-[ -f "$ROOT/.env" ] || { echo "FATAL: $ROOT/.env missing — nothing to harvest"; exit 2; }
+[ -f "$ENV_SRC" ] || { echo "FATAL: $ENV_SRC missing — nothing to harvest"; exit 2; }
 mkdir -p "$BUNDLE/env" "$BUNDLE/identity" "$BUNDLE/config" "$BUNDLE/tools"
 chmod 700 "$BUNDLE"
 
@@ -102,7 +110,14 @@ for i in "${!SRCS[@]}"; do
   src="${SRCS[$i]}"; dst="${DSTS[$i]}"
   if [ -f "$src" ]; then
     mkdir -p "$BUNDLE/$(dirname "$dst")"
-    cp -p "$src" "$BUNDLE/$dst"
+    if [ -n "$ENV_FILE" ] && [ "$dst" = "env/.env" ]; then
+      # scrape mode: strip startcluster-generated content (state-plane block,
+      # S3 block, [bundle] annotations) — env-specific credentials never
+      # round-trip into a bundle
+      python3 "$ROOT/deploy/env_strip.py" "$src" > "$BUNDLE/$dst"
+    else
+      cp -p "$src" "$BUNDLE/$dst"
+    fi
     printf '%s\t%s\n' "$dst" "$src" >> "$BUNDLE/.sources.tsv"
   else
     if [ "${REQS[$i]}" = required ]; then
@@ -112,24 +127,32 @@ for i in "${!SRCS[@]}"; do
   fi
 done
 
-# ---------- --from-work-db: live identity/docs beat the (possibly stale) json seeds ----------
-db_doc() { # sql, dst, label
-  local tmp="$BUNDLE/$2.tmp"
-  if podman exec mcp-work_db_1 psql -U mcp -d mcp -Atc "$1" > "$tmp" 2>/dev/null \
+# ---------- live identity/docs from a pod DB (exec-based — works without published ports) ----------
+db_doc() { # db_container, sql, dst, label
+  local container="$1" tmp="$BUNDLE/$3.tmp"
+  if podman exec "$container" psql -U mcp -d mcp -Atc "$2" > "$tmp" 2>/dev/null \
        && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp" 2>/dev/null; then
     python3 -c "import json,sys; d=json.load(open(sys.argv[1])); json.dump(d,open(sys.argv[2],'w'),indent=2,ensure_ascii=False)" \
-      "$tmp" "$BUNDLE/$2"
-    rm -f "$tmp"; echo "[harvest] $3 pulled live from the work-cluster DB"
+      "$tmp" "$BUNDLE/$3"
+    rm -f "$tmp"; echo "[harvest] $4 pulled live from $container"
   else
-    rm -f "$tmp"; warn "$3 not available from the work DB — keeping the json seed"
+    rm -f "$tmp"; warn "$4 not available from $container — keeping the json seed"
   fi
 }
 if [ "$FROM_DB" = 1 ]; then
   if podman exec mcp-work_db_1 pg_isready -q -U mcp -d mcp 2>/dev/null; then
-    db_doc "SELECT data FROM mcp_users_store WHERE id = 1" "identity/users.json" "users"
-    db_doc "SELECT data FROM mcp_state_docs WHERE name = 'tools_config'" "identity/tools_config.json" "tools_config"
+    db_doc mcp-work_db_1 "SELECT data FROM mcp_users_store WHERE id = 1" "identity/users.json" "users"
+    db_doc mcp-work_db_1 "SELECT data FROM mcp_state_docs WHERE name = 'tools_config'" "identity/tools_config.json" "tools_config"
   else
     warn "work-cluster DB not reachable — identity/docs stay as the json seeds"
+  fi
+fi
+if [ -n "$FROM_POD" ]; then
+  if podman exec "$FROM_POD" pg_isready -q -U mcp -d mcp 2>/dev/null; then
+    db_doc "$FROM_POD" "SELECT data FROM mcp_users_store WHERE id = 1" "identity/users.json" "users"
+    db_doc "$FROM_POD" "SELECT data FROM mcp_state_docs WHERE name = 'tools_config'" "identity/tools_config.json" "tools_config"
+  else
+    warn "pod DB $FROM_POD not reachable — is the env up, and is it a pg topology? identity/docs stay as the json seeds"
   fi
 fi
 
@@ -193,11 +216,11 @@ TURSO_DIR=$(sed -n 's/^TURSO_DATABASE_URL=file:\([^ ]*\).*/\1/p' "$BUNDLE/env/.e
 GIT_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 GIT_DESCRIBE=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)
 GIT_BRANCH=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
-python3 - "$BUNDLE" "$TURSO_DIR" "$GIT_SHA" "$GIT_DESCRIBE" "$GIT_BRANCH" <<'PY'
+python3 - "$BUNDLE" "$TURSO_DIR" "$GIT_SHA" "$GIT_DESCRIBE" "$GIT_BRANCH" "$FROM_POD" "$ENV_FILE" <<'PY'
 import hashlib, json, os, socket, sys
 from datetime import datetime, timezone
 
-bundle, turso_dir, sha, describe, branch = sys.argv[1:6]
+bundle, turso_dir, sha, describe, branch, from_pod, env_file = sys.argv[1:8]
 sources = {}
 for line in open(os.path.join(bundle, ".sources.tsv"), encoding="utf-8"):
     dst, src = line.rstrip("\n").split("\t", 1)
@@ -230,6 +253,11 @@ manifest = {
     "files": files,
     "warnings": warnings,
 }
+if from_pod:
+    manifest["scraped"] = {"db_container": from_pod,
+                           "env_source": os.path.abspath(env_file),
+                           "note": "identity/docs pulled live from the pod DB; env adopted "
+                                   "from the pod env (generator content stripped)"}
 with open(os.path.join(bundle, "manifest.json"), "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)
     f.write("\n")
