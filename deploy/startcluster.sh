@@ -271,13 +271,23 @@ OWN
   fi
 
   case "$action" in
-    stop)  ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml stop ) ; exit 0 ;;
-    start) ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml start ) ; sleep 5 ;;
+    # stop/start must cover the WHOLE cluster: the ui service is profile-gated
+    # (compose stop ignores it without --profile) — stop it explicitly; sweep
+    # the project prefix so nothing survives as a "partial" stop
+    stop)
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml stop ) 2>/dev/null || true
+      for c in $(podman ps --filter "name=${PROJECT}_" -q); do podman stop -t 10 "$c" >/dev/null 2>&1 || true; done
+      exit 0 ;;
+    start)
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml start ) 2>/dev/null || true
+      [ -n "$(podman ps -a --filter "name=${PROJECT}_ui_1" -q)" ] && podman start "${PROJECT}_ui_1" >/dev/null 2>&1 || true
+      sleep 5 ;;
     clean)
       echo "[work] this removes containers AND the state volume (users/masks) — type 'wipe' to confirm:"
       read -r ans; [ "$ans" = "wipe" ] || { echo "aborted"; exit 1; }
       ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml down -v ) 2>/dev/null || true
       podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
+      for c in $(podman ps -a --filter "name=${PROJECT}_" -q); do podman rm -f "$c" >/dev/null 2>&1 || true; done
       echo "[work] fully wiped"; exit 0 ;;
     logs)  podman logs --tail "${3:-40}" "${PROJECT}_${2:-work}_1"; exit 0 ;;
     ui)
@@ -371,8 +381,19 @@ test_env() { action="${1:-pg}"; shift || true
     # only looks for compose.yml/compose.yaml/docker-compose.yml); the explicit
     # -f chain below mirrors the `up` line so stop/start/clean/status/logs
     # work the same way they always did
-    stop)  ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml stop ) ; exit 0 ;;
-    start) ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml start ) ; sleep 5 ; exit 0 ;;
+    # the cluster spans FOUR compose files (common + topology + lb + artifacts)
+    # — stopping with only compose-common.yml left db/lb/minio running forever
+    # ("partial" stops). Full chain + prefix sweep; start: db first, then all.
+    stop)
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml -f compose-pg.yml \
+          -f compose-lb.yml -f compose-artifacts.yml stop ) 2>/dev/null || true
+      for c in $(podman ps --filter "name=${PROJECT}_" -q); do podman stop -t 10 "$c" >/dev/null 2>&1 || true; done
+      exit 0 ;;
+    start)
+      [ -n "$(podman ps -a --filter "name=${PROJECT}_db_1" -q)" ] && podman start "${PROJECT}_db_1" >/dev/null 2>&1 || true
+      ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml -f compose-pg.yml \
+          -f compose-lb.yml -f compose-artifacts.yml start ) 2>/dev/null || true
+      sleep 5 ; exit 0 ;;
     backup)
       ts=$(date +%Y%m%d-%H%M%S)
       out="${HOME}/supreme-mcp-tools-backups/test-pg-$ts.sql"
