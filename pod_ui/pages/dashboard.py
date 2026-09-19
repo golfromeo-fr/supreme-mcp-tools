@@ -43,13 +43,12 @@ def _env_card(env, sizes: dict[str, str]):
                 .classes("text-caption opacity-60")
         ui.space()
         ui.button("Operations", icon="play_circle",
-                  on_click=lambda e=env.key: ui.navigate.to(f"/operations?env={e.key}")) \
+                  on_click=lambda k=env.key: ui.navigate.to("/operations")) \
             .props("flat dense")
 
 
 def render() -> None:
-    body = ui.column().classes("w-full gap-3")
-    with body:
+    with ui.column().classes("w-full gap-3"):
         statuses = state.env_statuses()
         sizes = state.volume_sizes()
         with ui.row().classes("w-full flex-wrap gap-3"):
@@ -73,13 +72,13 @@ def render() -> None:
             with ui.card().classes("w-full"):
                 ui.label("other containers (read-only)").classes("text-caption opacity-60")
                 ui.label(", ".join(c.name for c in other)).classes("text-caption")
-    # note: state chips rebuild via the page timer below
 
 
 def page() -> None:
     if (body := auth.frame("Dashboard")) is None:
         return
-    holder = ui.column().classes("w-full")
+    with body:
+        holder = ui.column().classes("w-full")
 
     def rebuild() -> None:
         holder.clear()

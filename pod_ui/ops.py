@@ -66,7 +66,6 @@ class OpRunner:
     def __init__(self, script: Path = SCRIPT, history_path: Path = HISTORY_PATH):
         self.script = script
         self.history_path = history_path
-        self.lock = asyncio.Lock()
         self.current: OpState | None = None
         self.history: list[dict] = self._load_history()
 
@@ -89,7 +88,8 @@ class OpRunner:
 
     async def start(self, env_key: str | None, action: str, *args,
                     label: str | None = None) -> OpState | None:
-        """Start an op. Returns None (and does nothing) when one is running."""
+        """Start an op. Returns None (and does nothing) when one is running —
+        the running() guard is the mutual exclusion (no queueing)."""
         if self.running():
             return None
         argv, wipe = build_command(env_key, action, *args, script=self.script)
@@ -97,9 +97,7 @@ class OpRunner:
                      argv=[str(a) for a in argv],
                      started=datetime.now(timezone.utc).isoformat(timespec="seconds"))
         self.current = op
-        self.lock = asyncio.Lock()  # fresh lock per op
-        async with self.lock:
-            await self._run(op, wipe)
+        await self._run(op, wipe)
         self._record(op)
         return op
 
