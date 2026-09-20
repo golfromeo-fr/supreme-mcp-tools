@@ -34,7 +34,7 @@ TOPOLOGY = {
     "test": {
         "title": "Cluster 2 · TEST",
         "nodes": [("lb", 50, 90), ("node1", 210, 40), ("node2", 210, 140),
-                  ("db", 380, 40), ("minio", 380, 140)],
+                  ("db", 380, 40), ("minio", 380, 165)],
         "edges": [("lb", "node1", "balances"), ("lb", "node2", "balances"),
                   ("node1", "db", "state"), ("node2", "db", "state"),
                   ("node1", "minio", "artifacts"), ("node2", "minio", "artifacts")],
@@ -161,7 +161,7 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict) -> None:
                       on_click=lambda k=env.key: _flip(k)).props("flat dense") \
                 .tooltip("switch graph / table view")
 
-        graph_box = ui.column().classes("w-full")
+        graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
         table_box = ui.column().classes("w-full")
 
         with graph_box:
@@ -242,7 +242,14 @@ def page() -> None:
                     for env in statuses:
                         _cluster_card(env, sizes, view_modes)
                 with ui.card().classes("w-full"):
-                    ui.label(f"node image: {state.image_version()}").classes("text-caption")
+                    with ui.row().classes("w-full items-center gap-4"):
+                        ui.label(f"node image: {state.image_version()}").classes("text-caption")
+                        df = state.podman_df_summary()
+                        if df:
+                            ui.space()
+                            ui.label(" · ".join(
+                                f"{r.get('Type')}: {r.get('Size')} (reclaim {r.get('Reclaimable')})"
+                                for r in df)).classes("text-caption opacity-60")
 
         rebuild()
         ui.timer(5.0, rebuild)

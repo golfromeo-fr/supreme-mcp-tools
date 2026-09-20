@@ -67,6 +67,7 @@ def page() -> None:
             auto = ui.switch("Auto", value=True)
             ui.space()
             gear = ui.button(icon="tune").props("flat dense").tooltip("view controls")
+        adv_state = {"v": False}
         advanced = ui.row().classes("w-full items-center gap-2")
         with advanced:
             tail_options = sorted({200, 500, 1000, 2000, 5000, 10000, tail_default})
@@ -84,8 +85,12 @@ def page() -> None:
                 nums[key] = num
                 ui.button(icon="add", on_click=lambda k=key: bump(k, +1)) \
                     .props("flat dense size=sm")
-        advanced.set_visibility(False)
-        gear.on_click(lambda: advanced.toggle())
+        advanced.set_visibility(False)  # Element has NO .toggle() — a dead
+        # button otherwise (silently raises AttributeError on every click)
+        def flip_advanced() -> None:
+            adv_state["v"] = not adv_state["v"]
+            advanced.set_visibility(adv_state["v"])
+        gear.on_click(flip_advanced)
 
         state_label = ui.label("").classes("text-caption")
         meta = ui.label("").classes("text-caption opacity-60")

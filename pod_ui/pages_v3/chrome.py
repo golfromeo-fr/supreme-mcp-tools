@@ -1,6 +1,10 @@
-"""v3 chrome: nav frame + the global console, now WITHOUT the v2 defect
-(the fixed panel covered page content): the body's bottom padding grows
-when the console opens, so nothing is ever cut off."""
+"""v3 chrome: nav frame + the global console as an IN-FLOW page footer.
+
+v2/v3.0 used a position:fixed overlay with manual padding juggling — the
+panel covered page content and got cut at the viewport edge (user-reported).
+An in-flow footer can neither cover nor be cut: it simply lives at the end
+of each page's content, with a floating pill that scrolls to it (and the
+page auto-scrolls there when a new op starts)."""
 
 from __future__ import annotations
 
@@ -38,34 +42,37 @@ def frame_v3(title: str):
 
 
 def mount_console(body) -> None:
+    """In-flow console at the end of the page + floating jump pill."""
     runner = ops.runner
 
-    with ui.element("div").classes("fixed bottom-2 right-2 z-50"):
-        ui.button(icon="terminal").props("round dense color=primary") \
-            .on_click(lambda: set_open(not open_state["v"])) \
-            .tooltip("console — operation output")
+    console_holder = ui.column().classes("w-full gap-2")
+    console_holder.set_visibility(False)  # hidden until first use / pill click
 
-    with ui.element("div").classes(
-            "fixed bottom-0 left-0 right-0 z-40 q-pa-md hidden"
-    ).style("background: rgba(20,20,20,.97); border-top: 1px solid #444;") as panel:
-        with ui.row().classes("w-full items-center gap-2"):
-            status = ui.label("idle").classes("text-caption")
-            ui.space()
-            ui.button("Kill", icon="cancel", on_click=lambda: runner.kill()) \
-                .props("flat dense color=negative")
-            ui.button(icon="close").props("flat dense").on_click(lambda: set_open(False))
-        out_log = ui.log(max_lines=4000).classes("w-full h-52 font-mono text-xs")
-        with ui.expansion("history", caption="recent ops").classes("w-full"):
-            history_slot = ui.column().classes("w-full")
+    with console_holder:
+        with ui.card().classes("w-full gap-2").style(
+                "border: 1px solid #444; background: rgba(20,20,20,.6);"):
+            with ui.row().classes("w-full items-center gap-2"):
+                console_title = ui.label("console").classes("text-h6")
+                status = ui.label("idle").classes("text-caption")
+                ui.space()
+                ui.button("Kill", icon="cancel", on_click=lambda: runner.kill()) \
+                    .props("flat dense color=negative")
+            out_log = ui.log(max_lines=4000).classes("w-full h-52 font-mono text-xs")
+            result = ui.label("").classes("text-caption")
+            with ui.expansion("history", caption="recent ops").classes("w-full"):
+                history_slot = ui.column().classes("w-full")
 
-    open_state = {"v": False}
+    # floating pill: scrolls the page to the in-flow console
+    pill = ui.button(icon="terminal").classes("fixed bottom-2 right-2 z-50") \
+        .props("round dense color=primary").tooltip("jump to console")
 
-    def set_open(open_: bool) -> None:
-        open_state["v"] = open_
-        panel.classes(remove="hidden" if open_ else None,
-                      add=None if open_ else "hidden")
-        # the v2 defect fix: reserve space so the panel never covers content
-        body.style(f"padding-bottom: {'16rem' if open_ else '3.5rem'}")
+    def scroll_to_console() -> None:
+        console_holder.set_visibility(True)
+        ui.run_javascript(
+            "document.querySelector('.podui-console')?.scrollIntoView({behavior:'smooth', block:'start'})")
+
+    pill.on_click(scroll_to_console)
+    console_holder.classes("podui-console")
 
     def render_history() -> None:
         history_slot.clear()
@@ -81,12 +88,13 @@ def mount_console(body) -> None:
         op = runner.current
         op_id = (op.started, op.label) if op else None
         if op_id and op_id != last_id["v"]:
-            set_open(True)
+            scroll_to_console()  # a new op started anywhere → jump to the console
         last_id["v"] = op_id
         if op is None:
             status.set_text("idle")
             return
-        status.set_text(("running: " if not op.done else "finished: ") + op.label)
+        console_title.set_text("console — " + op.label)
+        status.set_text("running" if not op.done else "finished")
         seen = getattr(poll, "_seen", 0)
         if seen > len(op.lines):
             out_log.clear()
@@ -94,8 +102,8 @@ def mount_console(body) -> None:
         for line in op.lines[seen:]:
             out_log.push(line)
         poll._seen = len(op.lines)  # type: ignore[attr-defined]
+        result.set_text(op.result_line())
         if op.done:
             render_history()
 
-    body.style("padding-bottom: 3.5rem")
     ui.timer(1.0, poll)
