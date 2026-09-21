@@ -137,6 +137,18 @@ def env_statuses() -> list[Environment]:
     return result
 
 
+def env_signature(statuses: list[Environment]) -> str:
+    """Change-gate for the dashboard refresh: a compact signature of the
+    container states + health. Identical signature => skip the rebuild so
+    the page never flickers or resets scroll/expansions while you read."""
+    parts = []
+    for env in statuses:
+        parts.append(env.state)
+        parts.append(",".join(f"{label}:{v}" for label, v in sorted(env.health.items())))
+        parts.append(",".join(f"{c.name}:{c.state}" for c in env.containers))
+    return "|".join(parts)
+
+
 def image_version() -> str:
     """'version / sha' from the mcp-node image labels (may be 'dev / unknown'
     for compose-built images — shown honestly, see plan F3)."""

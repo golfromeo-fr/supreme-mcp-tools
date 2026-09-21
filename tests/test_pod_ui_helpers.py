@@ -193,3 +193,13 @@ async def test_runner_kill_marks_interrupted(tmp_path):
     await aio.wait_for(task, timeout=5)
     assert runner.current.done
     assert runner.current.interrupted
+
+
+def test_env_signature_changes_when_state_changes():
+    up = state.parse_ps_rows("a|Up 1 min||\nb|Up 1 min||\n")
+    down = state.parse_ps_rows("a|Exited (0) 1 min||\nb|Up 1 min||\n")
+    e1 = state.Environment("k", "k", "p", "p", containers=list(up), health={"h": "ok"})
+    e2 = state.Environment("k", "k", "p", "p", containers=list(up), health={"h": "ok"})
+    e3 = state.Environment("k", "k", "p", "p", containers=list(down), health={"h": "ok"})
+    assert state.env_signature([e1]) == state.env_signature([e2])  # same => skip rebuild
+    assert state.env_signature([e1]) != state.env_signature([e3])  # change => rebuild

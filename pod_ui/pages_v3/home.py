@@ -131,11 +131,12 @@ def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
     dialog.open()
 
 
-def _cluster_card(env, sizes: dict[str, str], view_modes: dict) -> None:
+def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict):
     topo = TOPOLOGY[env.key]
     rows_by_name = {c.name: c for c in env.containers}
-    with ui.card().classes("w-full gap-2"):
-        with ui.row().classes("w-full items-center gap-3"):
+    with ui.card().classes("w-full gap-0"):
+        # HEADER: always visible — title, state, health, cluster ops
+        with ui.row().classes("w-full items-center gap-3 py-1"):
             ui.label(topo["title"]).classes("text-h6")
             ui.badge(env.state, color=STATE_COLORS.get(env.state, "grey"))
             for label, value in env.health.items():
@@ -156,10 +157,21 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict) -> None:
             ui.button("Rebuild", icon="refresh",
                       on_click=lambda v=rebuild: fire(env.key, v)).props("dense flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")
-            # graph <-> table toggle (per card; choice survives the 5s refresh)
-            ui.button(icon="table_chart",
-                      on_click=lambda k=env.key: _flip(k)).props("flat dense") \
-                .tooltip("switch graph / table view")
+
+        # BODY: collapsible — open/closed survives the 5s refresh (tracked)
+        open_now = open_state.get(env.key, True)
+        vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
+                          for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
+        with ui.expansion("detail", caption=f"volumes: {vols or '—'}",
+                          value=open_now,
+                          on_value_change=lambda e, k=env.key: open_state.update({k: e.value})) \
+                .classes("w-full"):
+            with ui.row().classes("w-full items-center gap-2 pb-1"):
+                ui.button(icon="table_chart",
+                          on_click=lambda k=env.key: _flip(k, view_modes)).props("flat dense") \
+                    .tooltip("switch graph / table view")
+                ui.label("(click a node — or its chip — for actions)").classes(
+                    "text-caption opacity-50")
 
         graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
         table_box = ui.column().classes("w-full")
@@ -186,10 +198,9 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict) -> None:
             chart.on("componentClick", on_node)
             chart.on("chart:click", on_node)
 
-        with graph_box:
             # deterministic click path (and legend): one chip per node,
             # colored by state — same drawer as a graph-node click
-            with ui.row().classes("gap-1"):
+            with ui.row().classes("gap-1 pt-1"):
                 for short, _x, _y in topo["nodes"]:
                     row = rows_by_name.get(topo["container_of"][short])
                     state_word = row.state if row else "absent"
@@ -221,35 +232,36 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict) -> None:
 
         apply_mode()
 
-        vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
-                          for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
-        ui.label(f"volumes: {vols or '—'}").classes("text-caption opacity-60")
-
 
 def page() -> None:
     if (body := frame_v3("Clusters")) is None:
         return
     with body:
         holder = ui.column().classes("w-full gap-3")
-        view_modes: dict = {}  # page-level: survives the 5s content rebuilds
+        view_modes: dict = {}   # graph/table per cluster — survives refresh
+        open_state: dict = {}   # expansion open/closed per cluster — survives refresh
+        last_sig = {"v": None}
 
         def rebuild() -> None:
+            statuses = state.env_statuses()
+            # change-gate: identical signature => leave the DOM alone (no
+            # flicker, no scroll jump, collapsed stays collapsed)
+            sig = state.env_signature(statuses) + f"#{state.image_version()}"
+            if sig == last_sig["v"]:  # nothing changed: leave the DOM untouched
+                return
+            last_sig["v"] = sig
+            sizes = state.volume_sizes()
             holder.clear()
             with holder:
-                statuses = state.env_statuses()
-                sizes = state.volume_sizes()
                 with ui.row().classes("w-full flex-wrap gap-3 items-start"):
                     for env in statuses:
-                        _cluster_card(env, sizes, view_modes)
+                        _cluster_card(env, sizes, view_modes, open_state)
                 with ui.card().classes("w-full"):
-                    with ui.row().classes("w-full items-center gap-4"):
-                        ui.label(f"node image: {state.image_version()}").classes("text-caption")
-                        df = state.podman_df_summary()
-                        if df:
-                            ui.space()
-                            ui.label(" · ".join(
-                                f"{r.get('Type')}: {r.get('Size')} (reclaim {r.get('Reclaimable')})"
-                                for r in df)).classes("text-caption opacity-60")
+                    ui.label(f"node image: {state.image_version()}").classes("text-caption")
 
         rebuild()
-        ui.timer(5.0, rebuild)
+
+        async def tick() -> None:
+            rebuild()
+
+        ui.timer(5.0, tick)

@@ -48,6 +48,8 @@ def mount_console(body) -> None:
     console_holder = ui.column().classes("w-full gap-2")
     console_holder.set_visibility(False)  # hidden until first use / pill click
 
+    body_state = {"expanded": False}
+
     with console_holder:
         with ui.card().classes("w-full gap-2").style(
                 "border: 1px solid #444; background: rgba(20,20,20,.6);"):
@@ -57,10 +59,25 @@ def mount_console(body) -> None:
                 ui.space()
                 ui.button("Kill", icon="cancel", on_click=lambda: runner.kill()) \
                     .props("flat dense color=negative")
-            out_log = ui.log(max_lines=4000).classes("w-full h-52 font-mono text-xs")
-            result = ui.label("").classes("text-caption")
-            with ui.expansion("history", caption="recent ops").classes("w-full"):
-                history_slot = ui.column().classes("w-full")
+                collapse_btn = ui.button(icon="expand_less").props("flat dense") \
+                    .tooltip("collapse")
+            body_col = ui.column().classes("w-full gap-2")
+            with body_col:
+                out_log = ui.log(max_lines=4000).classes("w-full h-52 font-mono text-xs")
+                result = ui.label("").classes("text-caption")
+                with ui.expansion("history", caption="recent ops").classes("w-full"):
+                    history_slot = ui.column().classes("w-full")
+
+        def set_expanded(expanded: bool) -> None:
+            body_state["expanded"] = expanded
+            body_col.set_visibility(expanded)
+            collapse_btn.props('icon="expand_less"' if expanded else 'icon="expand_more"')
+
+        def flip() -> None:
+            set_expanded(not body_state["expanded"])
+
+        collapse_btn.on_click(flip)
+        set_expanded(False)  # start collapsed to one title strip
 
     # floating pill: scrolls the page to the in-flow console
     pill = ui.button(icon="terminal").classes("fixed bottom-2 right-2 z-50") \
@@ -88,7 +105,8 @@ def mount_console(body) -> None:
         op = runner.current
         op_id = (op.started, op.label) if op else None
         if op_id and op_id != last_id["v"]:
-            scroll_to_console()  # a new op started anywhere → jump to the console
+            set_expanded(True)   # a new op started anywhere → expand + jump
+            scroll_to_console()
         last_id["v"] = op_id
         if op is None:
             status.set_text("idle")
