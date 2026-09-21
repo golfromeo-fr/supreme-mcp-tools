@@ -11,7 +11,7 @@ import re
 from nicegui import ui
 
 from .. import ops, state
-from ..confirm import confirm_or_run
+from ..confirm import confirm_action, confirm_or_run
 from ..ops import fire
 from .chrome import frame_v3
 
@@ -72,14 +72,18 @@ def page() -> None:
                 with ui.button("Boot…", icon="rocket_launch").props("dense color=primary"):
                     with ui.menu().props("no-wrap"):
                         ui.menu_item("Boot BASIC from this",
-                                     on_click=lambda i=info: confirm_or_run(
+                                     on_click=lambda i=info: confirm_action(
                                          lambda: _boot("work", i),
-                                         "boot the BASIC cluster from this bundle (stops the "
-                                         "running one; canonical ports must be free)"))
+                                         "Boot the BASIC cluster from this bundle?",
+                                         "Stops the currently running environment "
+                                         "(canonical ports must be free). Rebuild "
+                                         "takes minutes.", button="Boot"))
                         ui.menu_item("Boot TEST (pg) from this",
-                                     on_click=lambda i=info: confirm_or_run(
+                                     on_click=lambda i=info: confirm_action(
                                          lambda: _boot("test", i),
-                                         "boot the TEST cluster from this bundle"))
+                                         "Boot the TEST cluster from this bundle?",
+                                         "Builds/starts node1, node2, db, lb, minio. "
+                                         "Takes minutes.", button="Boot"))
                         ui.separator()
                         ui.menu_item("Scrape BASIC into",
                                      on_click=lambda i=info: confirm_or_run(

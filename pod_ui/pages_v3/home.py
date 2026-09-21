@@ -12,6 +12,7 @@ import subprocess
 from nicegui import ui
 
 from .. import state
+from ..confirm import confirm_action
 from ..ops import fire
 from .chrome import frame_v3
 
@@ -143,9 +144,15 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 ui.badge(f"{label}: {value}",
                          color="positive" if value == "ok" else "negative")
             ui.space()
+            running_n = sum(1 for c in env.containers if c.running)
             if env.state in ("running", "partial"):
-                ui.button("Stop all", icon="stop", on_click=lambda k=env.key: fire(k, "stop")) \
-                    .props("dense")
+                ui.button("Stop all", icon="stop",
+                          on_click=lambda k=env.key, n=running_n: confirm_action(
+                              lambda: fire(k, "stop"),
+                              f"Stop cluster {k}?",
+                              f"All {n} running containers stop. "
+                              "'Start all' brings them back.",
+                              button="Stop all")).props("dense color=negative")
             elif env.state == "absent":
                 boot = "up" if env.key == "work" else "pg"
                 ui.button("Boot cluster", icon="rocket_launch",
@@ -155,7 +162,12 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                           on_click=lambda k=env.key: fire(k, "start")).props("dense color=primary")
             rebuild = "up" if env.key == "work" else "pg"
             ui.button("Rebuild", icon="refresh",
-                      on_click=lambda v=rebuild: fire(env.key, v)).props("dense flat") \
+                      on_click=lambda k=env.key: confirm_action(
+                          lambda: fire(k, rebuild),
+                          f"Rebuild cluster {k}?",
+                          "Stops the cluster, rebuilds the node image, restarts it. "
+                          "Takes minutes — the console shows progress.",
+                          button="Rebuild")).props("dense flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")
 
         # BODY: collapsible — EVERYTHING (toggle, graph/table, chips) folds into
