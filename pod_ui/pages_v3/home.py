@@ -135,23 +135,33 @@ def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
 def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict):
     topo = TOPOLOGY[env.key]
     rows_by_name = {c.name: c for c in env.containers}
+
+    # collapsed BY DEFAULT — the page loads as two compact header strips;
+    # one click on the chevron (or the title) unfolds the cluster.
+    open_now = open_state.get(env.key, False)
+    chevron_icon = "expand_more" if open_now else "chevron_right"
+
     with ui.card().classes("w-full gap-0"):
-        # HEADER: always visible — title, state, health, cluster ops
-        with ui.row().classes("w-full items-center gap-3 py-1"):
-            ui.label(topo["title"]).classes("text-h6")
+        # SINGLE header row: chevron + title + state/health + cluster ops.
+        # No separate expansion row — the ^ lives here (user request).
+        with ui.row().classes("w-full items-center gap-2 py-1"):
+            chevron = ui.button(icon=chevron_icon,
+                                on_click=lambda: flip_open()).props("flat dense") \
+                .tooltip("show/hide cluster detail")
+            ui.label(topo["title"]).classes("text-h6 cursor-pointer") \
+                .on("click", lambda: flip_open())
             ui.badge(env.state, color=STATE_COLORS.get(env.state, "grey"))
             for label, value in env.health.items():
                 ui.badge(f"{label}: {value}",
                          color="positive" if value == "ok" else "negative")
             ui.space()
-            running_n = sum(1 for c in env.containers if c.running)
             if env.state in ("running", "partial"):
                 ui.button("Stop all", icon="stop",
-                          on_click=lambda k=env.key, n=running_n: confirm_action(
+                          on_click=lambda k=env.key: confirm_action(
                               lambda: fire(k, "stop"),
                               f"Stop cluster {k}?",
-                              f"All {n} running containers stop. "
-                              "'Start all' brings them back.",
+                              f"All {sum(1 for c in env.containers if c.running)} running "
+                              "containers stop. 'Start all' brings them back.",
                               button="Stop all")).props("dense color=negative")
             elif env.state == "absent":
                 boot = "up" if env.key == "work" else "pg"
@@ -170,23 +180,16 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                           button="Rebuild")).props("dense flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")
 
-        # BODY: collapsible — EVERYTHING (toggle, graph/table, chips) folds into
-        # the expansion so ^ really hides the card content. Open/closed survives
-        # the 5s refresh (tracked in open_state).
-        open_now = open_state.get(env.key, True)
-        vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
-                          for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
-        with ui.expansion("detail", caption=f"volumes: {vols or '—'}",
-                          value=open_now,
-                          on_value_change=lambda e, k=env.key: open_state.update({k: e.value})) \
-                .classes("w-full"):
+        # BODY: hidden while collapsed; visibility re-applied on rebuilds
+        body = ui.column().classes("w-full gap-2")
+        with body:
             with ui.row().classes("w-full items-center gap-2 pb-1"):
                 ui.button(icon="table_chart",
-                          on_click=lambda k=env.key: _flip(k, view_modes, env.key)).props("flat dense") \
+                          on_click=lambda k=env.key: _flip(k, view_modes)).props("flat dense") \
                     .tooltip("switch graph / table view")
                 ui.label("(click a node — or its chip — for actions)").classes(
                     "text-caption opacity-50")
-
+                ui.space()
             graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
             table_box = ui.column().classes("w-full")
 
@@ -206,14 +209,9 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                     rows = {c.name: c for c in state.containers_by_env().get(env.key, [])}
                     _node_drawer(env.key, short, rows)
 
-                # NiceGUI's echart JS emits clicks as 'componentClick' and
-                # 'chart:click' (see elements/echart/echart.js) — a plain
-                # .on("click") subscribes to an event that never fires
                 chart.on("componentClick", on_node)
                 chart.on("chart:click", on_node)
 
-                # deterministic click path (and legend): one chip per node,
-                # colored by state — same drawer as a graph-node click
                 with ui.row().classes("gap-1 pt-1"):
                     for short, _x, _y in topo["nodes"]:
                         row = rows_by_name.get(topo["container_of"][short])
@@ -236,11 +234,21 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 else:
                     ui.label("no containers (never created)").classes("opacity-60")
 
-            def _flip(key: str, modes: dict) -> None:
-                modes[key] = "table" if modes.get(key, "graph") == "graph" else "graph"
-                graph_box.set_visibility(modes[key] == "graph")
-                table_box.set_visibility(modes[key] != "graph")
+            vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
+                              for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
+            ui.label(f"volumes: {vols or '—'}").classes("text-caption opacity-60")
 
+        def flip_open() -> None:
+            open_state[env.key] = not open_state.get(env.key, False)
+            chevron.props(f'icon="{ "expand_more" if open_state[env.key] else "chevron_right" }"')
+            body.set_visibility(open_state[env.key])
+
+        def _flip(key: str, modes: dict) -> None:
+            modes[key] = "table" if modes.get(key, "graph") == "graph" else "graph"
+            graph_box.set_visibility(modes[key] == "graph")
+            table_box.set_visibility(modes[key] != "graph")
+
+        body.set_visibility(open_now)
 
 
 def page() -> None:
@@ -249,7 +257,7 @@ def page() -> None:
     with body:
         holder = ui.column().classes("w-full gap-3")
         view_modes: dict = {}   # graph/table per cluster — survives refresh
-        open_state: dict = {}   # expansion open/closed per cluster — survives refresh
+        open_state: dict = {}   # cluster body open/closed — DEFAULT COLLAPSED, survives refresh
         last_sig = {"v": None}
 
         def rebuild() -> None:
