@@ -168,7 +168,7 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 .classes("w-full"):
             with ui.row().classes("w-full items-center gap-2 pb-1"):
                 ui.button(icon="table_chart",
-                          on_click=lambda k=env.key: _flip(k, view_modes)).props("flat dense") \
+                          on_click=lambda k=env.key: _flip(k)).props("flat dense") \
                     .tooltip("switch graph / table view")
                 ui.label("(click a node — or its chip — for actions)").classes(
                     "text-caption opacity-50")
