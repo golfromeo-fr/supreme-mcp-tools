@@ -11,6 +11,8 @@ import subprocess
 
 from nicegui import ui
 
+import sys
+
 from .. import state
 from ..confirm import confirm_action
 from ..ops import fire
@@ -132,6 +134,10 @@ def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
     dialog.open()
 
 
+MODE_LABEL = {"graph": "GRAPH", "list": "LIST", "both": "GRAPH + LIST"}
+MODE_ICON = {"graph": "insights", "list": "list", "both": "dynamic_feed"}
+
+
 def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict):
     topo = TOPOLOGY[env.key]
     rows_by_name = {c.name: c for c in env.containers}
@@ -155,6 +161,10 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 ui.badge(f"{label}: {value}",
                          color="positive" if value == "ok" else "negative")
             ui.space()
+            mode = view_modes.get(env.key, "graph")
+            mode_btn = ui.button(MODE_LABEL[mode], icon=MODE_ICON[mode]) \
+                .props("dense flat") \
+                .tooltip("view: graph / list / both — click to cycle")
             if env.state in ("running", "partial"):
                 ui.button("Stop all", icon="stop",
                           on_click=lambda k=env.key: confirm_action(
@@ -183,16 +193,13 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
         # BODY: hidden while collapsed; visibility re-applied on rebuilds
         body = ui.column().classes("w-full gap-2")
         with body:
-            with ui.row().classes("w-full items-center gap-2 pb-1"):
-                ui.button(icon="table_chart",
-                          on_click=lambda k=env.key: _flip(k, view_modes)).props("flat dense") \
-                    .tooltip("switch graph / table view")
-                ui.label("(click a node — or its chip — for actions)").classes(
-                    "text-caption opacity-50")
-                ui.space()
+            ui.label("(click a node — or its chip — for actions)").classes(
+                "text-caption opacity-50")
             graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
             table_box = ui.column().classes("w-full")
 
+            graph_box.set_visibility(mode in ("graph", "both"))
+            table_box.set_visibility(mode in ("list", "both"))
             with graph_box:
                 chart = ui.echart(_graph_options(env.key, rows_by_name)) \
                     .classes("w-full h-64").style("background: rgba(255,255,255,.02)")
@@ -244,9 +251,16 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
             body.set_visibility(open_state[env.key])
 
         def _flip(key: str, modes: dict) -> None:
-            modes[key] = "table" if modes.get(key, "graph") == "graph" else "graph"
-            graph_box.set_visibility(modes[key] == "graph")
-            table_box.set_visibility(modes[key] != "graph")
+            order = ["graph", "list", "both"]
+            nxt = order[(order.index(modes.get(key, "graph")) + 1) % 3]
+            modes[key] = nxt
+            graph_box.set_visibility(nxt in ("graph", "both"))
+            table_box.set_visibility(nxt in ("list", "both"))
+            mode_btn.props(f"icon={MODE_ICON[nxt]} label='{MODE_LABEL[nxt]}'")
+
+        # the header button is created before _flip exists — wire it here,
+        # at card scope (NOT inside _flip: chicken-and-egg dead button)
+        mode_btn.on_click(lambda: _flip(env.key, view_modes))
 
         body.set_visibility(open_now)
 
