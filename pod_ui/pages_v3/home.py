@@ -158,7 +158,9 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                       on_click=lambda v=rebuild: fire(env.key, v)).props("dense flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")
 
-        # BODY: collapsible — open/closed survives the 5s refresh (tracked)
+        # BODY: collapsible — EVERYTHING (toggle, graph/table, chips) folds into
+        # the expansion so ^ really hides the card content. Open/closed survives
+        # the 5s refresh (tracked in open_state).
         open_now = open_state.get(env.key, True)
         vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
                           for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
@@ -168,69 +170,65 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 .classes("w-full"):
             with ui.row().classes("w-full items-center gap-2 pb-1"):
                 ui.button(icon="table_chart",
-                          on_click=lambda k=env.key: _flip(k)).props("flat dense") \
+                          on_click=lambda k=env.key: _flip(k, view_modes, env.key)).props("flat dense") \
                     .tooltip("switch graph / table view")
                 ui.label("(click a node — or its chip — for actions)").classes(
                     "text-caption opacity-50")
 
-        graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
-        table_box = ui.column().classes("w-full")
+            graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
+            table_box = ui.column().classes("w-full")
 
-        with graph_box:
-            chart = ui.echart(_graph_options(env.key, rows_by_name)) \
-                .classes("w-full h-64").style("background: rgba(255,255,255,.02)")
+            with graph_box:
+                chart = ui.echart(_graph_options(env.key, rows_by_name)) \
+                    .classes("w-full h-64").style("background: rgba(255,255,255,.02)")
 
-            def on_node(e) -> None:
-                args = getattr(e, "args", None) or {}
-                if isinstance(args, dict):
-                    data = args.get("data") or {}
-                    short = data.get("name") if isinstance(data, dict) else None
+                def on_node(e) -> None:
+                    args = getattr(e, "args", None) or {}
+                    if isinstance(args, dict):
+                        data = args.get("data") or {}
+                        short = data.get("name") if isinstance(data, dict) else None
+                    else:
+                        short = None
+                    if not short:
+                        return
+                    rows = {c.name: c for c in state.containers_by_env().get(env.key, [])}
+                    _node_drawer(env.key, short, rows)
+
+                # NiceGUI's echart JS emits clicks as 'componentClick' and
+                # 'chart:click' (see elements/echart/echart.js) — a plain
+                # .on("click") subscribes to an event that never fires
+                chart.on("componentClick", on_node)
+                chart.on("chart:click", on_node)
+
+                # deterministic click path (and legend): one chip per node,
+                # colored by state — same drawer as a graph-node click
+                with ui.row().classes("gap-1 pt-1"):
+                    for short, _x, _y in topo["nodes"]:
+                        row = rows_by_name.get(topo["container_of"][short])
+                        state_word = row.state if row else "absent"
+                        color = {"Up": "positive", "absent": "grey-6"}.get(
+                            state_word, "negative")
+                        ui.chip(short, color=color, icon="circle",
+                                on_click=lambda s=short: _node_drawer(
+                                    env.key, s, rows_by_name)) \
+                            .props("outline dense clickable")
+
+            with table_box:
+                if env.containers:
+                    ui.table(
+                        columns=[{"name": c, "label": c, "field": c} for c in
+                                 ("name", "state", "status", "size", "ports")],
+                        rows=[{"name": c.name, "state": c.state, "status": c.status,
+                               "size": c.size, "ports": c.ports} for c in env.containers],
+                        row_key="name").props("dense flat")
                 else:
-                    short = None
-                if not short:
-                    return
-                rows = {c.name: c for c in state.containers_by_env().get(env.key, [])}
-                _node_drawer(env.key, short, rows)
+                    ui.label("no containers (never created)").classes("opacity-60")
 
-            # NiceGUI's echart JS emits clicks as 'componentClick' and
-            # 'chart:click' (see elements/echart/echart.js) — a plain
-            # .on("click") subscribes to an event that never fires
-            chart.on("componentClick", on_node)
-            chart.on("chart:click", on_node)
+            def _flip(key: str, modes: dict) -> None:
+                modes[key] = "table" if modes.get(key, "graph") == "graph" else "graph"
+                graph_box.set_visibility(modes[key] == "graph")
+                table_box.set_visibility(modes[key] != "graph")
 
-            # deterministic click path (and legend): one chip per node,
-            # colored by state — same drawer as a graph-node click
-            with ui.row().classes("gap-1 pt-1"):
-                for short, _x, _y in topo["nodes"]:
-                    row = rows_by_name.get(topo["container_of"][short])
-                    state_word = row.state if row else "absent"
-                    color = {"Up": "positive", "absent": "grey-6"}.get(
-                        state_word, "negative")
-                    ui.chip(short, color=color, icon="circle",
-                            on_click=lambda s=short: _node_drawer(
-                                env.key, s, rows_by_name)) \
-                        .props("outline dense clickable")
-
-        with table_box:
-            if env.containers:
-                ui.table(
-                    columns=[{"name": c, "label": c, "field": c} for c in
-                             ("name", "state", "status", "size", "ports")],
-                    rows=[{"name": c.name, "state": c.state, "status": c.status,
-                           "size": c.size, "ports": c.ports} for c in env.containers],
-                    row_key="name").props("dense flat")
-            else:
-                ui.label("no containers (never created)").classes("opacity-60")
-
-        def apply_mode() -> None:
-            graph_box.set_visibility(view_modes.get(env.key, "graph") == "graph")
-            table_box.set_visibility(view_modes.get(env.key, "graph") != "graph")
-
-        def _flip(key: str) -> None:
-            view_modes[key] = "table" if view_modes.get(key, "graph") == "graph" else "graph"
-            apply_mode()
-
-        apply_mode()
 
 
 def page() -> None:
