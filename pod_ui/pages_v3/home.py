@@ -252,7 +252,8 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 table_box.set_visibility(m in ("list", "both", "side"))
                 if m == "side":
                     views.style("display:grid; grid-template-columns:1fr 1fr; "
-                                "gap:1.5rem; align-items:start; width:100%")
+                                "gap:1.5rem; align-items:start; width:100%; "
+                                "max-width:150rem; margin:0 auto")
                     graph_box.style("width:100%; max-width:none")
                     table_box.style("width:100%; max-width:none")
                 else:
@@ -285,6 +286,10 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
         # the header button is created before _flip exists — wire it here,
         # at card scope (NOT inside _flip: chicken-and-egg dead button)
         mode_btn.on_click(lambda: _flip(env.key, view_modes))
+
+        # apply the stored arrangement ONCE at build — without this the page
+        # opened raw/un-centered until the first mode click (user report)
+        apply_view()
 
         body.set_visibility(open_now)
 
