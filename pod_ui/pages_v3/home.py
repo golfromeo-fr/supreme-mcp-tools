@@ -195,51 +195,80 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
         with body:
             ui.label("(click a node — or its chip — for actions)").classes(
                 "text-caption opacity-50")
-            graph_box = ui.column().classes("w-full max-w-4xl mx-auto")
-            table_box = ui.column().classes("w-full")
+            # one container, three arrangements:
+            #   graph -> centered column (graph + chips)
+            #   list  -> centered table
+            #   both  -> grid: graph | table side by side
+            views = ui.element("div").classes("w-full")
 
-            graph_box.set_visibility(mode in ("graph", "both"))
-            table_box.set_visibility(mode in ("list", "both"))
-            with graph_box:
-                chart = ui.echart(_graph_options(env.key, rows_by_name)) \
-                    .classes("w-full h-64").style("background: rgba(255,255,255,.02)")
+            with views:
+                graph_box = ui.column().classes("w-full")
+                with graph_box:
+                    chart = ui.echart(_graph_options(env.key, rows_by_name)) \
+                        .classes("w-full h-64").style("background: rgba(255,255,255,.02)")
 
-                def on_node(e) -> None:
-                    args = getattr(e, "args", None) or {}
-                    if isinstance(args, dict):
-                        data = args.get("data") or {}
-                        short = data.get("name") if isinstance(data, dict) else None
+                    def on_node(e) -> None:
+                        args = getattr(e, "args", None) or {}
+                        if isinstance(args, dict):
+                            data = args.get("data") or {}
+                            short = data.get("name") if isinstance(data, dict) else None
+                        else:
+                            short = None
+                        if not short:
+                            return
+                        rows = {c.name: c for c in state.containers_by_env().get(env.key, [])}
+                        _node_drawer(env.key, short, rows)
+
+                    chart.on("componentClick", on_node)
+                    chart.on("chart:click", on_node)
+
+                    with ui.row().classes("gap-1 pt-1"):
+                        for short, _x, _y in topo["nodes"]:
+                            row = rows_by_name.get(topo["container_of"][short])
+                            state_word = row.state if row else "absent"
+                            color = {"Up": "positive", "absent": "grey-6"}.get(
+                                state_word, "negative")
+                            ui.chip(short, color=color, icon="circle",
+                                    on_click=lambda s=short: _node_drawer(
+                                        env.key, s, rows_by_name)) \
+                                .props("outline dense clickable")
+
+                table_box = ui.column().classes("w-full")
+                with table_box:
+                    if env.containers:
+                        ui.table(
+                            columns=[{"name": c, "label": c, "field": c} for c in
+                                     ("name", "state", "status", "size", "ports")],
+                            rows=[{"name": c.name, "state": c.state, "status": c.status,
+                                   "size": c.size, "ports": c.ports} for c in env.containers],
+                            row_key="name").props("dense flat")
                     else:
-                        short = None
-                    if not short:
-                        return
-                    rows = {c.name: c for c in state.containers_by_env().get(env.key, [])}
-                    _node_drawer(env.key, short, rows)
+                        ui.label("no containers (never created)").classes("opacity-60")
 
-                chart.on("componentClick", on_node)
-                chart.on("chart:click", on_node)
+            def apply_view() -> None:
+                m = view_modes.get(env.key, "graph")
+                graph_box.set_visibility(m in ("graph", "both"))
+                table_box.set_visibility(m in ("list", "both"))
+                if m == "both":
+                    views.style("display:grid; grid-template-columns:1fr 1fr; "
+                                "gap:1.5rem; align-items:start; width:100%")
+                    graph_box.style("width:100%; max-width:none")
+                    table_box.style("width:100%; max-width:none")
+                elif m == "list":
+                    views.style("display:flex; flex-direction:column; "
+                                "align-items:center; width:100%")
+                    table_box.style("width:100%; max-width:56rem")
+                else:  # graph
+                    views.style("display:flex; flex-direction:column; "
+                                "align-items:center; width:100%")
+                    graph_box.style("width:100%; max-width:56rem")
 
-                with ui.row().classes("gap-1 pt-1"):
-                    for short, _x, _y in topo["nodes"]:
-                        row = rows_by_name.get(topo["container_of"][short])
-                        state_word = row.state if row else "absent"
-                        color = {"Up": "positive", "absent": "grey-6"}.get(
-                            state_word, "negative")
-                        ui.chip(short, color=color, icon="circle",
-                                on_click=lambda s=short: _node_drawer(
-                                    env.key, s, rows_by_name)) \
-                            .props("outline dense clickable")
-
-            with table_box:
-                if env.containers:
-                    ui.table(
-                        columns=[{"name": c, "label": c, "field": c} for c in
-                                 ("name", "state", "status", "size", "ports")],
-                        rows=[{"name": c.name, "state": c.state, "status": c.status,
-                               "size": c.size, "ports": c.ports} for c in env.containers],
-                        row_key="name").props("dense flat")
-                else:
-                    ui.label("no containers (never created)").classes("opacity-60")
+            def _flip(key: str, modes: dict) -> None:
+                order = ["graph", "list", "both"]
+                nxt = order[(order.index(modes.get(key, "graph")) + 1) % 3]
+                modes[key] = nxt
+                apply_view()
+                mode_btn.props(f"icon={MODE_ICON[nxt]} label='{MODE_LABEL[nxt]}'")
 
             vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
                               for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
@@ -249,14 +278,6 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
             open_state[env.key] = not open_state.get(env.key, False)
             chevron.props(f'icon="{ "expand_more" if open_state[env.key] else "chevron_right" }"')
             body.set_visibility(open_state[env.key])
-
-        def _flip(key: str, modes: dict) -> None:
-            order = ["graph", "list", "both"]
-            nxt = order[(order.index(modes.get(key, "graph")) + 1) % 3]
-            modes[key] = nxt
-            graph_box.set_visibility(nxt in ("graph", "both"))
-            table_box.set_visibility(nxt in ("list", "both"))
-            mode_btn.props(f"icon={MODE_ICON[nxt]} label='{MODE_LABEL[nxt]}'")
 
         # the header button is created before _flip exists — wire it here,
         # at card scope (NOT inside _flip: chicken-and-egg dead button)
