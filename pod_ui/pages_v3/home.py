@@ -134,8 +134,9 @@ def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
     dialog.open()
 
 
-MODE_LABEL = {"graph": "GRAPH", "list": "LIST", "both": "GRAPH + LIST"}
-MODE_ICON = {"graph": "insights", "list": "list", "both": "dynamic_feed"}
+MODE_LABEL = {"graph": "GRAPH", "list": "LIST", "both": "BOTH", "side": "SIDE"}
+MODE_ICON = {"graph": "insights", "list": "list",
+             "both": "view_agenda", "side": "splitscreen"}
 
 
 def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict):
@@ -247,25 +248,27 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
 
             def apply_view() -> None:
                 m = view_modes.get(env.key, "graph")
-                graph_box.set_visibility(m in ("graph", "both"))
-                table_box.set_visibility(m in ("list", "both"))
-                if m == "both":
+                graph_box.set_visibility(m in ("graph", "both", "side"))
+                table_box.set_visibility(m in ("list", "both", "side"))
+                if m == "side":
                     views.style("display:grid; grid-template-columns:1fr 1fr; "
                                 "gap:1.5rem; align-items:start; width:100%")
                     graph_box.style("width:100%; max-width:none")
                     table_box.style("width:100%; max-width:none")
-                elif m == "list":
+                else:
                     views.style("display:flex; flex-direction:column; "
                                 "align-items:center; width:100%")
-                    table_box.style("width:100%; max-width:56rem")
-                else:  # graph
-                    views.style("display:flex; flex-direction:column; "
-                                "align-items:center; width:100%")
-                    graph_box.style("width:100%; max-width:56rem")
+                    if m == "list":
+                        table_box.style("width:100%; max-width:56rem")
+                    if m == "both":
+                        graph_box.style("width:100%; max-width:56rem")
+                        table_box.style("width:100%; max-width:56rem")
+                    if m == "graph":
+                        graph_box.style("width:100%; max-width:56rem")
 
             def _flip(key: str, modes: dict) -> None:
-                order = ["graph", "list", "both"]
-                nxt = order[(order.index(modes.get(key, "graph")) + 1) % 3]
+                order = ["graph", "list", "both", "side"]
+                nxt = order[(order.index(modes.get(key, "graph")) + 1) % 4]
                 modes[key] = nxt
                 apply_view()
                 mode_btn.props(f"icon={MODE_ICON[nxt]} label='{MODE_LABEL[nxt]}'")
