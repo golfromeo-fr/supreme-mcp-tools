@@ -203,3 +203,35 @@ def test_env_signature_changes_when_state_changes():
     e3 = state.Environment("k", "k", "p", "p", containers=list(down), health={"h": "ok"})
     assert state.env_signature([e1]) == state.env_signature([e2])  # same => skip rebuild
     assert state.env_signature([e1]) != state.env_signature([e3])  # change => rebuild
+
+
+# ------------------------------------------------- size parsing / cluster disk
+
+
+def test_parse_size_units():
+    assert state.parse_size("48.39MB") == 48_390_000
+    assert state.parse_size("18.8kB") == 18_800
+    assert state.parse_size("0B") == 0
+    assert state.parse_size("1.094GB") == 1_094_000_000
+    assert state.parse_size("garbage") == 0
+
+
+def test_human_size_round_trip():
+    assert state.human_size(0) == "0B"
+    assert state.human_size(999) == "999B"
+    assert state.human_size(48_390_000) == "48.4MB"
+    assert state.human_size(1_094_000_000) == "1.1GB"
+
+
+def test_cluster_disk_sums_containers_and_volumes():
+    rows = state.parse_ps_rows(
+        "mcp-work_db_1|Up 1 min|9.38MB|\n"
+        "mcp-work_work_1|Up 1 min|1.5MB|\n")
+    vols = {"mcp-work_work_pgdata": "48.26MB", "mcp-work_work_logs": "180.9kB"}
+    total = state.cluster_disk(rows, vols)
+    assert "containers 10.9MB" in total and "volumes 48.4MB" in total
+
+
+def test_parse_size_handles_virtual_suffix():
+    assert state.parse_size("1.5MB (virtual 1.2GB)") == 1_500_000
+    assert state.parse_size("9.38MB") == 9_380_000

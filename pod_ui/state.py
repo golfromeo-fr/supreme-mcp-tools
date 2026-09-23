@@ -111,9 +111,45 @@ def run(cmd: list[str], timeout: int = 20) -> str:
 
 
 def containers_by_env() -> dict[str, list[ContainerRow]]:
-    rows = parse_ps_rows(run(["podman", "ps", "-a", "--format",
+    # -s is REQUIRED for {{.Size}}: without it podman renders the size empty
+    rows = parse_ps_rows(run(["podman", "ps", "-a", "-s", "--format",
                               "{{.Names}}|{{.Status}}|{{.Size}}|{{.Ports}}"]))
     return group_containers(rows)
+
+
+_SIZE_UNITS = {"B": 1, "kB": 1000, "KB": 1024, "MB": 1000**2, "MiB": 1024**2,
+               "GB": 1000**3, "GiB": 1024**3, "TB": 1000**4}
+
+
+def parse_size(text: str) -> int:
+    """'48.39MB' or '1.5MB (virtual 1.2GB)' -> bytes (0 on unparsable).
+    Podman container sizes carry a '(virtual ...)' suffix — only the first
+    token is the real value."""
+    t = text.strip().split()[0] if text.strip() else ""
+    for suffix, mult in sorted(_SIZE_UNITS.items(), key=lambda kv: -len(kv[0])):
+        if t.endswith(suffix):
+            try:
+                return int(float(t[: -len(suffix)].strip()) * mult)
+            except ValueError:
+                return 0
+    return 0
+
+
+def human_size(n: int) -> str:
+    """Bytes -> podman-style human string ('48.4MB')."""
+    if n < 1000:
+        return f"{n}B"
+    for suffix, div in (("TB", 1000**4), ("GB", 1000**3), ("MB", 1000**2), ("kB", 1000)):
+        if n >= div:
+            return f"{n / div:.1f}{suffix}"
+    return f"{n}B"
+
+
+def cluster_disk(containers: list[ContainerRow], volumes: dict[str, str]) -> str:
+    """'containers X + volumes Y' human summary for one cluster card."""
+    c_total = sum(parse_size(c.size) for c in containers)
+    v_total = sum(parse_size(v) for k, v in volumes.items())
+    return f"containers {human_size(c_total)} + volumes {human_size(v_total)}"
 
 
 def probe_health(url: str, timeout: float = 3.0) -> str:

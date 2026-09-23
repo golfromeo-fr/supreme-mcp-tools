@@ -274,9 +274,11 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 apply_view()
                 mode_btn.props(f"icon={MODE_ICON[nxt]} label='{MODE_LABEL[nxt]}'")
 
-            vols = " · ".join(f"{k.replace(env.prefix, '').replace('_', '')}={v}"
-                              for k, v in sorted(sizes.items()) if k.startswith(env.prefix))
-            ui.label(f"volumes: {vols or '—'}").classes("text-caption opacity-60")
+            vols = {k: v for k, v in sorted(sizes.items()) if k.startswith(env.prefix)}
+            vols_txt = " · ".join(f"{k.replace(env.prefix, '')}={v}" for k, v in vols.items())
+            disk = state.cluster_disk(env.containers, vols)
+            ui.label(f"cluster disk: {disk} · volumes: {vols_txt or '—'}") \
+                .classes("text-caption opacity-60")
 
         def flip_open() -> None:
             open_state[env.key] = not open_state.get(env.key, False)
