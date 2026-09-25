@@ -13,7 +13,9 @@ usage:
   mode            work | pg | turso | external-pg | external-turso
   existing_env    optional env file to reuse the state-plane POSTGRES_PASSWORD
                   from (keeps an already-initialized pgdata/pg volume reachable)
-  minio_pw        MINIO_ROOT_PASSWORD; "" = no MinIO -> S3_* is stripped
+  minio_pw        MINIO_ROOT_PASSWORD; "" = no MinIO -> S3_* is stripped.
+                  S3_* is emitted for the EMBEDDED pg/turso topologies only —
+                  external-* boots no MinIO container, so it never gets S3_*
   keep_dataplanes "1" = do NOT strip file: data-plane lines (escape hatch)
 
 Safety property: in every test mode, lines whose value is a `file:` URL are
@@ -140,6 +142,14 @@ def main() -> None:
                 continue
 
         # --- state plane: rewritten per mode, never copied ---
+        # external-pg is the exception: the bundle's network POSTGRES_* ARE
+        # the state plane (no embedded db exists to rewrite for), so they
+        # pass through BEFORE the STATE_KEYS drop below — the pass-through
+        # after that drop would be dead code. Host-only POSTGRES_TEST_DSN
+        # was already dropped above.
+        if mode == "external-pg" and key.startswith("POSTGRES_"):
+            out.append(line)
+            continue
         if key in STATE_KEYS:
             out.append(f"# [bundle] dropped {key} (state plane rewritten below)")
             continue
@@ -147,22 +157,20 @@ def main() -> None:
             if mode == "work":
                 out.append(line)  # data plane — the work env mounts the host dir at the same path
                 continue
-            if mode == "external-turso" and key == "TURSO_DATABASE_URL":
-                if is_file_val(key):
+            if mode == "external-turso":
+                # the external state plane needs BOTH the network DSN and its
+                # token — the embedded-sqld rewrite below does not apply here
+                if key == "TURSO_DATABASE_URL" and is_file_val(key):
                     out.append(f"# [bundle] dropped {key} (file: URL — not shareable into containers)")
                     note("external-turso: the bundle has no network TURSO_DATABASE_URL — "
                          "identity plane only, no turso state plane")
                 else:
-                    out.append(line)  # network DSN passes through
+                    out.append(line)  # network DSN / auth token pass through
                 continue
             if mode == "external-pg" and key == "TURSO_AUTH_TOKEN":
                 out.append(line)  # data-plane token for a network turso
                 continue
             out.append(f"# [bundle] dropped {key} (state plane rewritten below)")
-            continue
-        # external-pg keeps the bundle's network POSTGRES_* as the state plane
-        if mode == "external-pg" and key.startswith("POSTGRES_"):
-            out.append(line)
             continue
 
         # --- S3/MinIO: re-added below when a password is known ---
@@ -204,7 +212,10 @@ def main() -> None:
     out += state_block
 
     # ---------- S3/MinIO block ----------
-    if mode != "work":
+    # Only the embedded topologies boot a MinIO container (compose-artifacts
+    # rides the pg/turso up chains); external-* would point S3_ENDPOINT at a
+    # container that does not exist.
+    if mode in ("pg", "turso"):
         out.append("")
         if minio_pw:
             out += ["# ---- shared S3 artifacts (test cluster MinIO) ----",

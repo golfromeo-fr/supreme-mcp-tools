@@ -168,7 +168,10 @@ for line in open(p, encoding="utf-8"):
     m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", s)
     if m and m.group(2) != "":
         k = m.group(1)
-        if secret_suffix.search(k) or (k.startswith("DB_PRESET_") and not k.endswith("_DESC")):
+        # plan §3.1: (KEY|SECRET|TOKEN|PASSWORD|DSN) suffixes, DB_PRESET_*
+        # and the whole POSTGRES_* family redact
+        if (secret_suffix.search(k) or k.startswith("POSTGRES_")
+                or (k.startswith("DB_PRESET_") and not k.endswith("_DESC"))):
             s = k + "=__REDACTED__"
     out.append(s)
 open(p, "w", encoding="utf-8").write("\n".join(out) + "\n")
@@ -210,9 +213,21 @@ chmod 600 "$BUNDLE"/identity/*.json 2>/dev/null || true
 chmod 600 "$BUNDLE"/tools/*/config.json 2>/dev/null || true
 
 # ---------- manifest.json ----------
-# flush warnings first: re-runs overwrite (E14) and the manifest below reads this file
+# flush warnings first: re-runs overwrite them (per-run warnings stay
+# authoritative — E14 keeps HISTORY in manifest.json `previous`, merged below)
 printf '%s\n' "${WARNINGS[@]+"${WARNINGS[@]}"}" > "$BUNDLE/.warnings.txt"
-TURSO_DIR=$(sed -n 's/^TURSO_DATABASE_URL=file:\([^ ]*\).*/\1/p' "$BUNDLE/env/.env" | xargs dirname 2>/dev/null || true)
+# dirname of the file: DSN via parameter expansion — E9: paths with spaces
+# must survive (the old `sed | xargs dirname` truncated at the first space)
+TURSO_DIR=""
+while IFS= read -r _dsn_line; do
+  if [[ "$_dsn_line" =~ ^TURSO_DATABASE_URL=file:(.+)$ ]]; then
+    case "${BASH_REMATCH[1]}" in
+      */*) TURSO_DIR="${BASH_REMATCH[1]%/*}" ;;
+      *)   TURSO_DIR="." ;;
+    esac
+    break
+  fi
+done < "$BUNDLE/env/.env"
 GIT_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 GIT_DESCRIBE=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)
 GIT_BRANCH=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
@@ -258,6 +273,18 @@ if from_pod:
                            "env_source": os.path.abspath(env_file),
                            "note": "identity/docs pulled live from the pod DB; env adopted "
                                    "from the pod env (generator content stripped)"}
+# E14: a re-run (e.g. `startcluster scrape` into the same bundle) must merge
+# manifest history, not destroy it — embed the previous manifest (minus its
+# own `previous` key, keeping the chain one level deep) under `previous`.
+prev_path = os.path.join(bundle, "manifest.json")
+if os.path.exists(prev_path):
+    try:
+        prev = json.load(open(prev_path, encoding="utf-8"))
+        if isinstance(prev, dict):
+            prev.pop("previous", None)
+            manifest["previous"] = prev
+    except Exception as e:
+        print(f"[harvest] WARNING: could not merge previous manifest: {e}", file=sys.stderr)
 with open(os.path.join(bundle, "manifest.json"), "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)
     f.write("\n")

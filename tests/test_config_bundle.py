@@ -336,6 +336,73 @@ def test_bundle_compose_writer_empty(tmp_path):
     assert "services: {}" in out.read_text()
 
 
+# ------------------------------------------------- external topologies (FIX 2/3/4)
+
+
+def bundle_env_rewritten(tmp_path, harvested, replacements):
+    """Copy the bundle with env/.env KEY=VALUE replacements applied in place
+    (keys absent from the bundle env are appended) — bundles are meant to be
+    tweaked in place before a boot."""
+    ext = tmp_path / "ext-bundle"
+    shutil.copytree(harvested, ext)
+    p = ext / "env" / ".env"
+    pending = dict(replacements)
+    lines = []
+    for line in p.read_text().splitlines():
+        key = line.split("=", 1)[0] if "=" in line else None
+        lines.append(f"{key}={pending.pop(key)}" if key in pending else line)
+    lines += [f"{k}={v}" for k, v in pending.items()]
+    p.write_text("\n".join(lines) + "\n")
+    return ext
+
+
+def test_external_pg_keeps_postgres_state_plane(harvested, tmp_path):
+    """external-pg: the bundle's network POSTGRES_* ARE the state plane —
+    they must survive the STATE_KEYS drop (that pass-through used to be dead
+    code), while S3_* stays out (external up starts no MinIO)."""
+    ext = bundle_env_rewritten(tmp_path, harvested, {
+        "POSTGRES_HOST": "192.168.1.5", "POSTGRES_PORT": "5432",
+        "POSTGRES_USER": "mcp", "POSTGRES_PASSWORD": "ext-pw", "POSTGRES_DB": "mcp",
+    })
+    r = startcluster("bundle-node-env", ext, "external-pg",
+                     env_extra={"BUNDLE_MINIO_PW": "minio-secret"})
+    assert r.returncode == 0, r.stderr
+    keys = dict(l.split("=", 1) for l in env_lines(r.stdout) if "=" in l)
+    assert keys["POSTGRES_HOST"] == "192.168.1.5"          # pass-through IS the state plane
+    assert keys["POSTGRES_PASSWORD"] == "ext-pw"
+    assert keys["POSTGRES_DB"] == "mcp"
+    assert keys["MCP_USERS_BACKEND"] == "db"
+    assert "POSTGRES_TEST_DSN" not in keys                 # host-only DSN stays out
+    assert "S3_ENDPOINT" not in keys                       # no MinIO even with a password known
+
+
+def test_external_turso_keeps_url_and_token(harvested, tmp_path):
+    """external-turso: BOTH the network DSN and TURSO_AUTH_TOKEN must survive
+    (the token used to fall through to the embedded-turso drop)."""
+    ext = bundle_env_rewritten(tmp_path, harvested, {
+        "TURSO_DATABASE_URL": "http://192.168.1.7:8080",
+        "TURSO_AUTH_TOKEN": "ext-token",
+    })
+    r = startcluster("bundle-node-env", ext, "external-turso",
+                     env_extra={"BUNDLE_MINIO_PW": "minio-secret"})
+    assert r.returncode == 0, r.stderr
+    keys = dict(l.split("=", 1) for l in env_lines(r.stdout) if "=" in l)
+    assert keys["TURSO_DATABASE_URL"] == "http://192.168.1.7:8080"
+    assert keys["TURSO_AUTH_TOKEN"] == "ext-token"
+    assert "S3_ENDPOINT" not in keys                       # no MinIO even with a password known
+
+
+def test_embedded_turso_still_drops_token(harvested, tmp_path):
+    """Boundary of the external-turso fix: the embedded sqld runs open inside
+    the compose network, so its token is still dropped there."""
+    ext = bundle_env_rewritten(tmp_path, harvested, {"TURSO_AUTH_TOKEN": "emb-token"})
+    r = startcluster("bundle-node-env", ext, "turso", env_extra={"BUNDLE_MINIO_PW": ""})
+    assert r.returncode == 0, r.stderr
+    keys = dict(l.split("=", 1) for l in env_lines(r.stdout) if "=" in l)
+    assert keys["TURSO_DATABASE_URL"] == "http://db:8080"
+    assert "TURSO_AUTH_TOKEN" not in keys
+
+
 # ------------------------------------------------- the merge assumption itself
 
 

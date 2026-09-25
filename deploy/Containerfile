@@ -8,6 +8,32 @@
 # Version stamping: pass build args (deploy/publish-image.sh and startcluster
 # do this automatically):
 #   --build-arg IMAGE_VERSION=<git describe> --build-arg GIT_SHA=<sha>
+# --- credential-sanitize stage (THROWAWAY — never part of the final image) ---
+# tools/*/config.json carry the working tree's REAL auth.api_key values plus
+# non-secret settings the node needs (ragmcp embedding block, convertermcp
+# allowed_roots, ...). Excluding the files would break those, so this stage
+# blanks every auth.api_key to the "image-sanitized" placeholder and the
+# FINAL stage copies only the sanitized tree: no real key exists in any
+# layer of the built image (publish-image.sh can push it). A running node
+# gets its real per-tool key from OUTSIDE the image: the bundle's
+# tools/<name>/config.json mounted over /app/tools/<name>/config.json
+# (bundle mode), or a <NAME>_API_KEY / MCP_API_KEY line in the mounted .env
+# (env beats config.json — _resolve_api_key in tools/shared/server_factory.py).
+FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS tools-sanitized
+WORKDIR /app
+COPY tools/ ./tools/
+RUN printf '%s\n' \
+      'import glob, json' \
+      'for p in sorted(glob.glob("tools/*/config.json")):' \
+      '    d = json.load(open(p))' \
+      '    auth = d.get("auth")' \
+      '    if isinstance(auth, dict) and auth.get("api_key"):' \
+      '        auth["api_key"] = "image-sanitized"' \
+      '        with open(p, "w") as f:' \
+      '            json.dump(d, f, indent=2)' \
+      '            f.write("\n")' \
+      | python3 -
+
 FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
 ARG IMAGE_VERSION=dev
@@ -30,9 +56,11 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
  && pip install --no-cache-dir -r requirements.txt
 
 # Code + runtime config (ports.json, launcher_config.json live in config/)
+# tools/ comes from the sanitize stage — the raw COPY layer with the real
+# auth.api_key values never enters this image (see the stage comment above).
 COPY launcher/ ./launcher/
 COPY monitoring/ ./monitoring/
-COPY tools/ ./tools/
+COPY --from=tools-sanitized /app/tools ./tools/
 COPY mcp_ui/ ./mcp_ui/
 COPY config/ ./config/
 COPY launchmcp.py .
@@ -50,7 +78,13 @@ ENV MCP_AUTH_MODE=multi \
     MCP_STATE_BACKEND=db \
     TOOLS_LIST="simplemcp convertermcp webmcp"
 # NOTE: POSTGRES_HOST/USER/PASSWORD/DB and the identity/management secrets
-# come from the mounted .env — NOT baked into the image.
+# come from the mounted .env — NOT baked into the image. Same for the tools'
+# auth.api_key: the build sanitizes the baked copies to "image-sanitized"
+# (tools-sanitized stage above); a node gets its real per-tool keys from the
+# bundle config mount or a <NAME>_API_KEY / MCP_API_KEY line in the mounted
+# .env (env beats config.json). With neither, the tool's admin system key IS
+# the placeholder — the node still boots multi-user, but set an override to
+# keep that system key secret.
 
 # launchmcp.py loads the root .env BEFORE any tool import (auth-order fix,
 # 2026-09-09): the mounted /app/.env is what makes this node multi-user.
