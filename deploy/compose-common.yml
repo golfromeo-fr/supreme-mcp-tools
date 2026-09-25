@@ -82,6 +82,9 @@ services:
     command: ["python3", "-m", "mcp_ui.management_ui"]
     environment:
       MCP_API_URL: http://node1:8200
+      # live tools/list for inventory discovery targets the node's MCP ports,
+      # which are NOT on the ui container's own 127.0.0.1
+      MCP_DISCOVERY_HOST: node1
     volumes:
       - ./node.env:/app/.env:ro
     ports:

@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import sys
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -92,15 +92,27 @@ def shared_exec():
 
 
 def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+    # Microsecond precision: this stamp IS the CAS version, compared for
+    # equality by save_doc_cas. Second precision let two same-second writers
+    # both pass the guard (the row's stamp never moved) with the second
+    # payload silently winning.
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+
+
+def _stamp_plus_1us(stamp: str) -> str:
+    """``stamp`` advanced by exactly one microsecond (same fixed format)."""
+    dt = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S.%f+00:00")
+    return (dt + timedelta(microseconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
 
 def _conn():
-    """State-docs executor, initialized once with its schema."""
+    """State-docs executor, initialized once with its schema. The done-flag
+    only latches on a SUCCESSFUL connect: a transient failure at first use
+    (backend still booting, network blip) must not leave the whole state
+    plane dead for the process lifetime — the next call retries."""
     global _conn_singleton, _init_done
     if _init_done:
         return _conn_singleton
-    _init_done = True
     try:
         ex = shared_exec()
         if ex is None:
@@ -108,11 +120,12 @@ def _conn():
         for stmt in _SCHEMA:
             ex.execute(stmt)
         _conn_singleton = ex
+        _init_done = True
         logger.info("[M4] state docs: SQL backend active")
     except Exception as e:
         logger.warning(
             f"MCP_STATE_BACKEND=db init failed ({type(e).__name__}: {e}) - "
-            "staying on local files"
+            "staying on local files; retrying on the next call"
         )
         _conn_singleton = None
     return _conn_singleton
@@ -214,10 +227,18 @@ def save_doc_cas(name: str, doc: dict, expected_updated_at: str | None) -> bool:
                 (name, payload, _now_iso()),
             )
         else:
+            stamp = _now_iso()
+            if stamp == expected_updated_at:
+                # A writer must never CAS against its own just-written stamp:
+                # if the fresh timestamp equals the row's current one, the
+                # row's version wouldn't move and the next same-microsecond
+                # reader would win against us too. Nudge by 1µs so every
+                # successful write strictly advances the version.
+                stamp = _stamp_plus_1us(stamp)
             conn.execute(
                 f"UPDATE {_TABLE} SET data = ?, updated_at = ? "
                 f"WHERE name = ? AND updated_at = ?",
-                (payload, _now_iso(), name, expected_updated_at),
+                (payload, stamp, name, expected_updated_at),
             )
         # Verify-read instead of trusting cursor.rowcount (libsql cursors
         # don't reliably expose it): success = our exact payload now sits in

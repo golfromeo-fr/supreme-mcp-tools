@@ -331,6 +331,21 @@ def discover_all_tools(
         return {}
 
 
+def merge_discovered_tools(config: dict, discovered: dict[str, list[str]]) -> dict:
+    """UNION, not replace: discovery runs through the RUNNING servers, where
+    E1 global masks hide tools from every caller (admin included). A replace
+    would shrink the inventory and — via validate_and_cleanup — eventually
+    destroy the masks themselves (the E3 "mask self-destruct", 07bdb1a).
+    Union keeps previously-seen functions listed; stale entries are harmless
+    (they only widen the Users-UI picker). Mutates and returns config."""
+    if "tools" not in config:
+        config["tools"] = {}
+    for server_name, tools in discovered.items():
+        existing = config["tools"].get(server_name) or []
+        config["tools"][server_name] = sorted(set(existing) | set(tools))
+    return config
+
+
 def update_config_with_discovered_tools(
     server_urls: dict[str, str],
     config_path: Path | None = None,
@@ -352,18 +367,7 @@ def update_config_with_discovered_tools(
     discovered = discover_all_tools(server_urls, timeout, auth_keys=auth_keys)
 
     config = load_tools_config(config_path)
-    if "tools" not in config:
-        config["tools"] = {}
-
-    # UNION, not replace: discovery runs through the RUNNING servers, where
-    # E1 global masks hide tools from every caller (admin included). A
-    # replace would shrink the inventory and — via validate_and_cleanup —
-    # eventually destroy the masks themselves (the E3 "mask self-destruct",
-    # 07bdb1a). Union keeps previously-seen functions listed; stale entries
-    # are harmless (they only widen the Users-UI picker).
-    for server_name, tools in discovered.items():
-        existing = config["tools"].get(server_name) or []
-        config["tools"][server_name] = sorted(set(existing) | set(tools))
+    config = merge_discovered_tools(config, discovered)
 
     save_tools_config(config, config_path)
     return discovered

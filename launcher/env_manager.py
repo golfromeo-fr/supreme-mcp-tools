@@ -345,7 +345,7 @@ def _validate_env_value(var_name: str, value: str, schema: dict[str, Any]) -> No
             raise ValueError(f"{var_name} must be 'true' or 'false', got: {value!r}")
 
 
-def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
+def set_env_value(var_name: str, value: str, persist: bool = True) -> bool:
     """
     Set an environment variable both in memory and optionally in .env file.
 
@@ -353,6 +353,11 @@ def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
         var_name: Environment variable name
         value: New value
         persist: Whether to also write to .env file
+
+    Returns:
+        True when the change is fully propagated — including non-db mode,
+        where there is no shared state plane to update. False = db mode and
+        the shared doc did not take the change (other nodes won't adopt it).
 
     Raises:
         ValueError: If value doesn't match the variable's type/constraints
@@ -368,11 +373,13 @@ def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
 
     # M4: mirror to the shared state — every node adopts at boot
     from tools.shared import cluster
+    shared_state_updated = True  # non-db mode: nothing shared pending
     if cluster.is_db_mode():
         try:
-            cluster.mirror_env(var_name, value)
+            shared_state_updated = cluster.mirror_env(var_name, value)
         except Exception as e:
             logger.warning(f"[M4] env mirror failed for {var_name}: {e}")
+            shared_state_updated = False
 
     if persist:
         env_path = find_env_file()
@@ -391,14 +398,20 @@ def set_env_value(var_name: str, value: str, persist: bool = True) -> None:
     # Invalidate schema cache if this var's tool schema might be affected
     # (schemas don't change, but this is a good practice)
 
+    return shared_state_updated
 
-def delete_env_value(var_name: str, persist: bool = True) -> None:
+
+def delete_env_value(var_name: str, persist: bool = True) -> bool:
     """
     Remove an environment variable from memory and optionally from .env file.
 
     Args:
         var_name: Environment variable name
         persist: Whether to also comment out in .env file
+
+    Returns:
+        True when the deletion is fully propagated — including non-db mode.
+        False = db mode and the shared doc did not record the tombstone.
     """
     # Remove from runtime environment
     if var_name in os.environ:
@@ -407,11 +420,13 @@ def delete_env_value(var_name: str, persist: bool = True) -> None:
 
     # M4: mirror the deletion to the shared state
     from tools.shared import cluster
+    shared_state_updated = True  # non-db mode: nothing shared pending
     if cluster.is_db_mode():
         try:
-            cluster.mirror_env(var_name, None)
+            shared_state_updated = cluster.mirror_env(var_name, None)
         except Exception as e:
             logger.warning(f"[M4] env mirror failed for {var_name}: {e}")
+            shared_state_updated = False
 
     if persist:
         env_path = find_env_file()
@@ -424,6 +439,8 @@ def delete_env_value(var_name: str, persist: bool = True) -> None:
                     f"authoritative for {var_name} deletion")
             else:
                 raise
+
+    return shared_state_updated
 
 
 def _update_env_file(var_name: str, value: str, env_path: Path) -> None:

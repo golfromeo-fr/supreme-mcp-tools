@@ -4,9 +4,12 @@ Three documents in the shared backend (state_docs, db mode):
 
   cluster_nodes  {node_name: {"central_url": ..., "registered_at": ...}}
                  — who is in the cluster; enables runtime mask fan-out.
-  env_overrides  {var_name: value}
+  env_overrides  {var_name: value | {"__deleted__": true}}
                  — env vars set via a central API; ADOPTED BY EVERY NODE
-                   AT BOOT (os.environ, before tool imports).
+                   AT BOOT (os.environ, before tool imports). Deletions are
+                   recorded as tombstones so adoption REMOVES the variable
+                   everywhere (read-only .env mounts would re-absorb a
+                   popped value); plain readers filter them out.
   auth_overrides {tool_name: {"api_key": ...}}
                  — tool auth sections set via the central API; adopted at
                    boot into the node's local tools/<name>/config.json
@@ -129,33 +132,99 @@ def mark_unreachable(name: str) -> bool:
 # override mirroring (central mutation → boot adoption)
 # ---------------------------------------------------------------------------
 
+# Deletion marker for env_overrides entries. A tombstone (instead of popping
+# the key) is what makes a deletion propagate: nodes mount .env READ-ONLY, so
+# without it the revoked value would be re-absorbed from the mount on the
+# next boot. JSON-serializable dict, so the doc stays str -> JSON.
+ENV_TOMBSTONE = {"__deleted__": True}
+
+
+def is_env_tombstone(value: object) -> bool:
+    """True when an env_overrides entry is a deletion tombstone."""
+    return isinstance(value, dict) and value.get("__deleted__") is True
+
+
+def load_env_overrides() -> dict[str, str]:
+    """env_overrides doc with tombstones (and any malformed entry) filtered
+    out — the plain var -> value shape every ordinary reader expects.
+    Tombstoned variables must never surface as variables."""
+    from tools.shared import state_docs
+
+    doc = state_docs.load_doc(DOC_ENV) or {}
+    return {var: value for var, value in doc.items() if isinstance(value, str)}
+
+
+def _mirror_outcome(doc_name: str, subject: str, ok: bool) -> bool:
+    """Single place for the mirror-failure warning. In db mode a False
+    return means the mutation did NOT reach the shared doc (backend down or
+    CAS races exhausted) — other nodes will never adopt it, so say so loudly.
+    In json (non-db) mode False is the normal fail-open-to-local contract
+    and must stay quiet (no warning spam)."""
+    if not ok and is_db_mode():
+        logger.warning(
+            f"[M4] {doc_name} mirror for '{subject}' did NOT reach the "
+            "shared state doc (backend unavailable or concurrent-write "
+            "attempts exhausted) - local-only change, other nodes won't "
+            "adopt it")
+    return ok
+
+
 def mirror_env(var_name: str, value: str | None) -> bool:
-    """Mirror an env-var mutation; value=None records a deletion."""
+    """Mirror an env-var mutation; value=None records a deletion TOMBSTONE
+    (boot adoption removes the variable everywhere — see ENV_TOMBSTONE).
+    False = json mode (normal fail-open) or, in db mode, the write didn't
+    land (logged as a warning)."""
     def _mutate(doc: dict) -> bool:
         if value is None:
-            doc.pop(var_name, None)
+            doc[var_name] = dict(ENV_TOMBSTONE)
         else:
             doc[var_name] = value
         return True
-    return _update_doc(DOC_ENV, _mutate)
+    return _mirror_outcome(DOC_ENV, var_name, _update_doc(DOC_ENV, _mutate))
 
 
 def mirror_auth(tool_name: str, api_key: str) -> bool:
     def _mutate(doc: dict) -> bool:
         doc[tool_name] = {"api_key": api_key}
         return True
-    return _update_doc(DOC_AUTH, _mutate)
+    return _mirror_outcome(DOC_AUTH, tool_name, _update_doc(DOC_AUTH, _mutate))
+
+
+def _forget_env_local(var_name: str) -> None:
+    """Best-effort local .env cleanup for a tombstoned variable: comment out
+    its line so a WRITABLE node stops re-loading the revoked value. Never
+    fatal — containers mount .env read-only and rely on the os.environ pop
+    instead (adoption runs after load_dotenv)."""
+    try:
+        from launcher.env_manager import _comment_out_env_line, find_env_file
+
+        path = find_env_file()
+        if path is not None and path.exists():
+            _comment_out_env_line(var_name, path)
+    except Exception as e:
+        logger.debug(
+            f"[M4] local .env cleanup for '{var_name}' skipped: {e}")
 
 
 def adopt_env_overrides(env: dict[str, str] | None = None) -> list[str]:
-    """Apply env_overrides to os.environ (before tool imports). Returns
-    the applied var names. Values already correct are left alone."""
+    """Apply env_overrides to os.environ (before tool imports). Tombstoned
+    entries are DELETIONS: the variable is removed from the target mapping
+    and (best-effort) commented out of a writable local .env. Returns the
+    applied var names. Values already correct are left alone."""
     from tools.shared import state_docs
 
     doc = state_docs.load_doc(DOC_ENV)
     target = env if env is not None else os.environ
     applied = []
     for var, value in (doc or {}).items():
+        if is_env_tombstone(value):
+            if var in target:
+                del target[var]
+                applied.append(var)
+            _forget_env_local(var)
+            continue
+        if not isinstance(value, str):
+            continue  # malformed entry — never leak it into the environment
         if target.get(var) != value:
             target[var] = value
             applied.append(var)

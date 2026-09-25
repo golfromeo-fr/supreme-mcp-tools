@@ -73,6 +73,16 @@ async def _push_runtime_mask(req: MaskRequest, fanout: bool = True) -> dict:
 _mask_fanout_tasks: set = set()
 
 
+def _fanout_failure_is_connection_error(exc: BaseException) -> bool:
+    """True for connection-level fan-out failures (DNS/connect/timeout/OS
+    socket) — the sibling is genuinely DOWN. An HTTP refusal (401/403/404/
+    5xx) is NOT: the node answered, so it stays in the fan-out set and
+    converges via its next boot adoption instead."""
+    import httpx
+
+    return isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, OSError))
+
+
 def _schedule_mask_fanout(req: MaskRequest) -> None:
     """Fire-and-forget fan-out to sibling cluster nodes (never blocks the
     API response; failures only log — boot-time adoption converges)."""
@@ -93,28 +103,42 @@ def _schedule_mask_fanout(req: MaskRequest) -> None:
             headers = {"Authorization": f"Bearer {key}"} if key else {}
             body = {"server_name": req.server_name, "tool_name": req.tool_name,
                     "masked": req.masked, "fanout": True}
-            applied, failed = [], []
+            applied, failed, refused = [], [], []
             async with httpx.AsyncClient(timeout=5.0) as client:
                 for peer, url in siblings.items():
                     try:
                         r = await client.post(
                             f"{url.rstrip('/')}/api/internal/mask-push",
                             json=body, headers=headers)
-                        (applied if r.status_code == 200 else failed).append(peer)
-                    except Exception:
-                        failed.append(peer)
-            # M4: failed peers are marked unreachable and drop out of
-            # future fan-outs until their next boot re-registers them.
+                        if r.status_code == 200:
+                            applied.append(peer)
+                        else:
+                            refused.append((peer, r.status_code))
+                    except Exception as e:
+                        if _fanout_failure_is_connection_error(e):
+                            failed.append(peer)
+                        else:
+                            refused.append((peer, type(e).__name__))
+            # M4: only connection-level failures mark a peer unreachable
+            # (dropped from future fan-outs until its next boot re-registers
+            # it). An HTTP refusal means the node is REACHABLE — marking it
+            # would silently drop a healthy sibling until reboot.
+            for peer, status in refused:
+                logging.getLogger(__name__).warning(
+                    f"[M4] mask fan-out to {peer} refused ({status}) - node "
+                    "is reachable, NOT marked unreachable")
             for peer in failed:
                 try:
                     cluster.mark_unreachable(peer)
                 except Exception:
                     pass
-            if applied or failed:
+            if applied or failed or refused:
                 logging.getLogger(__name__).info(
                     f"[M4] mask fan-out {req.tool_name}({'masked' if req.masked else 'enabled'}) "
                     f"-> applied: {applied or '[]'} failed: {failed or '[]'}"
-                    + (" (marked unreachable)" if failed else ""))
+                    + (" (marked unreachable)" if failed else "")
+                    + (f" refused: {[f'{p} ({s})' for p, s in refused] or '[]'}"
+                       if refused else ""))
         except Exception as e:
             logging.getLogger(__name__).warning(
                 f"[M4] mask fan-out crashed before reaching any sibling "
@@ -820,10 +844,14 @@ class ManagementServer:
                     detail=f"Unknown environment variables: {', '.join(unknown_vars)}"
                 )
 
-            # Set each variable (validate + update)
+            # Set each variable (validate + update). set_env_value returns
+            # False only in db mode when the shared state doc did not take
+            # the change (non-db mode is always fully propagated).
+            shared_state_updated = True
             for var_name, value in request.variables.items():
                 try:
-                    set_env_value(var_name, value, persist=True)
+                    if set_env_value(var_name, value, persist=True) is False:
+                        shared_state_updated = False
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=str(e))
 
@@ -832,7 +860,10 @@ class ManagementServer:
             return {
                 "tool_name": tool_name,
                 "variables": updated,
-                "updated_count": len(request.variables)
+                "updated_count": len(request.variables),
+                # M4: False = the change is local-only (shared state backend
+                # down / write races lost) — other nodes won't adopt it.
+                "shared_state_updated": shared_state_updated,
             }
 
         @self.app.delete("/api/tools/{tool_name}/env/{var_name}")
@@ -849,11 +880,14 @@ class ManagementServer:
                     detail=f"Variable '{var_name}' not found in tool '{tool_name}'"
                 )
 
-            delete_env_value(var_name, persist=True)
+            shared_state_updated = delete_env_value(var_name, persist=True)
             return {
                 "tool_name": tool_name,
                 "variable": var_name,
-                "deleted": True
+                "deleted": True,
+                # M4: False = tombstone is local-only (shared state backend
+                # down) — other nodes won't remove the variable.
+                "shared_state_updated": shared_state_updated,
             }
 
         @self.app.get("/api/env")
@@ -911,13 +945,18 @@ class ManagementServer:
             atomic_write_json(config_path, config)
 
             # M4: mirror to the shared state — every node adopts at boot
+            shared_state_updated = True  # non-db mode: nothing shared pending
             if cluster.is_db_mode():
                 try:
-                    cluster.mirror_auth(tool_name, request.api_key)
+                    shared_state_updated = cluster.mirror_auth(
+                        tool_name, request.api_key)
                 except Exception as e:
-                    logger.warning(f"[M4] auth mirror failed for {tool_name}: {e}")
+                    logger.warning(
+                        f"[M4] auth mirror failed for {tool_name}: {e}")
+                    shared_state_updated = False
 
-            return {"success": True}
+            return {"success": True,
+                    "shared_state_updated": shared_state_updated}
 
     @property
     def event_aggregator(self):

@@ -31,10 +31,13 @@ def test_node_registry_round_trip(db_backend):
 def test_env_mirror_and_delete(db_backend):
     cluster.mirror_env("BRAVE_API_KEY", "new-key")
     cluster.mirror_env("OTHER", "v")
-    cluster.mirror_env("OTHER", None)  # deletion
+    cluster.mirror_env("OTHER", None)  # deletion → tombstone, not a pop
     from tools.shared import state_docs
     doc = state_docs.load_doc(cluster.DOC_ENV)
-    assert doc == {"BRAVE_API_KEY": "new-key"}
+    assert doc["BRAVE_API_KEY"] == "new-key"
+    assert cluster.is_env_tombstone(doc["OTHER"])
+    # plain readers never see the tombstone as a variable
+    assert cluster.load_env_overrides() == {"BRAVE_API_KEY": "new-key"}
 
 
 def test_adopt_env_overrides(db_backend, monkeypatch):

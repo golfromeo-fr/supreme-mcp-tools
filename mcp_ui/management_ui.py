@@ -527,7 +527,7 @@ async def _refresh_tools(tools_filter: set[str] | None = None) -> None:
 async def _open_tool_settings(state) -> None:
     """Open the global tool settings dialog."""
     from .components.tool_settings import _load_tools_config, _save_tools_config
-    from launcher.tools_config import discover_tools_from_server
+    from launcher.tools_config import discover_tools_from_server, merge_discovered_tools
     from launcher.env_manager import load_auth_config
 
     servers = [tool.name for tool in state.tools]
@@ -538,14 +538,20 @@ async def _open_tool_settings(state) -> None:
     for tool_info in state.tools:
         server_name = tool_info.name
         if not config.get("tools", {}).get(server_name) and tool_info.mcp_port:
-            mcp_url = f"http://127.0.0.1:{tool_info.mcp_port}/mcp"
+            # In-pod the MCP ports are NOT on 127.0.0.1 — the discovery host
+            # is overridden via MCP_DISCOVERY_HOST (e.g. the node hostname).
+            discovery_host = os.environ.get("MCP_DISCOVERY_HOST", "127.0.0.1")
+            mcp_url = f"http://{discovery_host}:{tool_info.mcp_port}/mcp"
             auth_cfg = load_auth_config(server_name)
             api_key = auth_cfg.get("api_key")
             discovered = await discover_tools_from_server(mcp_url, api_key=api_key)
             if discovered:
-                if "tools" not in config:
-                    config["tools"] = {}
-                config["tools"][server_name] = discovered
+                # UNION, never replace: a live tools/list hides masked
+                # functions (E1) — replacing the entry would permanently
+                # drop them from the inventory, so a later re-discovery
+                # could never restore them after unmasking.
+                config = merge_discovered_tools(
+                    config, {server_name: discovered})
                 needs_update = True
 
     if needs_update:

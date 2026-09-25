@@ -36,6 +36,21 @@ _root_env = Path(__file__).resolve().parent.parent / ".env"
 if _root_env.exists():
     load_dotenv(_root_env)
 
+# M4: adopt cluster env/auth overrides BEFORE any launcher/tool import — in
+# db mode the shared state is authoritative for centrally-mutated values
+# (best-effort: if the state backend is unreachable, local values are used).
+# Same point in the startup sequence as the legacy launchmcp.py entry point;
+# without it `python -m launcher` bypasses the M4 state plane entirely.
+try:
+    from tools.shared.cluster import is_db_mode
+    if is_db_mode():
+        from launcher.env_manager import adopt_cluster_overrides
+        _adopted = adopt_cluster_overrides()
+        if any(_adopted.values()):
+            print(f"[M4] adopted cluster overrides: {_adopted}", flush=True)
+except Exception as _e:
+    print(f"[M4] cluster override adoption failed: {_e}", flush=True)
+
 from .launcher_config import Config
 from .config_types import DEFAULT_HOST
 from .server_manager import ServerManager
@@ -46,6 +61,13 @@ from .tool_discovery import ToolDiscovery
 
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_management_api_key(cli_key: str | None) -> str | None:
+    """Central API key for the management server: the --api-key CLI override
+    wins over the MCP_MANAGEMENT_API_KEY env fallback (usually loaded from
+    .env). Without either, ManagementServer serves OPEN and warns."""
+    return cli_key or os.environ.get("MCP_MANAGEMENT_API_KEY")
 
 
 def setup_logging(debug: bool = False) -> None:
@@ -275,8 +297,26 @@ class Launcher:
                 service_registry=self.service_registry,
                 port=mgmt_port,
                 host=self.args.management_host,
-                api_key=self.args.api_key
+                api_key=_resolve_management_api_key(self.args.api_key),
             )
+
+            # M4: register this node in the cluster registry (runtime mask
+            # fan-out targets). No-op outside db mode / without node identity.
+            # Same position relative to server start as the legacy entry point.
+            try:
+                from tools.shared import cluster
+                if (cluster.is_db_mode()
+                        and os.environ.get("MCP_NODE_NAME")
+                        and os.environ.get("MCP_NODE_CENTRAL_URL")):
+                    cluster.register_node(
+                        os.environ["MCP_NODE_NAME"],
+                        os.environ["MCP_NODE_CENTRAL_URL"])
+                    logger.info(
+                        f"[M4] node '{os.environ['MCP_NODE_NAME']}' registered "
+                        "in the cluster registry")
+            except Exception as e:
+                logger.warning(f"[M4] node registration failed: {e}")
+
             await self.management_server.start()
             logger.info(
                 f"Management server started on "
