@@ -77,8 +77,12 @@ def test_build_command_table():
     assert ops.build_command("test", "clean")[1] is False  # no prompt by design
     assert ops.build_command("work", "scrape", "/b/bundle")[0] == [
         str(ops.SCRIPT), "work", "scrape", "/b/bundle"]
-    assert ops.build_command("work", "up", "/b/bundle")[0] == [
-        str(ops.SCRIPT), "work", "up", "/b/bundle"]
+    # boot-from-bundle MUST use -b: startcluster consumes the bundle only via
+    # -b/--config-bundle for up/pg (a positional path is ignored -> host mode)
+    assert ops.build_command("work", "up", "-b", "/b/bundle")[0] == [
+        str(ops.SCRIPT), "work", "up", "-b", "/b/bundle"]
+    assert ops.build_command("test", "pg", "-b", "/b/bundle")[0] == [
+        str(ops.SCRIPT), "test", "pg", "-b", "/b/bundle"]
     # global verb: harvest has no env segment
     argv, wipe = ops.build_command(None, "harvest", "myname", "--zip")
     assert argv == [str(ops.SCRIPT), "harvest", "myname", "--zip"] and wipe is False
@@ -86,6 +90,11 @@ def test_build_command_table():
 
 def test_wipe_actions_exactly_three():
     assert ops.WIPE_ACTIONS == {("work", "clean"), ("work", "restore"), ("test", "restore")}
+
+
+def test_boot_action():
+    assert ops.boot_action("work") == "up"
+    assert ops.boot_action("test") == "pg"
 
 
 def test_fatal_line_detection():

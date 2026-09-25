@@ -9,7 +9,7 @@ import re
 from nicegui import ui
 
 from .. import auth, ops, state
-from ..confirm import confirm_or_run
+from ..confirm import confirm_action, confirm_or_run
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -27,13 +27,19 @@ def page() -> None:
         dialog.open()
 
     async def boot(env_key: str, info) -> None:
-        action = "up" if env_key == "work" else "pg"
-        await ops.runner.start(env_key, action, str(info.path))
+        op = await ops.runner.start(env_key, ops.boot_action(env_key),
+                                    "-b", str(info.path))
+        if op is None:
+            ui.notify("an operation is already running", type="warning")
+            return
         ui.notify(f"{env_key} boot finished — see Operations for the log", type="info")
         refresh()
 
     async def scrape_into(env_key: str, info) -> None:
-        await ops.runner.start(env_key, "scrape", str(info.path))
+        op = await ops.runner.start(env_key, "scrape", str(info.path))
+        if op is None:
+            ui.notify("an operation is already running", type="warning")
+            return
         ui.notify(f"scrape finished — see Operations for the log", type="info")
         refresh()
 
@@ -70,14 +76,16 @@ def page() -> None:
                              f"{len(m.get('files', []))} files").classes("text-caption opacity-60")
                 with ui.row().classes("w-full items-center gap-2 flex-wrap"):
                     ui.button("Boot work from this", icon="rocket_launch",
-                              on_click=lambda i=info: confirm_or_run(
+                              on_click=lambda i=info: confirm_action(
                                   lambda: boot("work", i),
-                                  "boot the work env from this bundle (stops the running one; "
-                                  "canonical ports must be free)")).props("dense")
+                                  "boot the work env from this bundle?",
+                                  "stops the running one; canonical ports must "
+                                  "be free", button="Boot")).props("dense")
                     ui.button("Boot test pg from this", icon="science",
-                              on_click=lambda i=info: confirm_or_run(
+                              on_click=lambda i=info: confirm_action(
                                   lambda: boot("test", i),
-                                  "boot the test cluster (pg) from this bundle")).props("dense")
+                                  "boot the test cluster (pg) from this bundle?",
+                                  button="Boot")).props("dense")
                     ui.button("Scrape work into", icon="download",
                               on_click=lambda i=info: confirm_or_run(
                                   lambda: scrape_into("work", i))).props("dense flat")
@@ -115,7 +123,10 @@ def page() -> None:
             if db_c.value:
                 flags.append("--from-work-db")
             ui.notify("harvest started — watch Operations for output", type="positive")
-            await ops.runner.start(None, "harvest", name.value, *flags)
+            op = await ops.runner.start(None, "harvest", name.value, *flags)
+            if op is None:
+                ui.notify("an operation is already running", type="warning")
+                return
             harvest_msg.set_text("harvest finished — see Operations")
             refresh()
 

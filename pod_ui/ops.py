@@ -24,6 +24,11 @@ HISTORY_PATH = REPO_ROOT / ".podui-history.json"
 WIPE_ACTIONS = {("work", "clean"), ("work", "restore"), ("test", "restore")}
 
 
+def boot_action(env_key: str) -> str:
+    """Boot verb per env (§6 map): work rebuilds with 'up', test with 'pg'."""
+    return "up" if env_key == "work" else "pg"
+
+
 def build_command(env_key: str | None, action: str, *args,
                   script: Path = SCRIPT) -> tuple[list[str], bool]:
     """UI action -> (argv, needs_wipe_stdin). Verbatim §6 map. The script is a

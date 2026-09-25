@@ -11,7 +11,7 @@ import re
 from nicegui import ui
 
 from .. import ops, state
-from ..confirm import confirm_or_run
+from ..confirm import confirm_action, confirm_or_run
 from .chrome import fire, frame_v2
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -24,12 +24,16 @@ MIGRATION_STEPS = [
 
 
 async def _boot(env_key: str, info) -> None:
-    await ops.runner.start(env_key, "up" if env_key == "work" else "pg", str(info.path))
+    op = await ops.runner.start(env_key, ops.boot_action(env_key),
+                                "-b", str(info.path))
+    if op is None:
+        ui.notify("an operation is already running — watch the console", type="warning")
+        return
     ui.navigate.to(f"/v2/env/{env_key}")
 
 
-async def _scrape_into(env_key: str, info) -> None:
-    await ops.runner.start(env_key, "scrape", str(info.path))
+def _scrape_into(env_key: str, info) -> None:
+    fire(env_key, "scrape", str(info.path))
 
 
 def page() -> None:
@@ -69,7 +73,10 @@ def page() -> None:
             if db_c.value:
                 flags.append("--from-work-db")
             ui.notify("harvest started — watch the console", type="positive")
-            await ops.runner.start(None, "harvest", name.value, *flags)
+            op = await ops.runner.start(None, "harvest", name.value, *flags)
+            if op is None:
+                ui.notify("an operation is already running — watch the console", type="warning")
+                return
             harvest_msg.set_text("harvest finished")
             refresh()
 
@@ -93,15 +100,16 @@ def page() -> None:
                     with ui.button("Boot…", icon="rocket_launch").props("dense color=primary"):
                         with ui.menu().props("no-wrap") as menu:
                             ui.menu_item("Boot work from this",
-                                         on_click=lambda i=info: confirm_or_run(
+                                         on_click=lambda i=info: confirm_action(
                                              lambda: _boot("work", i),
-                                             "boot the work env from this bundle "
-                                             "(stops the running one; canonical ports "
-                                             "must be free)"))
+                                             "boot the work env from this bundle?",
+                                             "stops the running one; canonical "
+                                             "ports must be free", button="Boot"))
                             ui.menu_item("Boot test (pg) from this",
-                                         on_click=lambda i=info: confirm_or_run(
+                                         on_click=lambda i=info: confirm_action(
                                              lambda: _boot("test", i),
-                                             "boot the test cluster from this bundle"))
+                                             "boot the test cluster from this "
+                                             "bundle?", button="Boot"))
                             ui.separator()
                             ui.menu_item("Scrape work into",
                                          on_click=lambda i=info: confirm_or_run(

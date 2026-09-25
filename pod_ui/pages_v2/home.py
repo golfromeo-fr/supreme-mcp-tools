@@ -7,6 +7,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from .. import state
+from ..ops import boot_action
 from .chrome import fire, frame_v2
 
 STATE_COLORS = {"running": "positive", "partial": "warning",
@@ -18,7 +19,7 @@ def _primary(env) -> tuple[str, str]:
     if env.state == "running" or env.state == "partial":
         return ("Stop", "stop")
     if env.state == "absent":
-        return ("Boot (build)", "up" if env.key == "work" else "pg")
+        return ("Boot (build)", boot_action(env.key))
     return ("Start", "start")
 
 
@@ -36,7 +37,7 @@ def _env_card(env, sizes: dict[str, str]):
                       on_click=lambda v=verb: fire(env.key, v)).props("color=primary")
             ui.button("Manage", icon="tune",
                       on_click=lambda k=env.key: ui.navigate.to(f"/v2/env/{k}")).props("flat")
-            rebuild = "up" if env.key == "work" else "pg"
+            rebuild = boot_action(env.key)
             ui.button("Rebuild", icon="refresh",
                       on_click=lambda r=rebuild: fire(env.key, r)).props("flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")

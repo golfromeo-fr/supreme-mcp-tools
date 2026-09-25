@@ -7,7 +7,7 @@ behind a typed confirmation naming the container (no casual disruption)."""
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
 
 from nicegui import ui
 
@@ -15,7 +15,7 @@ import sys
 
 from .. import state
 from ..confirm import confirm_action
-from ..ops import fire
+from ..ops import boot_action, fire, runner
 from .chrome import frame_v3
 
 STATE_COLORS = {"running": "positive", "partial": "warning",
@@ -78,9 +78,12 @@ def _graph_options(env_key: str, rows_by_name: dict) -> dict:
     }
 
 
-def _power_confirm(full: str, short: str, action: str) -> None:
+def _power_confirm(env_key: str, full: str, short: str, action: str) -> None:
     """Disruptive single-container op behind a typed confirm naming the
-    container itself — cannot be mis-clicked (user decision: no casual restart)."""
+    container itself — cannot be mis-clicked (user decision: no casual restart).
+    Shells out through the runner: `startcluster <env> service <action> <name>`
+    (F9: UI MUST shell out, never reimplement) — lock, streamed console history
+    and process-group kill all apply."""
     with ui.dialog() as dialog, ui.card().classes("gap-2"):
         ui.label(f"{action} the container '{short}' — type '{short}' to confirm") \
             .classes("text-caption")
@@ -91,8 +94,11 @@ def _power_confirm(full: str, short: str, action: str) -> None:
 
         def do_run() -> None:
             dialog.close()
-            subprocess.Popen(["podman", action, full],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if runner.running():
+                ui.notify("an operation is already running — watch the console",
+                          type="warning")
+                return
+            asyncio.ensure_future(runner.start(env_key, "service", action, full))
             ui.notify(f"{action} sent to {full}", type="info")
 
         run_btn.on_click(do_run)
@@ -125,10 +131,10 @@ def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
                     .props("dense")
                 # disruptive actions: typed confirm naming the container
                 ui.button("Restart", icon="restart_alt",
-                          on_click=lambda: _power_confirm(full, short, "restart")) \
+                          on_click=lambda: _power_confirm(env_key, full, short, "restart")) \
                     .props("dense flat color=negative")
                 ui.button("Stop", icon="stop",
-                          on_click=lambda: _power_confirm(full, short, "stop")) \
+                          on_click=lambda: _power_confirm(env_key, full, short, "stop")) \
                     .props("dense flat color=negative")
         ui.button("Close", on_click=dialog.close).props("flat")
     dialog.open()
@@ -175,13 +181,13 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                               "containers stop. 'Start all' brings them back.",
                               button="Stop all")).props("dense color=negative")
             elif env.state == "absent":
-                boot = "up" if env.key == "work" else "pg"
+                boot = boot_action(env.key)
                 ui.button("Boot cluster", icon="rocket_launch",
                           on_click=lambda v=boot: fire(env.key, v)).props("dense color=primary")
             else:
                 ui.button("Start all", icon="play_arrow",
                           on_click=lambda k=env.key: fire(k, "start")).props("dense color=primary")
-            rebuild = "up" if env.key == "work" else "pg"
+            rebuild = boot_action(env.key)
             ui.button("Rebuild", icon="refresh",
                       on_click=lambda k=env.key: confirm_action(
                           lambda: fire(k, rebuild),

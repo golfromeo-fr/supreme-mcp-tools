@@ -17,22 +17,34 @@ def page() -> None:
     async def restore(info) -> None:
         env = info.env or "work"
         ui.notify(f"restoring {env} from {info.path.name} — watch Operations", type="info")
-        await ops.runner.start(env, "restore", str(info.path))
+        op = await ops.runner.start(env, "restore", str(info.path))
+        if op is None:
+            ui.notify("an operation is already running", type="warning")
+            return
         refresh()
 
     async def backup(env_key: str) -> None:
         ui.notify(f"{env_key} backup started — watch Operations", type="info")
-        await ops.runner.start(env_key, "backup")
+        op = await ops.runner.start(env_key, "backup")
+        if op is None:
+            ui.notify("an operation is already running", type="warning")
+            return
         refresh()
 
     async def export_data(env_key: str) -> None:
         ui.notify(f"{env_key} export started — watch Operations", type="info")
-        await ops.runner.start(env_key, "export-data")
+        op = await ops.runner.start(env_key, "export-data")
+        if op is None:
+            ui.notify("an operation is already running", type="warning")
+            return
         refresh()
 
     async def import_data(env_key: str, path) -> None:
         ui.notify(f"{env_key} import started — watch Operations", type="info")
-        await ops.runner.start(env_key, "import-data", str(path))
+        op = await ops.runner.start(env_key, "import-data", str(path))
+        if op is None:
+            ui.notify("an operation is already running", type="warning")
+            return
         refresh()
 
     with body:

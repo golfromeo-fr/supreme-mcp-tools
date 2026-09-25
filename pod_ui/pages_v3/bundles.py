@@ -25,12 +25,16 @@ MIGRATION_STEPS = [
 
 
 async def _boot(env_key: str, info) -> None:
-    await ops.runner.start(env_key, "up" if env_key == "work" else "pg", str(info.path))
+    op = await ops.runner.start(env_key, ops.boot_action(env_key),
+                                "-b", str(info.path))
+    if op is None:
+        ui.notify("an operation is already running — watch the console", type="warning")
+        return
     ui.navigate.to("/v3")
 
 
-async def _scrape_into(env_key: str, info) -> None:
-    await ops.runner.start(env_key, "scrape", str(info.path))
+def _scrape_into(env_key: str, info) -> None:
+    fire(env_key, "scrape", str(info.path))
 
 
 def page() -> None:
@@ -118,7 +122,10 @@ def page() -> None:
 
                 async def restore(i=b) -> None:
                     ui.notify(f"restoring {i.env or 'work'} — watch the console", type="info")
-                    await ops.runner.start(i.env or "work", "restore", str(i.path))
+                    op = await ops.runner.start(i.env or "work", "restore", str(i.path))
+                    if op is None:
+                        ui.notify("an operation is already running — watch the console",
+                                  type="warning")
 
                 ui.button("Restore", icon="restore",
                           on_click=lambda i=b: confirm_or_run(
@@ -170,7 +177,10 @@ def page() -> None:
             if db_c.value:
                 flags.append("--from-work-db")
             ui.notify("harvest started — watch the console", type="positive")
-            await ops.runner.start(None, "harvest", name.value, *flags)
+            op = await ops.runner.start(None, "harvest", name.value, *flags)
+            if op is None:
+                ui.notify("an operation is already running — watch the console", type="warning")
+                return
             harvest_msg.set_text("harvest finished")
             refresh()
 
