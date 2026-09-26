@@ -580,7 +580,7 @@ async def main_page() -> None:
         state = get_state()
         if state.selected_tool == tool_name:
             return
-        state.active_tab = "overview"
+        state.active_tab = _resolve_sticky_tab(state.active_tab, tool_name == "memorymcp")
         state.select_tool(tool_name)
         cached = state.tool_detail_cache.get(tool_name)
         if cached:
@@ -776,6 +776,14 @@ async def main_page() -> None:
     ui.timer(POLL_INTERVAL_SECONDS, poll_status)
 
 
+def _resolve_sticky_tab(active_tab: str, memory_tab_available: bool) -> str:
+    """Keep the user's tab across tool switches; the Memory tab exists only on
+    memorymcp, so a tab the incoming tool can't serve falls back to Overview."""
+    if active_tab == "memory" and not memory_tab_available:
+        return "overview"
+    return active_tab
+
+
 async def _render_content_area(state, handlers: dict) -> None:
     """Render the detail area for the selected tool: tabs or empty state.
 
@@ -790,7 +798,10 @@ async def _render_content_area(state, handlers: dict) -> None:
 
     detail = state.selected_tool_detail
     is_memory = detail is not None and detail.name == "memorymcp"
-    with ui.tabs(value=state.active_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
+    # Render value only: while a fresh memorymcp detail is still loading the
+    # Memory tab doesn't exist yet — show Overview without losing the choice.
+    initial_tab = _resolve_sticky_tab(state.active_tab, is_memory)
+    with ui.tabs(value=initial_tab, on_change=lambda e: setattr(state, "active_tab", e.value)).classes("w-full") as tabs:
         ui.tab("overview", icon="dashboard", label="Overview")
         if is_memory:
             ui.tab("memory", icon="memory", label="Memory")
@@ -799,7 +810,7 @@ async def _render_content_area(state, handlers: dict) -> None:
         ui.tab("env", icon="tune", label="Env Vars")
         ui.tab("auth", icon="key", label="Auth")
 
-    with ui.tab_panels(tabs, value=state.active_tab).classes("w-full"):
+    with ui.tab_panels(tabs, value=initial_tab).classes("w-full"):
         with ui.tab_panel("overview"):
             await _render_overview_tab(state, detail, handlers)
         if is_memory:
