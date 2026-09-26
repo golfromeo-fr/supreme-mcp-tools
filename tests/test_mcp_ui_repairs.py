@@ -23,6 +23,7 @@ pytest.importorskip("aiohttp")
 
 from mcp_ui.management_ui import (  # noqa: E402
     _get_storage_secret,
+    _resolve_sticky_tab,
     _safe_redirect_target,
     verify_credentials,
 )
@@ -166,3 +167,17 @@ def test_delete_memory_store_order(monkeypatch):
     result = asyncio.run(mt.deleteMemory("order-check-id"))
     assert result.startswith("Deleted memory")
     assert calls == [("sql", "order-check-id"), ("vector", "order-check-id")]
+
+
+# === Sticky tabs across tool switches ===
+
+def test_resolve_sticky_tab():
+    """Common tabs survive a tool switch; the memorymcp-only Memory tab falls
+    back to Overview when the incoming tool can't serve it."""
+    assert _resolve_sticky_tab("functions", memory_tab_available=False) == "functions"
+    assert _resolve_sticky_tab("env", memory_tab_available=False) == "env"
+    assert _resolve_sticky_tab("extensions", memory_tab_available=False) == "extensions"
+    assert _resolve_sticky_tab("auth", memory_tab_available=False) == "auth"
+    assert _resolve_sticky_tab("memory", memory_tab_available=False) == "overview"
+    assert _resolve_sticky_tab("memory", memory_tab_available=True) == "memory"
+    assert _resolve_sticky_tab("overview", memory_tab_available=True) == "overview"
