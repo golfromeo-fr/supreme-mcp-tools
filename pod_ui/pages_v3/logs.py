@@ -6,6 +6,7 @@ container is not running."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from nicegui import context, ui
@@ -78,7 +79,7 @@ def page() -> None:
                 .props("dense outlined")
             grep_input = ui.input(placeholder="filter (shown lines)")
             grep_input.classes("w-80").props("dense outlined clearable")
-            ui.button("Refresh", icon="refresh", on_click=lambda: refresh()) \
+            ui.button("Refresh", icon="refresh", on_click=lambda: refresh(force=True)) \
                 .props("dense flat")
             auto = ui.switch("Auto", value=True)
             ui.space()
@@ -135,16 +136,26 @@ def page() -> None:
         view["max"] = bool(enabled)
         apply_view()
 
-    async def refresh() -> None:
+    async def refresh(force: bool = False) -> None:
+        """force=False (auto-tick): skip the `podman logs` subprocess entirely
+        when the container is NOT running — a stopped container's log is
+        static, re-reading it every 5s is pure churn (user report: a stray
+        `podman logs --tail 500` child with no cluster running).
+        force=True (selection change, Refresh button, initial load): fetch
+        once regardless — stale logs are exactly what you want to read."""
         row = flat_rows.get(sel.value)
-        if row is None:
-            state_label.set_text("")
-        elif row.running:
+        running = bool(row and row.running)
+        if running:
             state_label.set_text("").classes("text-caption")
         else:
             state_label.set_text(f"⚠ {sel.value} is not running — output may be stale/empty") \
                 .classes("text-caption text-orange-8")
-        text = state.container_log(sel.value, tail["value"])
+            if not force:
+                meta.set_text("auto paused (container not running) — Refresh re-reads") \
+                    .classes("text-caption opacity-60")
+                return
+        text = await asyncio.to_thread(
+            state.container_log, sel.value, tail["value"])
         needle = (grep_input.value or "").strip().lower()
         log_view.clear()
         shown = 0
@@ -160,9 +171,8 @@ def page() -> None:
         if client.is_deleted or not client.has_socket_connection:
             return
         if auto.value:
-            await refresh()
+            await refresh()  # no force: skips stopped containers
 
     apply_view()
-    import asyncio
-    asyncio.ensure_future(refresh())
+    asyncio.ensure_future(refresh(force=True))  # populate once, even when stopped
     ui.timer(5.0, tick)
