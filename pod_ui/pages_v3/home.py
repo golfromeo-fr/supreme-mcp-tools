@@ -11,7 +11,6 @@ import asyncio
 
 from nicegui import ui
 
-import sys
 
 from .. import state
 from ..confirm import confirm_action
@@ -149,9 +148,11 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
     topo = TOPOLOGY[env.key]
     rows_by_name = {c.name: c for c in env.containers}
 
-    # collapsed BY DEFAULT — the page loads as two compact header strips;
-    # one click on the chevron (or the title) unfolds the cluster.
-    open_now = open_state.get(env.key, False)
+    # running clusters start EXPANDED (user: show the useful info at startup);
+    # stopped/absent start folded. open_state overrides per user clicks.
+    if env.key not in open_state:
+        open_state[env.key] = env.state in ("running", "partial")
+    open_now = open_state[env.key]
     chevron_icon = "expand_more" if open_now else "chevron_right"
 
     with ui.card().classes("w-full gap-0"):
@@ -306,31 +307,87 @@ def page() -> None:
     if (body := frame_v3("Clusters")) is None:
         return
     with body:
-        holder = ui.column().classes("w-full gap-3")
-        view_modes: dict = {}   # graph/table per cluster — survives refresh
-        open_state: dict = {}   # cluster body open/closed — DEFAULT COLLAPSED, survives refresh
+        # session-tracked state (a local would reset on rebuild)
+        show_stopped = {"v": False}
         last_sig = {"v": None}
+        view_modes: dict = {e.key: "both" for e in state.ENVIRONMENTS}  # default BOTH
+        open_state: dict = {}  # per-cluster body open/closed; running clusters default open
 
-        def rebuild() -> None:
-            statuses = state.env_statuses()
-            # change-gate: identical signature => leave the DOM alone (no
-            # flicker, no scroll jump, collapsed stays collapsed)
-            sig = state.env_signature(statuses) + f"#{state.image_version()}"
-            if sig == last_sig["v"]:  # nothing changed: leave the DOM untouched
-                return
-            last_sig["v"] = sig
-            sizes = state.volume_sizes()
+        def _gather() -> dict:
+            """ALL podman subprocess calls, run in a thread — blocking the event
+            loop here stalled the socket heartbeat and caused the Connection-lost
+            / page-reset cycle (root cause of the dead-handler reports)."""
+            return {"statuses": state.env_statuses(),
+                    "sizes": state.volume_sizes(),
+                    "df": state.podman_df_summary(),
+                    "image": state.image_version(),
+                    "other": state.containers_by_env().get("other", [])}
+
+        def _render(data: dict) -> None:
+            statuses = data["statuses"]
+            visible = [e for e in statuses
+                       if show_stopped["v"] or e.state in ("running", "partial")]
             holder.clear()
             with holder:
+                if not visible:
+                    ui.label("all clusters stopped — flip 'show stopped' to review them") \
+                        .classes("opacity-60")
                 with ui.row().classes("w-full flex-wrap gap-3 items-start"):
-                    for env in statuses:
-                        _cluster_card(env, sizes, view_modes, open_state)
+                    for env in visible:
+                        _cluster_card(env, data["sizes"], view_modes, open_state)
                 with ui.card().classes("w-full"):
-                    ui.label(f"node image: {state.image_version()}").classes("text-caption")
+                    with ui.row().classes("w-full items-center gap-4"):
+                        ui.label(f"node image: {data['image']}").classes("text-caption")
+                        df = data["df"]
+                        if df:
+                            ui.space()
+                            ui.label(" · ".join(
+                                f"{r.get('Type')}: {r.get('Size')} "
+                                f"(reclaim {r.get('Reclaimable')})" for r in df)) \
+                                .classes("text-caption opacity-60")
+                    rows = df
+                    if rows:
+                        ui.table(
+                            columns=[{"name": c, "label": c, "field": c} for c in
+                                     ("Type", "Total", "Active", "Size", "Reclaimable")],
+                            rows=rows, row_key="Type").props("dense flat")
+                    else:
+                        ui.label("podman system df --format json unavailable") \
+                            .classes("opacity-60")
+                if data["other"]:
+                    with ui.card().classes("w-full"):
+                        ui.label("other containers (read-only)").classes(
+                            "text-caption opacity-60")
+                        ui.label(", ".join(c.name for c in data["other"])).classes(
+                            "text-caption")
 
-        rebuild()
+        async def rebuild(force: bool = False) -> None:
+            data = await asyncio.to_thread(_gather)
+            statuses = data["statuses"]
+            visible = [e for e in statuses
+                       if show_stopped["v"] or e.state in ("running", "partial")]
+            # change-gate: identical signature => leave the DOM untouched
+            sig = (state.env_signature(statuses) + f"#{data['image']}"
+                   f"#{show_stopped['v']}")
+            if sig == last_sig["v"] and not force:
+                return
+            last_sig["v"] = sig
+            _render(data)
+
+        with ui.row().classes("w-full items-center gap-3"):
+            sw = ui.switch("show stopped", value=False) \
+                .tooltip("reveal clusters that are stopped or not created")
+            sw.on_value_change(lambda e: _toggle(e.value))
+            ui.space()
+        holder = ui.column().classes("w-full gap-3")
+
+        async def _toggle(value: bool) -> None:
+            show_stopped["v"] = value
+            await rebuild(force=True)
 
         async def tick() -> None:
-            rebuild()
+            await rebuild()
 
+        # initial build: thread-gathered like every tick (never block the loop)
+        asyncio.ensure_future(rebuild())
         ui.timer(5.0, tick)

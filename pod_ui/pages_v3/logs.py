@@ -10,7 +10,7 @@ import os
 
 from nicegui import ui
 
-from .. import state
+from .. import auth, state
 from .chrome import frame_v3
 
 
@@ -31,7 +31,7 @@ def page() -> None:
     # NiceGUI 3.16): the label carries the cluster prefix instead
     options: dict = {}
     for env_key in ("work", "test", "other"):
-        for row in grouped_rows.get(env_key, []):
+        for row in sorted(grouped_rows.get(env_key, []), key=lambda r: r.name):
             group = {"work": "BASIC", "test": "TEST"}.get(env_key, "other")
             options[row.name] = f"{group} · {row.name}"
     if not options:
@@ -40,13 +40,25 @@ def page() -> None:
         return
 
     flat_rows = {r.name: r for rows in grouped_rows.values() for r in rows}
+    # STABLE selection — never depend on what is running:
+    #   1) ?container= (node drawer) — and it learns (becomes sticky)
+    #   2) last selection this session (storage.user)
+    #   3) the cluster's launcher node (highest signal, running or not)
+    #   4) first in the list
+    LAUNCHER = {"mcp-work_work_1", "mcp-multihost_node1_1"}
     requested = ui.query("container") or None
+    sticky = (auth.app.storage.user.get("podui_last_log") if auth.is_authed() else None)
     default = None
     if requested and requested in flat_rows:
         default = requested
+    elif sticky and sticky in flat_rows:
+        default = sticky
+    elif [n for n in flat_rows if n in LAUNCHER]:
+        default = [n for n in flat_rows if n in LAUNCHER][0]
     else:
-        running = [r.name for r in flat_rows.values() if r.running]
-        default = running[0] if running else next(iter(flat_rows))
+        default = next(iter(flat_rows), None)
+    if default and auth.is_authed():
+        auth.app.storage.user["podui_last_log"] = default
 
     view = {"font": _env_int("MCP_UI_LOG_FONT", 12, 8, 24),
             "cols": _env_int("MCP_UI_LOG_COLS", 160, 40, 1000),
@@ -64,6 +76,8 @@ def page() -> None:
                 .props("dense outlined")
             grep_input = ui.input(placeholder="filter (shown lines)")
             grep_input.classes("w-80").props("dense outlined clearable")
+            ui.button("Refresh", icon="refresh", on_click=lambda: refresh()) \
+                .props("dense flat")
             auto = ui.switch("Auto", value=True)
             ui.space()
             gear = ui.button(icon="tune").props("flat dense").tooltip("view controls")
