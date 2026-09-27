@@ -29,8 +29,6 @@ def frame_v3(title: str):
         with ui.row().classes("w-full justify-between items-center"):
             ui.label("Pod Manager — v3").classes("text-h6")
             ui.label(title).classes("text-caption opacity-60")
-            ui.button("back to current layout", icon="swap_horiz",
-                      on_click=lambda: ui.navigate.to("/")).props("flat dense")
     # value=True: without it NiceGUI probes drawer state via JS on every
     # client connect (1s timeout) — a reconnecting tab after a server
     # restart spams a TimeoutError traceback into the console

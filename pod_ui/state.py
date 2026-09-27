@@ -54,7 +54,7 @@ class Environment:
 
 # cross-page UI prefs (process-wide; single-admin tool). The drawer switch
 # writes it, the dashboard's 5s tick applies it — no cross-component events.
-UI_PREFS = {"show_stopped": False}
+UI_PREFS = {"show_stopped": True}
 
 
 ENVIRONMENTS = [

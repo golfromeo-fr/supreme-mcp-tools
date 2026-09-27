@@ -37,6 +37,10 @@ def page() -> None:
     def show_manifest(info) -> None:
         with ui.dialog() as dialog, ui.card().classes("w-full"):
             ui.label(f"manifest — {info.name}").classes("text-h6")
+            ui.label(f"folder: {info.path}").classes("text-caption font-mono")
+            if info.manifest:
+                for f in info.manifest.get("files", []):
+                    f["path"] = str(info.path / f["path"])
             text = json.dumps(info.manifest, indent=2, ensure_ascii=False) if info.manifest else "{}"
             ui.code(text).classes("w-full max-h-[36rem]")
             ui.button("Close", on_click=dialog.close).props("flat")
@@ -93,6 +97,8 @@ def page() -> None:
                         ui.menu_item("Manifest", on_click=lambda i=info: show_manifest(i))
                         ui.separator()
                         ui.menu_item("Delete", on_click=lambda i=info: _delete_bundle(i))
+            ui.label(str(info.path)).classes("text-caption font-mono opacity-80") \
+                .tooltip("bundle folder — open these files in a shell/editor")
 
     with body:
         with ui.card().classes("w-full gap-2"):

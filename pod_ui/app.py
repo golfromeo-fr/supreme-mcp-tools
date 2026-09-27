@@ -35,8 +35,6 @@ def main() -> None:
     from nicegui import ui
 
     from . import auth
-    from .pages import backups, bundles, dashboard, logs, operations  # noqa: F401 (register pages)
-    from .pages_v2 import bundles as bundles_v2, env as env_v2, home as home_v2  # noqa: F401
     from .pages_v3 import backups as backups_v3, bundles as bundles_v3, \
         home as home_v3, logs as logs_v3, operations as operations_v3  # noqa: F401
 
@@ -44,41 +42,8 @@ def main() -> None:
 
 
 
-    # ---- v1 (current layout) ----
+    # ---- routes ----
     @ui.page("/")
-    def index() -> None:
-        dashboard.page()
-
-    @ui.page("/logs")
-    def logs_page() -> None:
-        logs.page()
-
-    @ui.page("/operations")
-    def operations_page() -> None:
-        operations.page()
-
-    @ui.page("/bundles")
-    def bundles_page() -> None:
-        bundles.page()
-
-    @ui.page("/backups")
-    def backups_page() -> None:
-        backups.page()
-
-    # ---- v2 (candidate layout, same process so the console sees all ops) ----
-    @ui.page("/v2")
-    def v2_home() -> None:
-        home_v2.page()
-
-    @ui.page("/v2/env/{env_key}")
-    def v2_env(env_key: str) -> None:
-        env_v2.page(env_key)
-
-    @ui.page("/v2/bundles")
-    def v2_bundles() -> None:
-        bundles_v2.page()
-
-    # ---- v3 (cluster-map layout) ----
     @ui.page("/v3")
     def v3_home() -> None:
         home_v3.page()
