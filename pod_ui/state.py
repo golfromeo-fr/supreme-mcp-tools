@@ -162,8 +162,12 @@ def probe_health(url: str, timeout: float = 3.0) -> str:
         return "down"
 
 
-def env_statuses() -> list[Environment]:
-    grouped = containers_by_env()
+def env_statuses(grouped: dict | None = None) -> list[Environment]:
+    """grouped: precomputed containers_by_env() — pass it to avoid a second
+    podman ps when the caller already ran one (the dashboard cheap gather)."""
+
+    if grouped is None:
+        grouped = containers_by_env()
     result = []
     for env in ENVIRONMENTS:
         e = Environment(key=env.key, title=env.title, project=env.project,

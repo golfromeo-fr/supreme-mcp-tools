@@ -320,12 +320,13 @@ def page() -> None:
         open_state: dict = {}  # per-cluster body open/closed; running clusters default open
 
         def _gather_cheap() -> dict:
-            """Cheap part — enough to decide whether a rebuild is needed at all.
-            Threaded: blocking the loop here stalled the socket heartbeat
-            (the Connection-lost / page-reset cycle)."""
-            return {"statuses": state.env_statuses(),
+            """Cheap part (ONE podman ps + one inspect) — enough to decide
+            whether a rebuild is needed at all. Threaded: blocking the loop
+            here stalled the socket heartbeat (Connection-lost cycle)."""
+            grouped = state.containers_by_env()
+            return {"statuses": state.env_statuses(grouped),
                     "image": state.image_version(),
-                    "other": state.containers_by_env().get("other", [])}
+                    "other": grouped.get("other", [])}
 
         def _gather_full() -> dict:
             """Expensive part (df -v + df --format json) — fetched only when the

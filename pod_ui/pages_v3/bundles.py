@@ -17,13 +17,6 @@ from .chrome import frame_v3
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-MIGRATION_STEPS = [
-    ("scrape the OLD cluster into the bundle", "scrape"),
-    ("backup the OLD cluster state plane", "backup"),
-    ("export the OLD cluster-owned data", "export-data"),
-]
-
-
 async def _boot(env_key: str, info) -> None:
     op = await ops.runner.start(env_key, ops.boot_action(env_key),
                                 "-b", str(info.path))
@@ -142,19 +135,5 @@ def page() -> None:
                     ui.label("no bundles yet — harvest one above").classes("opacity-60")
                 for info in bundles:
                     bundle_card(info)
-
-        with ui.card().classes("w-full"):
-            with ui.expansion("guided migration (old cluster → bundle → new cluster)") \
-                    .classes("w-full"):
-                ui.label("one step at a time; after the exports: Stop all on the old "
-                         "cluster (Clusters page), Boot… the new cluster from the "
-                         "refreshed bundle, then Restore + Import above.") \
-                    .classes("text-caption opacity-70")
-                src = ui.select({e: e for e in ("work", "test")}, value="work",
-                                label="source cluster").classes("w-40").props("dense outlined")
-                for i, (label, verb) in enumerate(MIGRATION_STEPS, 1):
-                    ui.button(f"{i}. {label}",
-                              on_click=lambda v=verb, s=src: fire(s.value, v)) \
-                        .classes("w-full").props("flat align=left")
 
         refresh()
