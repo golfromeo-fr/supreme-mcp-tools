@@ -8,7 +8,7 @@ page auto-scrolls there when a new op starts)."""
 
 from __future__ import annotations
 
-from nicegui import ui
+from nicegui import context, ui
 
 from .. import auth, ops
 
@@ -46,6 +46,7 @@ def frame_v3(title: str):
 def mount_console(body) -> None:
     """In-flow console at the end of the page + floating jump pill."""
     runner = ops.runner
+    client = context.client  # captured in-slot (see logs.py note)
 
     console_holder = ui.column().classes("w-full gap-2")
     console_holder.set_visibility(False)  # hidden until first use / pill click
@@ -104,6 +105,9 @@ def mount_console(body) -> None:
     last_id = {"v": None}
 
     def poll() -> None:
+        # closed tab => stop polling (the console is mounted on every v3 page)
+        if client.is_deleted or not client.has_socket_connection:
+            return
         op = runner.current
         op_id = (op.started, op.label) if op else None
         if op_id and op_id != last_id["v"]:

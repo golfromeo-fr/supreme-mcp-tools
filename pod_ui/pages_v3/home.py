@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from nicegui import ui
+from nicegui import context, ui
 
 
 from .. import state
@@ -224,7 +224,10 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                             short = None
                         if not short:
                             return
-                        rows = {c.name: c for c in state.containers_by_env().get(env.key, [])}
+                        # rows_by_name is the card's own snapshot — do NOT re-query
+                        # podman here (a blocking call in a handler stalls the loop,
+                        # the very bug this page was rewritten to avoid)
+                        rows = rows_by_name
                         _node_drawer(env.key, short, rows)
 
                     chart.on("componentClick", on_node)
@@ -307,21 +310,28 @@ def page() -> None:
     if (body := frame_v3("Clusters")) is None:
         return
     with body:
+        # capture the client HERE (inside the slot): context.client cannot be
+        # read from a background task — the slot stack is empty there
+        client = context.client
         # session-tracked state (a local would reset on rebuild)
         show_stopped = {"v": False}
         last_sig = {"v": None}
         view_modes: dict = {e.key: "both" for e in state.ENVIRONMENTS}  # default BOTH
         open_state: dict = {}  # per-cluster body open/closed; running clusters default open
 
-        def _gather() -> dict:
-            """ALL podman subprocess calls, run in a thread — blocking the event
-            loop here stalled the socket heartbeat and caused the Connection-lost
-            / page-reset cycle (root cause of the dead-handler reports)."""
+        def _gather_cheap() -> dict:
+            """Cheap part — enough to decide whether a rebuild is needed at all.
+            Threaded: blocking the loop here stalled the socket heartbeat
+            (the Connection-lost / page-reset cycle)."""
             return {"statuses": state.env_statuses(),
-                    "sizes": state.volume_sizes(),
-                    "df": state.podman_df_summary(),
                     "image": state.image_version(),
                     "other": state.containers_by_env().get("other", [])}
+
+        def _gather_full() -> dict:
+            """Expensive part (df -v + df --format json) — fetched only when the
+            signature changed, so the steady-state tick stays cheap."""
+            return {"sizes": state.volume_sizes(),
+                    "df": state.podman_df_summary()}
 
         def _render(data: dict) -> None:
             statuses = data["statuses"]
@@ -338,7 +348,7 @@ def page() -> None:
                 with ui.card().classes("w-full"):
                     with ui.row().classes("w-full items-center gap-4"):
                         ui.label(f"node image: {data['image']}").classes("text-caption")
-                        df = data["df"]
+                        df = data.get("df")
                         if df:
                             ui.space()
                             ui.label(" · ".join(
@@ -361,18 +371,31 @@ def page() -> None:
                         ui.label(", ".join(c.name for c in data["other"])).classes(
                             "text-caption")
 
+        # serialize rebuilds: the initial task, the 5s tick and the toggle can
+        # otherwise overlap, and two coroutines doing holder.clear()/with holder
+        # interleave DOM creation (duplicated / misplaced elements)
+        _rebuild_lock = asyncio.Lock()
+
         async def rebuild(force: bool = False) -> None:
-            data = await asyncio.to_thread(_gather)
-            statuses = data["statuses"]
-            visible = [e for e in statuses
-                       if show_stopped["v"] or e.state in ("running", "partial")]
-            # change-gate: identical signature => leave the DOM untouched
-            sig = (state.env_signature(statuses) + f"#{data['image']}"
-                   f"#{show_stopped['v']}")
-            if sig == last_sig["v"] and not force:
+            # a closed browser tab leaves this page's timer alive: without this
+            # guard every tab ever opened keeps polling podman every 5s forever
+            # (and renders into a deleted client — "Client has been deleted")
+            if client.is_deleted or not client.has_socket_connection:
                 return
-            last_sig["v"] = sig
-            _render(data)
+            async with _rebuild_lock:
+                if client.is_deleted or not client.has_socket_connection:
+                    return
+                data = await asyncio.to_thread(_gather_cheap)
+                # change-gate BEFORE the expensive gather: unchanged state =>
+                # untouched DOM *and* no wasted df/system-df subprocesses
+                sig = (state.env_signature(data["statuses"]) + f"#{data['image']}"
+                       f"#{show_stopped['v']}"
+                       f"#{','.join(c.name for c in data['other'])}")
+                if sig == last_sig["v"] and not force:
+                    return
+                last_sig["v"] = sig
+                data.update(await asyncio.to_thread(_gather_full))
+                _render(data)
 
         with ui.row().classes("w-full items-center gap-3"):
             sw = ui.switch("show stopped", value=False) \

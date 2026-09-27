@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from nicegui import ui
+from nicegui import context, ui
 
 from .. import auth, state
 from .chrome import frame_v3
@@ -26,6 +26,8 @@ def page() -> None:
     if (body := frame_v3("Logs")) is None:
         return
 
+    client = context.client  # captured in-slot; context.client is unreadable
+                              # from the background refresh task
     grouped_rows = state.containers_by_env()
     # FLAT options (the nested grouped form raises 'Invalid value' on
     # NiceGUI 3.16): the label carries the cluster prefix instead
@@ -154,6 +156,9 @@ def page() -> None:
         meta.set_text(f"tail {tail['value']} · {shown} shown")
 
     async def tick() -> None:
+        # closed tab => stop polling (see the same guard in home.py)
+        if client.is_deleted or not client.has_socket_connection:
+            return
         if auto.value:
             await refresh()
 

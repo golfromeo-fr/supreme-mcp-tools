@@ -9,7 +9,6 @@ from __future__ import annotations
 from nicegui import ui
 
 from .. import auth, ops
-from ..confirm import confirm_action, confirm_or_run
 from ..ops import fire
 
 WIPE_WORD = "wipe"

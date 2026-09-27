@@ -7,6 +7,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from .. import auth, ops, state
+from ..confirm import confirm_or_run
 from ..ops import fire
 
 
@@ -68,10 +69,6 @@ def page() -> None:
                 if env_key == "work":
                     ui.label("the memory data planes are HOST resources (turso dir / "
                              "LAN PG) — never exported.").classes("text-caption opacity-60")
-
-    def confirm_or_run(coro_factory, title: str, word: str) -> None:
-        from ..confirm import confirm_or_run as _c
-        _c(coro_factory, title, word=word)
 
     with body:
         build()
