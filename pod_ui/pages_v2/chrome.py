@@ -40,7 +40,10 @@ def frame_v2(title: str):
             ui.label(title).classes("text-caption opacity-60")
             ui.button("back to current layout", icon="swap_horiz",
                       on_click=lambda: ui.navigate.to("/")).props("flat dense")
-    with ui.drawer(side="left").props("bordered behavior=desktop"):
+    # value=True: without it NiceGUI probes drawer state via JS on every
+    # client connect (1s timeout) — a reconnecting tab after a server
+    # restart spams a TimeoutError traceback into the console
+    with ui.drawer(side="left", value=True).props("bordered behavior=desktop"):
         with ui.column().classes("w-full p-3 gap-1"):
             for path, label, icon in NAV:
                 ui.button(label, icon=icon, on_click=lambda p=path: ui.navigate.to(p)) \

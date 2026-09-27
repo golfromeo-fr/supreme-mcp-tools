@@ -55,7 +55,10 @@ def frame(title: str):
         with ui.row().classes("w-full justify-between items-center"):
             ui.label("Pod Manager").classes("text-h6")
             ui.label(title).classes("text-caption opacity-60")
-    with ui.drawer(side="left").props("bordered behavior=desktop"):
+    # value=True: without it NiceGUI probes drawer state via JS on every
+    # client connect (1s timeout) — a reconnecting tab after a server
+    # restart spams a TimeoutError traceback into the console
+    with ui.drawer(side="left", value=True).props("bordered behavior=desktop"):
         with ui.column().classes("w-full p-3 gap-1"):
             for path, label, icon in NAV:
                 ui.button(label, icon=icon, on_click=lambda p=path: ui.navigate.to(p)) \
