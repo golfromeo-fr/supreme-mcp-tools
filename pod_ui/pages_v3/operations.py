@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from nicegui import ui
 
-from .. import auth, ops
+from .. import ops
+from .chrome import frame_v3
 from ..ops import fire
 
 WIPE_WORD = "wipe"
@@ -69,7 +70,7 @@ def _confirm_clean(env_key: str) -> None:
 
 
 def page() -> None:
-    if (body := auth.frame("Operations")) is None:
+    if (body := frame_v3("Operations")) is None:
         return
 
     def action_button(env_key: str, label: str, verb: str, tier: str) -> None:

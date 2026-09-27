@@ -52,6 +52,11 @@ class Environment:
         return "partial"
 
 
+# cross-page UI prefs (process-wide; single-admin tool). The drawer switch
+# writes it, the dashboard's 5s tick applies it — no cross-component events.
+UI_PREFS = {"show_stopped": False}
+
+
 ENVIRONMENTS = [
     Environment("work", "work", "mcp-work", "mcp-work_"),
     Environment("test", "test", "mcp-multihost", "mcp-multihost_"),

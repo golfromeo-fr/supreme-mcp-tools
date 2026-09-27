@@ -6,13 +6,14 @@ from __future__ import annotations
 
 from nicegui import ui
 
-from .. import auth, ops, state
+from .. import ops, state
+from .chrome import frame_v3
 from ..confirm import confirm_or_run
 from ..ops import fire
 
 
 def page() -> None:
-    if (body := auth.frame("Backups & data")) is None:
+    if (body := frame_v3("Backups & data")) is None:
         return
 
     def build() -> None:

@@ -75,7 +75,7 @@ def page() -> None:
     with body:
         with ui.row().classes("w-full items-center gap-2"):
             sel = ui.select(options, value=default, label="container",
-                            on_change=lambda e: refresh()).classes("w-80") \
+                            on_change=lambda e: refresh(force=True)).classes("w-80") \
                 .props("dense outlined")
             grep_input = ui.input(placeholder="filter (shown lines)")
             grep_input.classes("w-80").props("dense outlined clearable")
@@ -165,6 +165,13 @@ def page() -> None:
             log_view.push(line)
             shown += 1
         meta.set_text(f"tail {tail['value']} · {shown} shown")
+        # show the LAST line: NiceGUI's log.js only auto-scrolls when the user
+        # is already at the exact bottom — after a clear()+refill the view
+        # stayed wherever it was (user report: 'slide to the bottom')
+        ui.run_javascript(
+            f"setTimeout(() => {{ const el = getHtmlElement({log_view.id});"
+            f" const c = el && el.querySelector('.q-scrollarea__container');"
+            f" if (c) c.scrollTop = c.scrollHeight; }}, 80)")
 
     async def tick() -> None:
         # closed tab => stop polling (see the same guard in home.py)

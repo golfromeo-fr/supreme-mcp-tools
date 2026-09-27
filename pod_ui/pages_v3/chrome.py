@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from nicegui import context, ui
 
-from .. import auth, ops
+from .. import auth, ops, state
 
 NAV = [
     ("/v3", "Clusters", "hub"),
@@ -39,6 +39,11 @@ def frame_v3(title: str):
             for path, label, icon in NAV:
                 ui.button(label, icon=icon, on_click=lambda p=path: ui.navigate.to(p)) \
                     .classes("w-full").props("flat align=left")
+            ui.separator()
+            prefs = ui.switch("show stopped", value=state.UI_PREFS["show_stopped"]) \
+                .tooltip("reveal stopped / not-created clusters on the Clusters page")
+            prefs.on_value_change(
+                lambda e: state.UI_PREFS.update({"show_stopped": e.value}))
             ui.separator()
             ui.button("Logout", icon="logout", on_click=auth.logout).classes("w-full").props("flat")
     body = ui.column().classes("w-full p-4 gap-3")

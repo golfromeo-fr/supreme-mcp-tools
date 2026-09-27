@@ -155,7 +155,7 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
     open_now = open_state[env.key]
     chevron_icon = "expand_more" if open_now else "chevron_right"
 
-    with ui.card().classes("w-full gap-0"):
+    with ui.card().classes("w-full gap-0").style("padding: 4px 16px"):
         # SINGLE header row: chevron + title + state/health + cluster ops.
         # No separate expansion row — the ^ lives here (user request).
         with ui.row().classes("w-full items-center gap-2 py-1"):
@@ -313,8 +313,6 @@ def page() -> None:
         # capture the client HERE (inside the slot): context.client cannot be
         # read from a background task — the slot stack is empty there
         client = context.client
-        # session-tracked state (a local would reset on rebuild)
-        show_stopped = {"v": False}
         last_sig = {"v": None}
         view_modes: dict = {e.key: "both" for e in state.ENVIRONMENTS}  # default BOTH
         open_state: dict = {}  # per-cluster body open/closed; running clusters default open
@@ -337,11 +335,12 @@ def page() -> None:
         def _render(data: dict) -> None:
             statuses = data["statuses"]
             visible = [e for e in statuses
-                       if show_stopped["v"] or e.state in ("running", "partial")]
+                       if state.UI_PREFS["show_stopped"]
+                       or e.state in ("running", "partial")]
             holder.clear()
             with holder:
                 if not visible:
-                    ui.label("all clusters stopped — flip 'show stopped' to review them") \
+                    ui.label("all clusters stopped — flip 'show stopped' in the side bar to review them") \
                         .classes("opacity-60")
                 with ui.row().classes("w-full flex-wrap gap-3 items-start"):
                     for env in visible:
@@ -390,7 +389,7 @@ def page() -> None:
                 # change-gate BEFORE the expensive gather: unchanged state =>
                 # untouched DOM *and* no wasted df/system-df subprocesses
                 sig = (state.env_signature(data["statuses"]) + f"#{data['image']}"
-                       f"#{show_stopped['v']}"
+                       f"#{state.UI_PREFS['show_stopped']}"
                        f"#{','.join(c.name for c in data['other'])}")
                 if sig == last_sig["v"] and not force:
                     return
@@ -398,16 +397,7 @@ def page() -> None:
                 data.update(await asyncio.to_thread(_gather_full))
                 _render(data)
 
-        with ui.row().classes("w-full items-center gap-3"):
-            sw = ui.switch("show stopped", value=False) \
-                .tooltip("reveal clusters that are stopped or not created")
-            sw.on_value_change(lambda e: _toggle(e.value))
-            ui.space()
         holder = ui.column().classes("w-full gap-3")
-
-        async def _toggle(value: bool) -> None:
-            show_stopped["v"] = value
-            await rebuild(force=True)
 
         async def tick() -> None:
             await rebuild()
