@@ -94,7 +94,7 @@ def mount_console(body) -> None:
 
     def scroll_to_console() -> None:
         console_holder.set_visibility(True)
-        ui.run_javascript(
+        client.run_javascript(
             "document.querySelector('.podui-console')?.scrollIntoView({behavior:'smooth', block:'start'})")
 
     pill.on_click(scroll_to_console)

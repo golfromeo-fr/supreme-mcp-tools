@@ -168,7 +168,7 @@ def page() -> None:
         # show the LAST line: NiceGUI's log.js only auto-scrolls when the user
         # is already at the exact bottom — after a clear()+refill the view
         # stayed wherever it was (user report: 'slide to the bottom')
-        ui.run_javascript(
+        client.run_javascript(
             f"setTimeout(() => {{ const el = getHtmlElement({log_view.id});"
             f" const c = el && el.querySelector('.q-scrollarea__container');"
             f" if (c) c.scrollTop = c.scrollHeight; }}, 80)")
