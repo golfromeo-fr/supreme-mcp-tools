@@ -8,6 +8,7 @@ behind a typed confirmation naming the container (no casual disruption)."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 from nicegui import context, ui
 
@@ -107,6 +108,57 @@ def _power_confirm(env_key: str, full: str, short: str, action: str) -> None:
     dialog.open()
 
 
+async def _inspect_dialog(full: str) -> None:
+    """Full `podman inspect` for one container: curated summary (secrets
+    masked on screen) + collapsible raw JSON. The fetch runs in a thread;
+    the dialog is built back in the handler task, which KEEPS its slot
+    across awaits (creating UI from ensure_future tasks does not)."""
+    data = await asyncio.to_thread(state.container_inspect, full)
+    with ui.dialog() as dialog, ui.card().classes("gap-2 w-[44rem]"):
+        ui.label(full).classes("text-h6")
+        if not data:
+            ui.label("podman inspect returned nothing (container gone?)") \
+                .classes("opacity-70")
+        else:
+            cfg = data.get("Config") or {}
+            st = data.get("State") or {}
+            with ui.column().classes("gap-0 w-full"):
+                ui.label(f"image: {cfg.get('Image')}").classes("text-caption font-mono")
+                ui.label(f"created: {data.get('Created')}").classes("text-caption")
+                ui.label(f"started: {st.get('StartedAt', '')[:19]}").classes("text-caption")
+                ui.label(f"restarts: {st.get('RestartCount')}").classes("text-caption")
+                ui.label(f"status: {st.get('Status')}").classes("text-caption")
+            health = ((st.get("Health") or {}).get("Log")) or []
+            if health:
+                with ui.expansion("health probes").classes("w-full"):
+                    for h in reversed(health[-4:]):
+                        ui.label(f"exit={h.get('ExitCode')} · {h.get('Output', '')[:120]}") \
+                            .classes("text-caption font-mono")
+            mounts = data.get("Mounts") or []
+            if mounts:
+                with ui.expansion("mounts").classes("w-full"):
+                    ui.table(
+                        columns=[{"name": c, "label": c, "field": c} for c in
+                                 ("Source", "Destination")],
+                        rows=[{"Source": m.get("Source", "?"),
+                               "Destination": m.get("Destination", "?")}
+                              for m in mounts],
+                        row_key="Source").props("dense flat")
+            env_lines = state.mask_secrets((cfg.get("Env") or []))
+            with ui.expansion("environment (secrets masked)").classes("w-full"):
+                for line in env_lines:
+                    ui.label(line).classes("text-caption font-mono")
+            with ui.expansion("raw JSON").classes("w-full"):
+                ui.code(json.dumps(data, indent=2)[:20000]) \
+                    .classes("w-full max-h-[36rem]")
+        ui.button("Close", on_click=dialog.close).props("flat")
+    dialog.open()
+
+
+async def _await_inspect(full: str) -> None:
+    await _inspect_dialog(full)
+
+
 def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
     topo = TOPOLOGY[env_key]
     full = topo["container_of"].get(short)
@@ -128,6 +180,8 @@ def _node_drawer(env_key: str, short: str, rows_by_name: dict) -> None:
                 ui.button("Logs", icon="article",
                           on_click=lambda: ui.navigate.to(f"/v3/logs?container={full}")) \
                     .props("dense")
+                ui.button("Inspect", icon="plagiarism",
+                          on_click=lambda: _await_inspect(full)).props("dense")
                 # disruptive actions: typed confirm naming the container
                 ui.button("Restart", icon="restart_alt",
                           on_click=lambda: _power_confirm(env_key, full, short, "restart")) \
@@ -144,9 +198,11 @@ MODE_ICON = {"graph": "insights", "list": "list",
              "both": "view_agenda", "side": "splitscreen"}
 
 
-def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict):
+def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict,
+                  foreign: list[int] | None = None, minio_ok: bool = True):
     topo = TOPOLOGY[env.key]
     rows_by_name = {c.name: c for c in env.containers}
+    foreign = foreign or []
 
     # running clusters start EXPANDED (user: show the useful info at startup);
     # stopped/absent start folded. open_state overrides per user clicks.
@@ -173,6 +229,22 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
             mode_btn = ui.button(MODE_LABEL[mode], icon=MODE_ICON[mode]) \
                 .props("dense flat") \
                 .tooltip("view: graph / list / both — click to cycle")
+            if foreign:
+                ui.badge("host stack holds " + ",".join(str(p) for p in foreign)
+                         + " — boot will fail", color="negative")
+            if env.key == "test" and not minio_ok:
+                ui.badge("MINIO_ROOT_PASSWORD missing — boot will fail", color="warning")
+            if env.key == "test":
+                choices = state.topology_choices()
+                topo_val = state.UI_PREFS.get("test_topology", choices["current"])
+                if topo_val not in choices["options"]:
+                    topo_val = choices["current"]
+                ui.select(choices["options"], value=topo_val, label="topology",
+                          on_change=lambda e: state.UI_PREFS.update({"test_topology": e.value}),
+                          ).classes("w-52").props("dense outlined") \
+                    .tooltip("boot/rebuild topology"
+                             + ("" if choices["mode"] == "bundle"
+                                else " — host mode: fixed by node.env (bundle boot to switch)"))
             if env.state in ("running", "partial"):
                 ui.button("Stop all", icon="stop",
                           on_click=lambda k=env.key: confirm_action(
@@ -183,20 +255,29 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                               button="Stop all")).props("dense color=negative")
             elif env.state == "absent":
                 boot = boot_action(env.key)
+                if env.key == "test":
+                    boot = state.UI_PREFS.get("test_topology", boot)
                 ui.button("Boot cluster", icon="rocket_launch",
                           on_click=lambda v=boot: fire(env.key, v)).props("dense color=primary")
             else:
                 ui.button("Start all", icon="play_arrow",
                           on_click=lambda k=env.key: fire(k, "start")).props("dense color=primary")
             rebuild = boot_action(env.key)
+            if env.key == "test":
+                rebuild = state.UI_PREFS.get("test_topology", rebuild)
             ui.button("Rebuild", icon="refresh",
-                      on_click=lambda k=env.key: confirm_action(
-                          lambda: fire(k, rebuild),
-                          f"Rebuild cluster {k}?",
+                      on_click=lambda k=env.key, v=rebuild: confirm_action(
+                          lambda: fire(k, v),
+                          f"Rebuild cluster {k} ({v} topology)?",
                           "Stops the cluster, rebuilds the node image, restarts it. "
                           "Takes minutes — the console shows progress.",
                           button="Rebuild")).props("dense flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")
+            if env.key == "work" and env.containers:
+                ui.button("MCP UI", icon="web",
+                          on_click=lambda: fire("work", "ui")).props("dense flat") \
+                    .tooltip("start the in-cluster management UI on :8400 — "
+                             "stop the host startui first; useful only while the cluster is up")
 
         # BODY: hidden while collapsed; visibility re-applied on rebuilds
         body = ui.column().classes("w-full gap-2")

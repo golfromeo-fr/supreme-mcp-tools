@@ -15,7 +15,7 @@ from .. import auth, ops, state
 NAV = [
     ("/v3", "Clusters", "hub"),
     ("/v3/logs", "Logs", "article"),
-    ("/v3/operations", "Operations", "play_circle"),
+    ("/v3/operations", "Lifecycle", "tune"),
     ("/v3/bundles", "Bundles", "inventory_2"),
     ("/v3/backups", "Backups & data", "settings_backup_restore"),
 ]

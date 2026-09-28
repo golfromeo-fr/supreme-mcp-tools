@@ -109,8 +109,21 @@ def page() -> None:
                 zip_c = ui.checkbox("zip")
                 redact_c = ui.checkbox("redact")
                 db_c = ui.checkbox("from work DB")
+                ui.button("Preview", icon="visibility",
+                          on_click=lambda: show_preview()).props("dense")
                 ui.button("Harvest", icon="save", on_click=lambda: do_harvest()).props("dense")
             harvest_msg = ui.label("").classes("text-caption")
+
+        def show_preview() -> None:
+            rc, text = state.harvest_preview()
+            with ui.dialog() as dialog, ui.card().classes("w-full"):
+                title = "harvest dry-run — nothing was written"
+                if rc == 2:
+                    title = "harvest cannot run (required file missing)"
+                ui.label(title).classes("text-h6")
+                ui.code(text).classes("w-full max-h-[36rem]")
+                ui.button("Close", on_click=dialog.close).props("flat")
+            dialog.open()
 
         async def do_harvest() -> None:
             if not NAME_RE.match(name.value or ""):
@@ -141,5 +154,22 @@ def page() -> None:
                     ui.label("no bundles yet — harvest one above").classes("opacity-60")
                 for info in bundles:
                     bundle_card(info)
+
+        with ui.card().classes("w-full"):
+            with ui.expansion("guided migration (old cluster → bundle → new cluster)") \
+                    .classes("w-full"):
+                ui.label("one step at a time; after the exports: Stop all the old "
+                         "cluster (Lifecycle page), Boot… the new cluster from the "
+                         "refreshed bundle, then Restore + Import data (Backups & "
+                         "data page).").classes("text-caption opacity-70")
+                src = ui.select({e: e for e in ("work", "test")}, value="work",
+                                label="source cluster").classes("w-40").props("dense outlined")
+                for i, (label, verb) in enumerate([
+                        ("scrape the OLD cluster into the bundle", "scrape"),
+                        ("backup the OLD cluster state plane", "backup"),
+                        ("export the OLD cluster-owned data", "export-data")], 1):
+                    ui.button(f"{i}. {label}",
+                              on_click=lambda v=verb, s=src: fire(s.value, v)) \
+                        .classes("w-full").props("flat align=left")
 
         refresh()
