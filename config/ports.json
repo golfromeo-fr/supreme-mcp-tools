@@ -24,7 +24,8 @@
   "reserved": {
     "central_management": 8200,
     "metrics_server": 8300,
-    "management_ui": 8400
+    "management_ui": 8400,
+    "pod_management_ui": 8401
   },
   "timeouts": {
     "api_request": 30.0

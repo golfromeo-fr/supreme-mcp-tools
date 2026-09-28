@@ -659,12 +659,21 @@ async def deleteMemory(memory_id: str) -> str:
         except Exception as e:
             logger.warning(f"Could not read payload of {memory_id} before delete: {e}")
 
+        # ORDER MATTERS: SQL metadata first, vector point last. A failure
+        # in between then leaves a VISIBLE memory (vector point intact,
+        # metadata row gone) that a retry can finish — the reverse order
+        # orphaned invisible SQL rows (22 found in the live store,
+        # 2026-09-13) that nothing would ever retry.
+        if sql_store.is_available:
+            sql_store.delete_memory(memory_id)
+        else:
+            logger.warning(
+                f"SQL store unavailable — deleting {memory_id} without "
+                "metadata cleanup (row may linger)")
         vector_store.delete(
             COLLECTION_NAME,
             ids=[memory_id],
         )
-        if sql_store.is_available:
-            sql_store.delete_memory(memory_id)
         await _delete_artifact_key(artifact_key)
         logger.info(f"Deleted memory {memory_id}")
         return f"Deleted memory: {memory_id}"

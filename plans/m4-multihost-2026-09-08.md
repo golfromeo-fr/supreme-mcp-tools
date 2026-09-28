@@ -1,7 +1,11 @@
 # M4 — Multi-host design (2026-09-08)
 
-> STATUS: design doc — no code. Builds on E3 (identity/multi-user) and the
-> 12-surface inventory (`plans/e3-m1-identity-spike-2026-09-07.md`).
+> STATUS: M4 COMPLETE on `feature/m4-multihost` (2026-09-13) — H1, H2,
+> H2b (mirror + central mutation + boot adoption), H4, node registry +
+> runtime mask fan-out, artifact durability. All live-verified on the
+> two-node test cluster; a `work` pod env runs as daily driver
+> (`startcluster work`). See "Build status" at the bottom and
+> `plans/post-m4-roadmap-2026-09-13.md` for what comes next.
 > Goal: run **N launcher nodes** serving the same tools/data behind a load
 > balancer, with a single consistent identity/config plane.
 
@@ -48,6 +52,10 @@ same interface-swap pattern extends to the other state:
   to the same network backend (keyed by `server`/`name`), replacing the
   JSON files. Runtime pushes (E1) then apply locally AND persist shared —
   masks become cluster-wide automatically.
+  > SHIPPED SCOPE (2026-09-14): masks + inventory live in the shared
+  > `mcp_state_docs` backend; `.env` / per-tool `config.json` stay node-local
+  > with mirror + override docs — that remainder is the documented H2b
+  > deferral (see post-m4 roadmap).
 - `tools` inventory per server: stored centrally from the PRIMARY node's
   (unmasked) discovery, never from per-node masked lists (E3 self-destruct
   lesson generalized: inventory must come from a source that cannot be
@@ -187,3 +195,87 @@ machinery (single-instance multi-user is NOT limited by the JSON store).
   TTL/poll catches up (bounded, logged).
 - This remains a DESIGN — none of H1–H4 is built; E3's mono/multi flag and
   the users_store interface are the only multi-host-ready pieces that exist.
+
+
+---
+
+## Build status (feature/m4-multihost, 2026-09-10)
+
+### H1 — DONE, with a design deviation (improvement)
+
+Shipped on main as `MCP_USERS_BACKEND=db` (859537b): the whole users
+document lives in ONE row (`mcp_users_store`) of the shared SqlStore
+instead of the per-user table envisioned here. Deviation rationale:
+- the module API is document-shaped (load_users/save_users), so the
+  whole-doc row is the natural mapping and needs no ORM layer;
+- the "JSON deletes are lossy / tombstones" caveat disappears by
+  construction — every save is a full-document reconcile;
+- reads are fresh per call (no cache), so rotation/disable propagate on
+  the next request on ANY node;
+- seeds converge across nodes (seed_from_env only ADDS missing users and
+  syncs declarative env-pinned keys — verified idempotent).
+
+### H2 — masks + inventory DONE (masks half)
+
+`tools/shared/state_docs.py`: named JSON documents in the shared SqlStore
+(table `mcp_state_docs`), selected by `MCP_STATE_BACKEND=db` (json default).
+Routed through it: `launcher/tools_config.py` (load/save),
+`tools/shared/function_masks.py` (per-boot mask reads),
+`mcp_ui/components/tool_settings.py` (delegated to launcher.tools_config —
+duplicate implementation removed).
+
+**Self-destruct class KILLED as a side effect:** the live recovery during
+this build proved `update_config_with_discovered_tools` replaced inventory
+from masked `tools/list` (get_secret vanished from simplemcp's inventory on
+a real re-discovery — E3 lesson re-confirmed in the wild). It now UNIONS
+discovered tools with existing inventory, so enforcement can never narrow
+the cluster inventory.
+
+Verified: two independent processes sharing one Turso file — node A writes
+masks+inventory, node B reads them via `load_tools_config` and
+`function_masks.masked_tools`; json default untouched; suite 881, e35 45/0.
+
+### H2b — env/auth: MIRROR shipped (adopt-only)
+
+`env_manager.snapshot_env_auth()` mirrors raw env values + auth sections to
+the shared doc `env_auth_snapshot`; `restore_missing_env_vars()` bootstraps
+a second node ADDITIVELY (missing vars only — existing lines and node-local
+identity values are never touched; dry-run supported). Runbook:
+`plans/m4-h4-runbook-2026-09-10.md`.
+
+Contract: the snapshot path NEVER writes .env (read-only mirror — .env is
+the one file with a mystery-truncation history). Central MUTATION of
+env/auth stays deferred until a real second node demands it.
+
+### Honest limits (current)
+
+- Runtime mask push (E1) applies to the node that received the API call;
+  other nodes pick the mask up at next boot (or H2v2 fan-out).
+- Writes are last-writer-wins per document.
+- Only ONE node may run the inventory sync until discovery reads through a
+  mask-immune surface (union merge already bounds the damage).
+
+
+### Update 2026-09-13 — cluster runtime completion (5052707)
+
+- **Node registry**: nodes register in `cluster_nodes` at central-API
+  start (MCP_NODE_NAME/MCP_NODE_CENTRAL_URL). GOTCHA: registration must
+  live in launchmcp's `start_management_api_server` — ManagementServer
+  .start() is never called by the launcher.
+- **Runtime mask fan-out**: toggles fan out to registered siblings via
+  POST /api/internal/mask-push (local-only apply). Live proof: disable via
+  node1 → node2's tools/list converged in seconds.
+- **Central env/auth mutation**: mutations mirror to env_overrides /
+  auth_overrides docs; ALL nodes adopt at boot (os.environ before tool
+  imports; config.json before discovery). GOTCHA found+fixed: default
+  tools dir was doubled (/app/tools/tools) — cluster.py lives at
+  tools/shared/, parents[1] is already tools/. Live proof: rotated
+  convertermcp key adopted by node2 on restart and enforced.
+- **.env read-only mounts**: persist failures are non-fatal in db mode
+  (shared doc authoritative; adoption re-applies).
+- **H3 (work env)**: artifacts on a declared named volume.
+- **startcluster**: two ISOLATED environments — `work` (pod daily driver,
+  canonical ports, host identity/data adopted) and `test` (multi-host
+  bench). Suite note: the e35 suite manages identity via the host
+  users.json → it tests whichever environment holds the canonical ports
+  (see post-M4 roadmap Phase A for the env-aware suite fix).

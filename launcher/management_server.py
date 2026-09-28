@@ -9,6 +9,8 @@ import asyncio
 import hmac
 import logging
 import os
+from collections import deque
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
@@ -27,7 +29,8 @@ from .tools_config import (
     enable_tool,
     disable_tool,
 )
-from tools.shared import users_store
+from tools.shared import cluster, users_store
+from tools.shared.function_masks import MaskRequest
 from .env_manager import (
     get_env_values,
     get_all_env_values,
@@ -44,17 +47,113 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
-async def _push_runtime_mask(server_name: str, tool_name: str, masked: bool) -> dict:
+async def _push_runtime_mask(req: MaskRequest, fanout: bool = True) -> dict:
     """E1: push a just-persisted mask to the RUNNING server (same process —
     the per-tool registry holds its FastMCP instance). File-first already
-    happened; a failed push still converges at the tool's next restart."""
+    happened; a failed push still converges at the tool's next restart.
+
+    M4: masks persist to the SHARED state (db mode) — after the local
+    apply, fan out to every other registered cluster node so the whole
+    cluster converges immediately, not at their next boot."""
     from .tool_extensions.registry import get_registry_for_tool
     from tools.shared.function_masks import apply_mask_at_runtime
 
-    registry = await get_registry_for_tool(server_name)
+    registry = await get_registry_for_tool(req.server_name)
     mcp = getattr(registry, "mcp_instance", None) if registry else None
-    result = apply_mask_at_runtime(mcp, server_name, tool_name, masked)
+    result = apply_mask_at_runtime(mcp, req.server_name, req.tool_name, req.masked)
+
+    if fanout:
+        _schedule_mask_fanout(req)
+
     return {"runtime_applied": result["applied"], "runtime_note": result["reason"]}
+
+
+# Strong references to in-flight background tasks — the event loop holds
+# only weak ones, so an unreferenced task can be garbage-collected mid-flight.
+_mask_fanout_tasks: set = set()
+
+
+def _fanout_failure_is_connection_error(exc: BaseException) -> bool:
+    """True for connection-level fan-out failures (DNS/connect/timeout/OS
+    socket) — the sibling is genuinely DOWN. An HTTP refusal (401/403/404/
+    5xx) is NOT: the node answered, so it stays in the fan-out set and
+    converges via its next boot adoption instead."""
+    import httpx
+
+    return isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, OSError))
+
+
+def _schedule_mask_fanout(req: MaskRequest) -> None:
+    """Fire-and-forget fan-out to sibling cluster nodes (never blocks the
+    API response; failures only log — boot-time adoption converges)."""
+    if not cluster.is_db_mode():
+        return
+    node_name = os.environ.get("MCP_NODE_NAME")
+    if not node_name:
+        return  # single-node / mono deployment
+
+    async def _fanout():
+        try:
+            import httpx
+
+            siblings = cluster.sibling_nodes(node_name)
+            if not siblings:
+                return
+            key = os.environ.get("MCP_MANAGEMENT_API_KEY")
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            body = {"server_name": req.server_name, "tool_name": req.tool_name,
+                    "masked": req.masked, "fanout": True}
+            applied, failed, refused = [], [], []
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for peer, url in siblings.items():
+                    try:
+                        r = await client.post(
+                            f"{url.rstrip('/')}/api/internal/mask-push",
+                            json=body, headers=headers)
+                        if r.status_code == 200:
+                            applied.append(peer)
+                        else:
+                            refused.append((peer, r.status_code))
+                    except Exception as e:
+                        if _fanout_failure_is_connection_error(e):
+                            failed.append(peer)
+                        else:
+                            refused.append((peer, type(e).__name__))
+            # M4: only connection-level failures mark a peer unreachable
+            # (dropped from future fan-outs until its next boot re-registers
+            # it). An HTTP refusal means the node is REACHABLE — marking it
+            # would silently drop a healthy sibling until reboot.
+            for peer, status in refused:
+                logging.getLogger(__name__).warning(
+                    f"[M4] mask fan-out to {peer} refused ({status}) - node "
+                    "is reachable, NOT marked unreachable")
+            for peer in failed:
+                try:
+                    cluster.mark_unreachable(peer)
+                except Exception:
+                    pass
+            if applied or failed or refused:
+                logging.getLogger(__name__).info(
+                    f"[M4] mask fan-out {req.tool_name}({'masked' if req.masked else 'enabled'}) "
+                    f"-> applied: {applied or '[]'} failed: {failed or '[]'}"
+                    + (" (marked unreachable)" if failed else "")
+                    + (f" refused: {[f'{p} ({s})' for p, s in refused] or '[]'}"
+                       if refused else ""))
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"[M4] mask fan-out crashed before reaching any sibling "
+                f"(they keep their previous masks until boot adoption): {e}")
+
+    try:
+        task = asyncio.get_running_loop().create_task(_fanout())
+    except RuntimeError:
+        # Only reachable from a sync caller outside the event loop — say so
+        # instead of silently dropping the fan-out.
+        logging.getLogger(__name__).warning(
+            "[M4] mask fan-out skipped: no running event loop")
+        return
+    _mask_fanout_tasks.add(task)
+    task.add_done_callback(_mask_fanout_tasks.discard)
 
 
 # Request/Response Models
@@ -68,13 +167,29 @@ class MutateRequest(BaseModel):
     params: dict[str, Any]
 
 
+class UserRoleRequest(BaseModel):
+    """Role change (user|admin); refuses to demote the last admin."""
+    role: str
+
+
+class MaskPushRequest(BaseModel):
+    """M4: sibling mask fan-out."""
+    server_name: str
+    tool_name: str
+    masked: bool
+    fanout: bool = False
+
+
 class UserCreateRequest(BaseModel):
     """E3/M2: create a user (mcp_key returned once)."""
     username: str
     password: str
     role: str = "user"
     servers: list[str] = []
-    masked_functions: dict[str, list[str]] = {}
+    # None → the store applies DEFAULT_USER_MASKS for role=user ({} would
+    # silently skip the protective profile — UI/API-created users must get
+    # the same default denial posture as store-created ones)
+    masked_functions: dict[str, list[str]] | None = None
 
 
 class UserPasswordRequest(BaseModel):
@@ -186,6 +301,12 @@ class ManagementServer:
         self.port = port
         self.host = host
         self.api_key = api_key
+        if api_key is None:
+            logger.warning(
+                "MCP_MANAGEMENT_API_KEY is NOT set — the central management "
+                "API on %s:%s runs OPEN (no auth): user/role/env mutation is "
+                "open to ANY caller. Set MCP_MANAGEMENT_API_KEY to require "
+                "auth.", host, port)
         
         self.app = FastAPI(
             title="Supreme MCP Tools Management API",
@@ -227,24 +348,48 @@ class ManagementServer:
         
         if credentials is None:
             raise HTTPException(status_code=401, detail="Missing API key")
-        
+
         token = credentials.credentials
         if hmac.compare_digest(token, self.api_key):
             self._audit_access(request, "system")
             return "system"
-        
+
         from tools.shared import users_store
         for key, entry in users_store.central_tokens().items():
             if hmac.compare_digest(token, key):
                 self._audit_access(request, entry["client_id"])
                 return entry["client_id"]
-        
+
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
+
+    # polled reads (the UI's status poller / Logs auto-refresh) audit at DEBUG:
+    # at INFO they would out-shout everything else in the launcher log — the
+    # Logs tab's own 5s polling was ~720 lines/hour of its own access lines.
+    # Everything else (users, masks, config, env, every mutation) stays INFO.
+    _POLLED_READS = {("GET", "/api/logs"), ("GET", "/api/tools")}
+
+    @classmethod
+    def _audit_level(cls, request: Request) -> int:
+        return (logging.DEBUG
+                if (request.method, request.url.path) in cls._POLLED_READS
+                else logging.INFO)
+
+    @classmethod
+    def _audit_access(cls, request: Request, who: str) -> None:
+        logger.log(cls._audit_level(request),
+                   f"central.access user={who} {request.method} {request.url.path}")
+
     @staticmethod
-    def _audit_access(request: Request, who: str) -> None:
-        logger.info(f"central.access user={who} {request.method} {request.url.path}")
-    
+    def _launcher_log_path() -> Path | None:
+        """Active launcher log: the root logger's FileHandler target when one
+        is configured (works wherever the launcher runs — repo cwd or /app in
+        the node image), else logs/launcher.log if it exists, else None."""
+        for h in logging.getLogger().handlers:
+            if isinstance(h, logging.FileHandler):
+                return Path(h.baseFilename)
+        p = Path("logs/launcher.log")
+        return p if p.exists() else None
+
     def _register_routes(self) -> None:
         """Register all API routes."""
         
@@ -257,6 +402,33 @@ class ManagementServer:
                 "tools_count": len(tools),
                 "tools": tools
             }
+
+        @self.app.get("/api/logs")
+        async def get_logs(
+            tail: int = 200,
+            grep: str | None = None,
+            _: bool = Depends(self._verify_api_key),
+        ):
+            """Tail the launcher log (admin key). Reads the active root-logger
+            FileHandler's file, so this works wherever the launcher runs —
+            host repo or /app inside the node image. grep filters case-
+            insensitively BEFORE the tail (filter-then-tail, one pass)."""
+            tail = max(1, min(tail, 20000))
+            path = self._launcher_log_path()
+            if path is None:
+                return {"file": None, "lines": [], "total_lines": 0,
+                        "tail": tail, "grep": grep}
+            shown: deque[str] = deque(maxlen=tail)
+            total = 0
+            needle = grep.lower() if grep else None
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for raw in f:
+                    total += 1
+                    if needle is not None and needle not in raw.lower():
+                        continue
+                    shown.append(raw.rstrip("\n"))
+            return {"file": str(path), "lines": list(shown),
+                    "total_lines": total, "tail": tail, "grep": grep}
         
         @self.app.get("/api/tools")
         async def list_tools(_: bool = Depends(self._verify_api_key)):
@@ -471,14 +643,30 @@ class ManagementServer:
             after = set(disabled_list)
             runtime_results = {}
             for tool_name in sorted(after - before):
-                runtime_results[tool_name] = await _push_runtime_mask(server_name, tool_name, True)
+                runtime_results[tool_name] = await _push_runtime_mask(
+                    MaskRequest(server_name, tool_name, True))
             for tool_name in sorted(before - after):
-                runtime_results[tool_name] = await _push_runtime_mask(server_name, tool_name, False)
+                runtime_results[tool_name] = await _push_runtime_mask(
+                    MaskRequest(server_name, tool_name, False))
             return {
                 "server": server_name,
                 "disabled": disabled_list,
                 "runtime": runtime_results,
             }
+
+        @self.app.post("/api/internal/mask-push")
+        async def internal_mask_push(
+            request: MaskPushRequest,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """M4: receive a fan-out mask push from a sibling node. Applies
+            LOCALLY only (fanout=False) — no re-propagation, no loop."""
+            result = await _push_runtime_mask(
+                MaskRequest(request.server_name, request.tool_name,
+                            request.masked),
+                fanout=False)
+            return {"node": os.environ.get("MCP_NODE_NAME", "unknown"),
+                    **result}
 
         @self.app.post("/api/disabled-tools/{server_name}/{tool_name}/disable")
         async def disable_tool_endpoint(
@@ -489,7 +677,7 @@ class ManagementServer:
             """Disable a specific tool for a server (persist + push to the
             running server — E1 runtime masks)."""
             disable_tool(tool_name, server_name)
-            runtime = await _push_runtime_mask(server_name, tool_name, True)
+            runtime = await _push_runtime_mask(MaskRequest(server_name, tool_name, True))
             return {"server": server_name, "tool": tool_name, "disabled": True, **runtime}
 
         # === E3/M2: user management (admin; guard hardens in M3) ===
@@ -536,6 +724,16 @@ class ManagementServer:
                                              _: bool = Depends(self._verify_api_key)):
             try:
                 users_store.set_password(username, request.password)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"ok": True}
+
+        @self.app.put("/api/users/{username}/role")
+        async def set_user_role_endpoint(username: str,
+                                         request: UserRoleRequest,
+                                         _: bool = Depends(self._verify_api_key)):
+            try:
+                users_store.set_role(username, request.role)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             return {"ok": True}
@@ -595,7 +793,7 @@ class ManagementServer:
             """Enable a specific tool for a server (persist + push to the
             running server — E1 runtime masks)."""
             enable_tool(tool_name, server_name)
-            runtime = await _push_runtime_mask(server_name, tool_name, False)
+            runtime = await _push_runtime_mask(MaskRequest(server_name, tool_name, False))
             return {"server": server_name, "tool": tool_name, "disabled": False, **runtime}
 
         # === Environment Variable Management ===
@@ -646,10 +844,14 @@ class ManagementServer:
                     detail=f"Unknown environment variables: {', '.join(unknown_vars)}"
                 )
 
-            # Set each variable (validate + update)
+            # Set each variable (validate + update). set_env_value returns
+            # False only in db mode when the shared state doc did not take
+            # the change (non-db mode is always fully propagated).
+            shared_state_updated = True
             for var_name, value in request.variables.items():
                 try:
-                    set_env_value(var_name, value, persist=True)
+                    if set_env_value(var_name, value, persist=True) is False:
+                        shared_state_updated = False
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=str(e))
 
@@ -658,7 +860,10 @@ class ManagementServer:
             return {
                 "tool_name": tool_name,
                 "variables": updated,
-                "updated_count": len(request.variables)
+                "updated_count": len(request.variables),
+                # M4: False = the change is local-only (shared state backend
+                # down / write races lost) — other nodes won't adopt it.
+                "shared_state_updated": shared_state_updated,
             }
 
         @self.app.delete("/api/tools/{tool_name}/env/{var_name}")
@@ -675,11 +880,14 @@ class ManagementServer:
                     detail=f"Variable '{var_name}' not found in tool '{tool_name}'"
                 )
 
-            delete_env_value(var_name, persist=True)
+            shared_state_updated = delete_env_value(var_name, persist=True)
             return {
                 "tool_name": tool_name,
                 "variable": var_name,
-                "deleted": True
+                "deleted": True,
+                # M4: False = tombstone is local-only (shared state backend
+                # down) — other nodes won't remove the variable.
+                "shared_state_updated": shared_state_updated,
             }
 
         @self.app.get("/api/env")
@@ -736,7 +944,19 @@ class ManagementServer:
 
             atomic_write_json(config_path, config)
 
-            return {"success": True}
+            # M4: mirror to the shared state — every node adopts at boot
+            shared_state_updated = True  # non-db mode: nothing shared pending
+            if cluster.is_db_mode():
+                try:
+                    shared_state_updated = cluster.mirror_auth(
+                        tool_name, request.api_key)
+                except Exception as e:
+                    logger.warning(
+                        f"[M4] auth mirror failed for {tool_name}: {e}")
+                    shared_state_updated = False
+
+            return {"success": True,
+                    "shared_state_updated": shared_state_updated}
 
     @property
     def event_aggregator(self):

@@ -23,6 +23,12 @@ python launchmcp.py --dry-run webmcp         # preview without starting
 # UI
 python -m mcp_ui                             # NiceGUI management UI (port 8400)
 
+# Podman environments + config bundles (plans/pod-config-bundle-2026-09-17.md)
+./startcluster work|test ...                 # the two pod environments (see deploy/README.md)
+./startcluster harvest [NAME|PATH]           # snapshot config → <cwd>/my-bundles/<NAME> (default: bundle-<UTC ts>)
+./startpodui                                 # pod UI (port 8401): manage work/test envs, bundles, backups
+./startcluster work -b <path>                # seed the pod from a bundle (-b = short --config-bundle; same for test)
+
 # Backend migration
 python -m tools.shared.migrate_store export --out backup.jsonl
 python -m tools.shared.migrate_store import --in backup.jsonl --backend turso+turso
@@ -58,7 +64,7 @@ tools/shared/      # cross-tool libraries:
                    #   store_factory.py   — config resolution
                    #   hashing.py         — text_hash (pure function)
                    #   pii_redactor, relevance_scorer, server_factory, artifact_store, cache, html_utils
-                   #   memory_models, oauth_fix, utils, migrate_store
+                   #   memory_models, utils, migrate_store
                    #   impls/             — concrete backends (postgres_sql, turso_sql, qdrant_vector, turso_vector, postgres_vector)
 config/            # ports.json (port ranges+assignments), launcher_config.json, monitoring_config.json
 plans/             # design docs (FEF V3, backend abstraction)

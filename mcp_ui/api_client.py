@@ -205,6 +205,14 @@ class APIClient:
         """Check API health status."""
         return await self._request("GET", "/health")
 
+    async def get_logs(self, tail: int = 200, grep: str | None = None) -> APIResponse:
+        """Tail the launcher log via the central API (admin-gated server-side).
+        grep filters case-insensitively before the tail."""
+        params: dict[str, Any] = {"tail": tail}
+        if grep:
+            params["grep"] = grep
+        return await self._request("GET", "/api/logs", params=params)
+
     async def get_tools(self) -> APIResponse[list[ToolInfo]]:
         """
         Get all registered tools.

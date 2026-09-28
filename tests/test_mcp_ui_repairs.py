@@ -102,7 +102,9 @@ def test_parse_env_vars_keeps_value_raw():
 # === UI-8: atomic, lock-protected tools_config.json save ===
 
 def test_save_tools_config_atomic(monkeypatch, tmp_path):
-    monkeypatch.setattr(tool_settings, "TOOLS_CONFIG_FILE",
+    monkeypatch.setenv("MCP_STATE_BACKEND", "json")  # file mode for this test
+    import launcher.tools_config as ltc
+    monkeypatch.setattr(ltc, "_DEFAULT_CONFIG_FILE",
                         tmp_path / "tools_config.json")
     config = {"disabled_tools": {"webmcp": ["brave_search_web"]}, "tools": {}, "version": 1}
     tool_settings._save_tools_config(config)
@@ -113,6 +115,59 @@ def test_save_tools_config_atomic(monkeypatch, tmp_path):
     # A second save over a complete file stays consistent (read-modify-write base)
     tool_settings._save_tools_config({"disabled_tools": {}, "tools": {}, "version": 1})
     assert json.loads((tmp_path / "tools_config.json").read_text())["disabled_tools"] == {}
+
+
+# === M4: deleteMemory must delete SQL metadata BEFORE the vector point ===
+
+def _load_memory_tools():
+    """Import tools/memorymcp/memory_tools.py (side-effect import: memory_core
+    initializes backend clients). Skip cleanly when the env can't support it."""
+    tools_mem = Path(__file__).resolve().parents[1] / "tools" / "memorymcp"
+    sys.path.insert(0, str(tools_mem))
+    try:
+        import memory_tools
+        return memory_tools
+    except Exception as e:  # pragma: no cover - depends on local backends
+        pytest.skip(f"memory_tools unavailable in this env: {e}")
+
+
+def test_delete_memory_store_order(monkeypatch):
+    """BEHAVIOR check (was source-string surgery): with recording fakes, the
+    SQL metadata delete must be OBSERVED before the vector point delete.
+    Deleting SQL first keeps failures recoverable: a mid-delete crash leaves
+    a VISIBLE memory a retry can finish. The old order (vector first)
+    orphaned invisible SQL rows (22 found live, 2026-09-13).
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    mt = _load_memory_tools()
+    calls = []
+
+    class _FakeVector:
+        def retrieve(self, collection, ids, with_payload=False):
+            return [SimpleNamespace(payload={"artifact_key": None})]
+
+        def delete(self, collection, ids=None):
+            calls.append(("vector", ids[0]))
+
+    class _FakeSql:
+        is_available = True
+
+        def delete_memory(self, memory_id):
+            calls.append(("sql", memory_id))
+
+    async def _noop_artifact(key):
+        return None
+
+    monkeypatch.setattr(mt, "vector_store", _FakeVector())
+    monkeypatch.setattr(mt, "sql_store", _FakeSql())
+    monkeypatch.setattr(mt, "_delete_artifact_key", _noop_artifact)
+
+    result = asyncio.run(mt.deleteMemory("order-check-id"))
+    assert result.startswith("Deleted memory")
+    assert calls == [("sql", "order-check-id"), ("vector", "order-check-id")]
+
 
 # === Sticky tabs across tool switches ===
 

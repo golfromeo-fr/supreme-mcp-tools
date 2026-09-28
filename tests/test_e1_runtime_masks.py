@@ -164,22 +164,24 @@ class TestCentralPush:
     def test_push_runtime_mask_uses_tool_registry(self, mask_env, monkeypatch):
         import launcher.tool_extensions.registry as reg_mod
         from launcher.management_server import _push_runtime_mask
+        from tools.shared.function_masks import MaskRequest
 
         mcp, _cfg, _tc = mask_env
         registry = ExtensionRegistry()
         registry.mcp_instance = mcp
         monkeypatch.setitem(reg_mod._global_registries, "maskprobe-e1", registry)
 
-        result = asyncio.run(_push_runtime_mask("maskprobe-e1", "double", True))
+        result = asyncio.run(_push_runtime_mask(MaskRequest("maskprobe-e1", "double", True)))
         assert result["runtime_applied"] is True
         assert _list_names(mcp) == []
 
     def test_push_without_registry_reports_not_applied(self, monkeypatch):
         import launcher.tool_extensions.registry as reg_mod
         from launcher.management_server import _push_runtime_mask
+        from tools.shared.function_masks import MaskRequest
 
         monkeypatch.setitem(reg_mod._global_registries, "ghost-srv", None)
-        result = asyncio.run(_push_runtime_mask("ghost-srv", "double", True))
+        result = asyncio.run(_push_runtime_mask(MaskRequest("ghost-srv", "double", True)))
         assert result["runtime_applied"] is False
 
 

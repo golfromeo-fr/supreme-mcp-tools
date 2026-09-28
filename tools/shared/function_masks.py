@@ -18,18 +18,44 @@ never a server-startup failure.
 import json
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class MaskRequest:
+    """One mask change crossing the central → runtime/fan-out boundary
+    (M4 data-clump fix: replaces the loose (server_name, tool_name, masked)
+    tuple). Wire formats (fan-out POST body, 81xx API) stay unchanged."""
+    server_name: str
+    tool_name: str
+    masked: bool
 
 logger = logging.getLogger(__name__)
 
-# Same file the launcher (launcher/tools_config.py) and mcp_ui
-# (mcp_ui/components/tool_settings.py) write. Collapsing these three
-# constants onto one is tracked as design-pass D2 follow-up.
+# Canonical path (launcher/tools_config.py owns the constant and ALL
+# writes; the mcp_ui duplicate was removed when tool_settings delegated).
+# This module keeps its own copy BY LAYERING: it loads inside tool
+# processes at import time and must not import the launcher.
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "supreme-mcp-tools" / "tools_config.json"
 
 
 def masked_tools(server_name: str, config_path: Path | None = None) -> list[str]:
-    """Return the masked tool names for one server; [] when unset or unreadable."""
+    """Return the masked tool names for one server; [] when unset or unreadable.
+
+    M4/H2: in db mode (MCP_STATE_BACKEND=db, no explicit config_path) the
+    masks come from the shared state doc — cluster-wide masks read fresh on
+    every tool import/boot."""
+    if config_path is None:
+        from tools.shared import state_docs
+
+        if state_docs.is_db_mode():
+            doc = state_docs.load_doc(state_docs.DOC_TOOLS_CONFIG)
+            if doc is not None:
+                disabled = doc.get("disabled_tools", {}).get(server_name, [])
+                return [name for name in disabled if isinstance(name, str) and name]
+            # None = no row yet OR backend unavailable → file path below
+
     path = Path(
         config_path
         or os.environ.get("MCP_TOOLS_CONFIG_PATH")

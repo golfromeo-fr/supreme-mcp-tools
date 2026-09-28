@@ -65,3 +65,76 @@ def pg_dsn():
     except Exception:
         return None
     return dsn
+
+
+@pytest.fixture()
+def db_backend(monkeypatch):
+    """db-mode state_docs over the shared fake SqlStore (M5: one definition
+    for test_state_docs / test_cluster_state / test_env_manager_h2b)."""
+    fake = FakeSqlStore()
+    monkeypatch.setenv("MCP_STATE_BACKEND", "db")
+    monkeypatch.setattr("tools.shared.sql_store.get_sql_store", lambda: fake)
+    from tools.shared import state_docs
+    monkeypatch.setattr(state_docs, "_conn_singleton", None)
+    monkeypatch.setattr(state_docs, "_init_done", False)
+    return fake
+
+
+# ---------------------------------------------------------------------------
+# Canonical fake SQL backend (M5 — was duplicated ×3 across test files).
+# Implements exactly the surface state_docs.shared_exec() relies on since the
+# SqlStore.execute consolidation: the STORE exposes execute() and delegates
+# to the fake connection ('?'-placeholders, CAS/race semantics, statement
+# recording). Lives here because a site-packages module named ``tests``
+# shadows the tests/ namespace package, breaking ``tests._fakes`` imports.
+# ---------------------------------------------------------------------------
+
+
+class FakeCursor:
+    def __init__(self, state, params):
+        self._state, self._params = state, params
+
+    def fetchone(self):
+        sql = self._state["last_sql"]
+        if sql.startswith("SELECT data"):
+            name = self._state.get("last_name")
+            return (self._state["rows"][name]
+                    if name in self._state["rows"] else None)
+        return None
+
+
+class FakeConn:
+    def __init__(self):
+        self.state = {"rows": {}, "last_sql": "", "last_name": None,
+                      "statements": []}
+
+    def execute(self, sql, params=()):
+        self.state["statements"].append((sql, params))
+        self.state["last_sql"] = sql
+        rows = self.state["rows"]
+        if sql.startswith("INSERT INTO mcp_state_docs"):
+            (name, data, ts) = params
+            # plain CAS insert has no ON CONFLICT — a duplicate name is the
+            # create race and must fail like a real unique violation
+            if "ON CONFLICT" not in sql and name in rows:
+                raise RuntimeError("UNIQUE constraint failed: mcp_state_docs.name")
+            rows[name] = (data, ts)
+        elif sql.startswith("UPDATE mcp_state_docs"):
+            (data, ts, name, expected) = params
+            if name in rows and rows[name][1] == expected:
+                rows[name] = (data, ts)
+        if sql.startswith("SELECT data"):
+            self.state["last_name"] = params[0]
+        return FakeCursor(self.state, params)
+
+
+class FakeSqlStore:
+    """Minimal SqlStore double: just what state_docs.shared_exec() needs."""
+
+    is_available = True
+
+    def __init__(self):
+        self._conn = FakeConn()
+
+    def execute(self, sql, params=()):
+        return self._conn.execute(sql, params)

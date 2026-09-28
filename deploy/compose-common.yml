@@ -1,0 +1,94 @@
+# M4 prototype — COMMON layer: the two launcher nodes (+ optional UI).
+#
+# ALWAYS used by startlauncher-podman, stacked with exactly one topology
+# file via -f:
+#   compose-pg.yml          embedded postgres (state plane in a container)
+#   compose-turso.yml       embedded Turso/libSQL (sqld in a container)
+#   (external-* topologies add no db service — node.env points outward)
+#
+# State-plane backend selection lives in node.env (mounted at /app/.env):
+#   embedded PG:    MCP_USERS_BACKEND=db, POSTGRES_HOST=db, POSTGRES_*
+#   embedded Turso: MCP_USERS_BACKEND=db, TURSO_DATABASE_URL=http://db:8080
+#   external:       same vars, your DSNs
+# load_dotenv does not override pre-set container env, so topology files
+# only define the db SERVICE; node configuration stays in node.env.
+#
+# Only the central APIs are published to the host (per-node ports).
+# Tool endpoints are published too (18002/18003, 19002/19003) so the
+# cross-node MCP demo works from the host.
+
+name: mcp-multihost
+
+services:
+  node1:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    environment:
+      TOOLS_LIST: "simplemcp convertermcp webmcp"
+      MCP_NODE_NAME: node1
+      MCP_NODE_CENTRAL_URL: http://node1:8200
+    volumes:
+      - ./node.env:/app/.env:ro
+    ports:
+      - "18200:8200"
+      - "18002:8002"
+      - "18003:8003"
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  node2:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    environment:
+      TOOLS_LIST: "simplemcp convertermcp webmcp"
+      MCP_NODE_NAME: node2
+      MCP_NODE_CENTRAL_URL: http://node2:8200
+    volumes:
+      - ./node.env:/app/.env:ro
+    ports:
+      - "19200:8200"
+      - "19002:8002"
+      - "19003:8003"
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  ui:
+    profiles: ["ui"]
+    image: mcp-node:latest
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    command: ["python3", "-m", "mcp_ui.management_ui"]
+    environment:
+      MCP_API_URL: http://node1:8200
+      # live tools/list for inventory discovery targets the node's MCP ports,
+      # which are NOT on the ui container's own 127.0.0.1
+      MCP_DISCOVERY_HOST: node1
+    volumes:
+      - ./node.env:/app/.env:ro
+    ports:
+      - "18400:8400"
+    depends_on:
+      node1:
+        condition: service_started

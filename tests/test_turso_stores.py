@@ -257,3 +257,15 @@ class TestVectorSerialization:
         assert _parse_vector("not-a-vector") == []
         assert _parse_vector(None) == []
         assert _parse_vector("") == []
+
+    def test_s_rejects_injection_collection_names(self):
+        """_s is the single choke point for interpolated identifiers —
+        non-bareword names must raise, not pass through (Mimosa-flagged
+        class, fixed 2026-09-14)."""
+        from shared.impls.turso_vector import _s
+
+        assert _s("my-collection.v2") == "my_collection_v2"
+        for bad in ("x; DROP TABLE memories--", "x' --", "a b", "a)b",
+                    "", 'a"b', "a-b;--"):
+            with pytest.raises(ValueError):
+                _s(bad)

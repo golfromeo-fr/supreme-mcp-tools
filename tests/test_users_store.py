@@ -306,6 +306,10 @@ class _FakeSqlStore:
     def __init__(self):
         self._conn = _FakeConn()
 
+    def execute(self, sql, params=()):
+        # shared_exec() (M1) returns the STORE and calls execute() on it.
+        return self._conn.execute(sql, params)
+
 
 import tools.shared.users_store as users_store  # noqa: E402
 

@@ -68,9 +68,22 @@ def _parse_vector(text: Any) -> list[float]:
         return []
 
 
+_IDENTIFIER_SAFE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
 def _s(name: str) -> str:
-    """Sanitize collection name for use as SQL identifier (handles hyphens, dots)."""
-    return name.replace("-", "_").replace(".", "_").replace("/", "_")
+    """Sanitize a collection name for use as an SQL identifier.
+
+    Identifiers cannot be parameterized, so replacement alone is not
+    enough: anything that would not be a bareword after separator
+    normalization raises instead of reaching the SQL text.
+    """
+    cleaned = name.replace("-", "_").replace(".", "_").replace("/", "_")
+    if not cleaned or not _IDENTIFIER_SAFE.match(cleaned):
+        raise ValueError(
+            f"invalid collection name {name!r}: after -/._ normalization "
+            "identifiers may contain only letters, digits, underscores")
+    return cleaned
 
 
 def _rrf_fuse(dense_hits: list[ScoredPoint], sparse_hits: list[ScoredPoint],
@@ -101,10 +114,12 @@ class TursoVectorStore:
         # keeps statements independent so threads don't block on implicit txns.
         # No threading.Lock needed (would only reduce throughput); see the note
         # in TursoSqlStore.__init__ for the full rationale.
-        if auth_token:
-            self._conn = libsql.connect(url, auth_token=auth_token)
-        else:
-            self._conn = libsql.connect(url)
+        # HTTP (hrana) URLs die server-side on idle (STREAM_EXPIRED) and
+        # libsql never reconnects — use the reconnecting wrapper (no-op for
+        # local file: URLs). See tools/shared/impls/libsql_reconnect.py.
+        from shared.impls.libsql_reconnect import connect_with_reconnect
+
+        self._conn = connect_with_reconnect(url, auth_token)
         self._conn.autocommit = True
         # Detect vector support
         self._has_vector = self._detect_vector_support()
