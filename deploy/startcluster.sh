@@ -168,13 +168,19 @@ work_env() { action="${1:-up}"; shift || true
     ( cd deploy && podman-compose -p "$PROJECT" down ) 2>/dev/null || true
     podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
     podman volume rm -f "${PROJECT}_work_pgdata" 2>/dev/null || true
-    ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml up -d db ) \
+    # keep the bundle's config/tool mounts across a restore (fix-band b):
+    # compose-work.bundle.yml exists iff the last up was bundle-managed
+    BUNDLE_F=()
+    [ -f deploy/compose-work.bundle.yml ] && BUNDLE_F=(-f compose-work.bundle.yml)
+    ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml \
+        ${BUNDLE_F[@]+"${BUNDLE_F[@]}"} up -d db ) \
       || ( cd deploy && podman-compose -p "$PROJECT" up -d db )
     sleep 8
     podman exec -i "${PROJECT}_db_1" psql -U mcp -d mcp < "$f" >/dev/null \
       && echo "[work] restore imported — starting the node..." \
       || { echo "[work] restore import FAILED"; exit 1; }
-    ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml up -d work ) \
+    ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml \
+        ${BUNDLE_F[@]+"${BUNDLE_F[@]}"} up -d work ) \
       || ( cd deploy && podman-compose -p "$PROJECT" up -d work )
     if wait_http http://127.0.0.1:8200/health 50; then
       echo "[work] restored and healthy"
@@ -251,7 +257,12 @@ OWN
     start)
       ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml start ) 2>/dev/null || true
       [ -n "$(podman ps -a --filter "name=${PROJECT}_ui_1" -q)" ] && podman start "${PROJECT}_ui_1" >/dev/null 2>&1 || true
-      sleep 5 ;;
+      # bounded health wait — a bare sleep made 'start ok' optimistic
+      if wait_http http://127.0.0.1:8200/health 20; then
+        echo "[work] central healthy"
+      else
+        echo "[work] WARNING: central not healthy yet — check: podman logs ${PROJECT}_work_1"
+      fi ;;
     clean)
       echo "[work] this removes containers AND the state volume (users/masks) — type 'wipe' to confirm:"
       read -r ans; [ "$ans" = "wipe" ] || { echo "aborted"; exit 1; }
@@ -465,7 +476,12 @@ test_env() { action="${1:-pg}"; shift || true
       [ -n "$(podman ps -a --filter "name=${PROJECT}_db_1" -q)" ] && podman start "${PROJECT}_db_1" >/dev/null 2>&1 || true
       ( cd deploy && podman-compose -p "$PROJECT" -f compose-common.yml -f compose-pg.yml \
           -f compose-lb.yml -f compose-artifacts.yml start ) 2>/dev/null || true
-      sleep 5 ; exit 0 ;;
+      if wait_http http://127.0.0.1:18200/health 20; then
+        echo "[test] node1 healthy"
+      else
+        echo "[test] WARNING: node1 not healthy yet — check: podman logs ${PROJECT}_node1_1"
+      fi
+      exit 0 ;;
     backup)
       ts=$(date +%Y%m%d-%H%M%S)
       out="${HOME}/supreme-mcp-tools-backups/test-pg-$ts.sql"

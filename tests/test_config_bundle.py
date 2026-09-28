@@ -428,3 +428,27 @@ def test_podman_compose_volumes_merge_is_union(tmp_path):
     py = py.replace("#!", "").strip() or "/usr/bin/python3"
     r = subprocess.run([py, "-c", probe], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+# ------------------------------------------------- E7: duplicate-key last-wins
+
+
+def test_bundle_node_env_duplicate_turso_last_wins(sandbox, tmp_path):
+    """E7 (fix bands): a bundle with TURSO_DATABASE_URL=file:... BEFORE
+    TURSO_DATABASE_URL=libsql://... must pass the NETWORK value through in
+    external-turso mode (dotenv is last-wins) — not the stale file: line."""
+    import os
+    p = Path(sandbox / ".env")
+    p.write_text(SANDBOX_ENV + "TURSO_DATABASE_URL=libsql://cloud.example.com\n")
+    bundle = tmp_path / "b"
+    r = run(["bash", sandbox / "deploy" / "harvest-config.sh", str(bundle)])
+    assert r.returncode == 0, r.stderr
+    r = startcluster("bundle-node-env", bundle, "external-turso",
+                     env_extra={"BUNDLE_MINIO_PW": ""})
+    assert r.returncode == 0, r.stderr
+    keys = dict(l.split("=", 1) for l in env_lines(r.stdout) if "=" in l)
+    assert keys.get("TURSO_DATABASE_URL") == "libsql://cloud.example.com"
+    # no ACTIVE file: assignment may survive (drop-comments may mention it)
+    active_file = [l for l in env_lines(r.stdout)
+                   if "file:" in l.split("=", 1)[1]]
+    assert not active_file, active_file

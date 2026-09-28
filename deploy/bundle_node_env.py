@@ -108,7 +108,18 @@ def main() -> None:
     def is_file_val(key: str) -> bool:
         return final.get(key, "").startswith("file:")
 
-    for key, line in pairs:
+    # dotenv is LAST-WINS: emit each KEY exactly once, at its LAST occurrence,
+    # with that occurrence's value. Without this, a bundle holding e.g.
+    # TURSO_DATABASE_URL=file:... followed by TURSO_DATABASE_URL=libsql://...
+    # would pass the stale file: line through (E7 edge from the fix bands).
+    last_pos: dict[str, int] = {}
+    for idx, (key, _line) in enumerate(pairs):
+        if key is not None:
+            last_pos[key] = idx
+
+    for idx, (key, line) in enumerate(pairs):
+        if key is not None and last_pos.get(key) != idx:
+            continue  # superseded by a later occurrence
         if key is None:
             if line.strip():
                 # comment/blank lines from the bundle stay out — this file is self-documenting

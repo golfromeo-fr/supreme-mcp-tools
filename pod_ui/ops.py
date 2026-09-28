@@ -94,7 +94,11 @@ class OpRunner:
     async def start(self, env_key: str | None, action: str, *args,
                     label: str | None = None) -> OpState | None:
         """Start an op. Returns None (and does nothing) when one is running —
-        the running() guard is the mutual exclusion (no queueing)."""
+        the running() guard is the mutual exclusion (no queueing).
+        INVARIANT (closes the recorded TOCTOU, fix-band f): the running()
+        check and the self.current = op reservation happen with NO await
+        between them, so within the single-threaded event loop they are
+        atomic — a second concurrent start() always observes running()."""
         if self.running():
             return None
         argv, wipe = build_command(env_key, action, *args, script=self.script)
@@ -158,12 +162,14 @@ class OpRunner:
 runner = OpRunner()
 
 
-def fire(env_key: str | None, action: str, *args) -> None:
-    """UI-button op launch: refuses while one runs, else starts it in the
-    background so click handlers never block; notifications via NiceGUI
-    (lazy import keeps this module importable from pure tests)."""
+def fire(env_key: str | None, action: str, *args) -> bool:
+    """UI-button op launch. Returns False (and notifies) when an op is
+    already running; True when accepted — callers notify 'started' only
+    AFTER this check, so a busy refusal never flashes 'started' first
+    (fix-band e). runner.start re-checks atomically (see its invariant)."""
     if runner.running():
         from nicegui import ui
         ui.notify("an operation is already running — watch the console", type="warning")
-        return
+        return False
     asyncio.ensure_future(runner.start(env_key, action, *args))
+    return True

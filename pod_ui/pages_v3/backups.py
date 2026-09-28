@@ -30,8 +30,10 @@ def page() -> None:
         for b in dumps[:10]:
 
             async def restore(i=b) -> None:
-                ui.notify(f"restoring {i.env or 'work'} — watch the console", type="info")
-                await ops.runner.start(i.env or "work", "restore", str(i.path))
+                env = i.env or "work"
+                if fire(env, "restore", str(i.path)):
+                    ui.notify(f"restoring {env} from {i.path.name} — watch the console",
+                              type="info")
 
             with ui.row().classes("w-full items-center gap-2"):
                 ui.label(b.path.name).classes("text-caption font-mono")
