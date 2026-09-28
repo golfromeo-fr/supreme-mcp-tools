@@ -273,3 +273,4 @@ deploy/node.env.bak-*
 my-bundles/
 startpodui
 .podui-history.json
+gui-test-screenshots/
