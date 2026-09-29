@@ -130,6 +130,33 @@ class TestTursoVectorStoreContract:
         assert info.points_count == 1
         assert info.dim == self.DIM
 
+    def test_get_collection_detects_dim_past_metadata_point(self, turso_vector_store):
+        """The indexer writes __collection_metadata__ with an empty vector.
+
+        Dimension detection must skip that row instead of reporting an
+        unknown dimension, which made search reject dimension-matching
+        queries on a freshly indexed collection.
+        """
+        from shared.store_models import PointStruct
+        turso_vector_store.ensure_collection("test", dense_dim=self.DIM)
+        turso_vector_store.upsert("test", [
+            # inserted first, as the indexer does at collection creation
+            PointStruct(id="__collection_metadata__", vector=[], payload={"_is_metadata": True}),
+            PointStruct(id="p1", vector=[0.1] * self.DIM, payload={}),
+        ])
+        info = turso_vector_store.get_collection("test")
+        assert info.dim == self.DIM
+
+    def test_get_collection_missing_does_not_raise(self, turso_vector_store):
+        """A missing collection yields an empty info, never an exception.
+
+        Callers written against Qdrant's "Not found" error would otherwise
+        silently skip their create-collection path.
+        """
+        info = turso_vector_store.get_collection("nope")
+        assert info.points_count == 0
+        assert info.dim is None
+
     def test_query_dense_returns_similarity(self, turso_vector_store):
         """S5 contract: score is similarity (higher = better), not distance."""
         from shared.store_models import PointStruct

@@ -274,3 +274,6 @@ my-bundles/
 startpodui
 .podui-history.json
 gui-test-screenshots/
+
+# ragmcp incremental indexer metadata store
+.indexing_metadata/

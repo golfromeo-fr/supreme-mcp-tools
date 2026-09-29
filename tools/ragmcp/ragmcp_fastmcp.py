@@ -511,6 +511,7 @@ async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
         env['EMBEDDING_PROVIDER'] = preset['provider']
         if preset['provider'] == 'local':
             env['LOCAL_EMBEDDING_MODEL'] = preset['model']
+            env['USE_SPARSE_VECTORS'] = 'true'
 
         logs_dir = SCRIPT_DIR / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -947,8 +948,22 @@ async def _do_dense_search(query: str, limit: int, collection_name: str,
         if not LOCAL_EMBEDDINGS_AVAILABLE:
             raise ValueError("Local embeddings module not available. Install sentence-transformers.")
 
-        model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
-        query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
+        # Prefer the model recorded in the collection's __collection_metadata__
+        # point (written by the indexer) so queries match the index even when
+        # the server's global embedding model differs (e.g. bge-m3 server,
+        # bge-base index). Azure model names are ignored here — this branch
+        # only embeds locally.
+        query_model = LOCAL_EMBEDDING_MODEL
+        try:
+            meta_points = vector_store.retrieve(collection_name, ids=["__collection_metadata__"])
+            if meta_points:
+                stored_model = (meta_points[0].payload or {}).get('embedding_model')
+                if stored_model and not stored_model.startswith('text-embedding'):
+                    query_model = stored_model
+        except Exception as meta_err:
+            logger.debug(f"Could not read collection metadata for model selection: {meta_err}")
+
+        query_embeddings = generate_local_embeddings([query], model_name=query_model)
         if query_embeddings is None or len(query_embeddings) == 0:
             raise ValueError("Failed to generate local embedding for query.")
         query_vector = query_embeddings[0].tolist()
@@ -1384,6 +1399,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
     env['EMBEDDING_PROVIDER'] = preset['provider']
     if preset['provider'] == 'local':
         env['LOCAL_EMBEDDING_MODEL'] = preset['model']
+        env['USE_SPARSE_VECTORS'] = 'true'
 
     # Start process in background
     logger.info(f"Starting indexing process: {' '.join(cmd)}")

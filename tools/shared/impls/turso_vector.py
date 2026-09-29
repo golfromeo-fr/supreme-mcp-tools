@@ -524,7 +524,8 @@ class TursoVectorStore:
         dim = None
         try:
             row = self._conn.execute(
-                f"SELECT embedding FROM vec_{_s(name)} WHERE embedding IS NOT NULL LIMIT 1"
+                f"SELECT embedding FROM vec_{_s(name)} "
+                f"WHERE embedding IS NOT NULL AND TRIM(embedding) != '' AND embedding != '[]' LIMIT 1"
             ).fetchone()
             if row and row[0]:
                 # Parse "[0.1,0.2,...]" (tight or legacy spaced) → count dims
