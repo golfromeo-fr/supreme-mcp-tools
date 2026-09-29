@@ -382,6 +382,12 @@ OWN
     shopt -u nullglob
     write_bundle_compose deploy/compose-work.bundle.yml ${specs[@]+"${specs[@]}"}
     BUNDLE_F=(-f compose-work.bundle.yml)
+  elif [ -f deploy/compose-work.bundle.yml ]; then
+    # bare re-up of a bundle-managed env: re-apply the override recorded by
+    # the last -b boot, or the node comes up on the image's baked sanitized
+    # configs — tool ports shuffle and every authenticated call 401s
+    # (found live 2026-09-29, canonical-ports test)
+    BUNDLE_F=(-f compose-work.bundle.yml)
   fi
 
   # default action: up (rebuild) — stop the running work env first.
@@ -645,7 +651,12 @@ OWN
   # MinIO credentials live in deploy/.env (gitignored) — compose reads the
   # same file for ${MINIO_ROOT_PASSWORD} interpolation in compose-artifacts.yml.
   BUNDLE_F=()
-  [ -n "$BUNDLE_DIR" ] && BUNDLE_F=(-f compose-test.bundle.yml)
+  if [ -n "$BUNDLE_DIR" ]; then BUNDLE_F=(-f compose-test.bundle.yml)
+  elif [ -f compose-test.bundle.yml ]; then
+    # bare re-up of a bundle-managed bench: keep the recorded bundle mounts
+    # (same failure class as the work env, found live 2026-09-29)
+    BUNDLE_F=(-f compose-test.bundle.yml)
+  fi
   if [ "$WITH_DB" = 1 ]; then
     # NOTE: cwd is deploy/ here (the flow cd'd in for the compose calls) —
     # reference the env file absolutely or the check self-fails (latent bug
