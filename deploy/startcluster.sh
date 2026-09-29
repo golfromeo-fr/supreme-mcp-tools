@@ -720,6 +720,206 @@ else:
   fi
 }
 
+# ---------- cluster registry (custom clusters, plans V4) ----------
+REGISTRY_DIR="$REPO_ROOT/deploy/clusters.d"
+
+registry_names() {
+  [ -d "$REGISTRY_DIR" ] || return 0
+  for f in "$REGISTRY_DIR"/*.json; do [ -f "$f" ] && basename "$f" .json; done
+  return 0
+}
+
+registry_field() { # field name -> value ("" when absent)
+  [ -f "$REGISTRY_DIR/$2.json" ] || return 0
+  python3 -c "import json,sys; print(json.load(open(sys.argv[2])).get(sys.argv[1]) or '')" \
+    "$1" "$REGISTRY_DIR/$2.json"
+}
+
+registry_is_known() { [ -f "$REGISTRY_DIR/$1.json" ]; }
+
+valid_cluster_name() {
+  echo "$1" | grep -qE '^[a-z][a-z0-9-]{2,15}$'
+}
+
+
+# ---------- custom clusters (registry, plans V4) ----------
+CANONICAL_TOOL_PORT() { # tool -> container port (config/ports.json assignments)
+  case "$1" in
+    databasemcp) echo 8000 ;; webmcp) echo 8001 ;; simplemcp) echo 8002 ;;
+    convertermcp) echo 8003 ;; ragmcp) echo 8004 ;; memorymcp) echo 8005 ;;
+    *) echo 0 ;;
+  esac
+}
+
+create_cluster() { # name [flags]: --nodes 1|2 --topology pg|turso --tools "..." --port-base N -b <bundle>
+  local name="" nodes=1 topology="pg" tools="simplemcp convertermcp webmcp" port_base="" bundle=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --nodes) nodes="$2"; shift 2 ;;
+      --topology) topology="$2"; shift 2 ;;
+      --tools) tools="$2"; shift 2 ;;
+      --port-base) port_base="$2"; shift 2 ;;
+      -b) bundle="$2"; shift 2 ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [ -n "$name" ] || { echo "FATAL: create needs a cluster name"; exit 1; }
+  echo "$name" | grep -qE '^[a-z][a-z0-9-]{2,15}$' \
+    || { echo "FATAL: invalid name '$name' — lowercase letters/digits/-, 3-16 chars, starts with a letter"; exit 1; }
+  [ "$name" = "work" ] || [ "$name" = "test" ] \
+    && { echo "FATAL: '$name' is a built-in cluster"; exit 1; }
+  registry_is_known "$name" && { echo "FATAL: cluster '$name' already exists in the registry"; exit 1; }
+  case "$nodes" in 1|2) ;; *) echo "FATAL: --nodes must be 1 or 2"; exit 1 ;; esac
+  case "$topology" in pg|turso) ;; *) echo "FATAL: create supports pg|turso topologies (external via -b bundle)"; exit 1 ;; esac
+  for t in $tools; do
+    [ "$(CANONICAL_TOOL_PORT "$t")" = "0" ] && { echo "FATAL: unknown tool '$t'"; exit 1; }
+  done
+  [ -n "$bundle" ] && [ ! -f "$bundle/env/.env" ] \
+    && { echo "FATAL: bundle missing env/.env: $bundle"; exit 1; }
+
+  # port_base: given, or auto-pick the lowest free base in 20000-20999
+  if [ -z "$port_base" ]; then
+    local base busy p
+    for base in $(seq 20000 100 20900); do
+      busy=0
+      for p in "$base" "$((base + 1000))" $(seq "$((base + 2))" "$((base + 7))"); do
+        ss -ltn | grep -q ":$p\b" && busy=1 && break
+        for other in $(registry_names); do
+          grep -q ":$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null && busy=1 && break
+        done
+        [ "$busy" = 1 ] && break
+      done
+      [ "$busy" = 0 ] && { port_base=$base; break; }
+    done
+    [ -n "$port_base" ] || { echo "FATAL: no free port base in 20000-20999"; exit 1; }
+  fi
+  local p
+  for p in "$port_base" "$((port_base + 1000))" $(seq "$((port_base + 2))" "$((port_base + 7))"); do
+    ss -ltn | grep -q ":$p\b" && { echo "FATAL: port $p is already in use"; exit 1; }
+    for other in $(registry_names); do
+      [ "$other" = "$name" ] && continue
+      grep -q ":$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null \
+        && { echo "FATAL: port $p already mapped by cluster '$other'"; exit 1; }
+    done
+  done
+
+  local host_ports=""
+  for t in $tools; do
+    host_ports="$host_ports $t:$((port_base + $(CANONICAL_TOOL_PORT "$t") - 8000))"
+  done
+
+  # registry + env (create does NOT boot — cheap and reversible)
+  mkdir -p "$REGISTRY_DIR"
+  python3 - "$name" "$nodes" "$topology" "$tools" "$port_base" "$bundle" <<'PY'
+import json, sys, datetime
+name, nodes, topology, tools, port_base, bundle = sys.argv[1:7]
+tool_list = tools.split()
+PORT = {"databasemcp": 8000, "webmcp": 8001, "simplemcp": 8002,
+        "convertermcp": 8003, "ragmcp": 8004, "memorymcp": 8005}
+ports = {"central": int(port_base),
+         "central2": int(port_base) + 1000 if nodes == "2" else None,
+         "tools": {t: int(port_base) + PORT[t] - 8000 for t in tool_list}}
+entry = {"name": name, "nodes": int(nodes), "topology": topology,
+         "tools": tool_list, "port_base": int(port_base), "ports": ports,
+         "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
+if bundle and bundle != "none":
+    entry["bundle"] = bundle
+with open(f"deploy/clusters.d/{name}.json", "w") as f:
+    json.dump(entry, f, indent=2)
+print(f"[create] registry -> deploy/clusters.d/{name}.json")
+PY
+  if [ "$bundle" != "none" ] && [ -n "$bundle" ]; then
+    python3 "$REPO_ROOT/deploy/bundle_node_env.py" "$bundle" "$topology" > "deploy/$name.env"
+  else
+    cp deploy/node.env "deploy/$name.env"
+    {
+      echo ""
+      echo "# ---- state plane (custom cluster, $topology topology) ----"
+      echo "MCP_USERS_BACKEND=db"
+      echo "MCP_STATE_BACKEND=db"
+    } >> "deploy/$name.env"
+  fi
+  echo "[create] env -> deploy/$name.env"
+  echo "[create] cluster '$name' ready: $nodes node(s), $topology topology, ports:$host_ports"
+  echo "[create] boot it with: startcluster $name up"
+}
+
+rm_cluster() { # name
+  local name="$1"
+  registry_is_known "$name" || { echo "FATAL: cluster '$name' is not in the registry"; exit 1; }
+  if podman ps --format "{{.Names}}" | grep -q "^${name}_"; then
+    echo "FATAL: cluster '$name' is running — stop it first"; exit 1
+  fi
+  echo "rm cluster $name — removes containers, volumes, registry entry and env file — type '$name' to confirm:"
+  read -r ans; [ "$ans" = "$name" ] || { echo "aborted"; exit 1; }
+  ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" down -v ) 2>/dev/null || true
+  podman pod rm -f "pod_$name" >/dev/null 2>&1 || true
+  for c in $(podman ps -a --filter "name=${name}_" -q); do podman rm -f "$c" >/dev/null 2>&1 || true; done
+  for v in $(podman volume ls --format "{{.Name}}" | grep "^${name}_"); do podman volume rm -f "$v" >/dev/null 2>&1 || true; done
+  rm -f "$REGISTRY_DIR/$name.json" "deploy/$name.env" "deploy/compose-$name.run.yml"
+  echo "[rm] cluster '$name' fully removed"
+}
+
+custom_up() { # name
+  local name="$1"
+  python3 "$REPO_ROOT/deploy/gen_custom_compose.py" "$REGISTRY_DIR/$name.json" \
+    > "deploy/compose-$name.run.yml" 2>/dev/null \
+    || { echo "[custom] FATAL: cannot generate compose — registry entry broken"; exit 1; }
+  local p
+  for p in $(grep -oE '^\s*- [0-9]+:' "deploy/compose-$name.run.yml" | grep -oE '[0-9]+' | sort -nu); do
+    ss -ltn | grep -q ":$p\b" && { echo "FATAL: port $p taken since create — remove the holder or recreate the cluster"; exit 1; }
+  done
+  ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" up -d )
+  local central
+  central=$(python3 -c "import json;print(json.load(open('$REGISTRY_DIR/$name.json'))['ports']['central'])")
+  wait_http "http://127.0.0.1:$central/health" 40 \
+    && echo "[custom] $name up — central on :$central" \
+    || echo "[custom] WARNING: central not healthy yet — check: podman logs ${name}_node1_1"
+}
+
+custom_verb() { # name action [args]
+  local name="$1" action="$2"; shift 2
+  case "$action" in
+    up)    custom_up "$name" ;;
+    start) ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" start ) 2>/dev/null || true ;;
+    stop)  ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" stop ) 2>/dev/null || true
+           for c in $(podman ps --filter "name=${name}_" -q); do podman stop -t 10 "$c" >/dev/null 2>&1 || true; done ;;
+    status) podman ps -a --filter "name=${name}_" --format "{{.Names}}: {{.Status}}" ;;
+    logs)  podman logs --tail "${3:-40}" "${name}_${2:-node1}_1" ;;
+    backup)
+      ts=$(date +%Y%m%d-%H%M%S)
+      out="${HOME}/supreme-mcp-tools-backups/$name-pg-$ts.sql"
+      mkdir -p "$(dirname "$out")"
+      podman exec "${name}_db_1" pg_dump -U mcp -d mcp > "$out" \
+        && echo "[custom] backup -> $out ($(wc -c < "$out") bytes)" \
+        || { echo "[custom] backup FAILED — is the cluster running?"; exit 1; } ;;
+    restore)
+      f="${3:-}"; [ -f "$f" ] || { echo "usage: startcluster $name restore <dump.sql>"; exit 1; }
+      echo "[custom] RESTORE wipes the pgdata volume and imports $f — type 'wipe' to confirm:"
+      read -r ans; [ "$ans" = "wipe" ] || { echo "aborted"; exit 1; }
+      ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" stop ) 2>/dev/null || true
+      podman volume rm -f "${name}_pgdata" 2>/dev/null || true
+      ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" up -d db )
+      sleep 8
+      podman exec -i "${name}_db_1" psql -U mcp -d mcp < "$f" >/dev/null \
+        && echo "[custom] restore imported" \
+        || { echo "[custom] restore import FAILED"; exit 1; }
+      ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" up -d ) ;;
+    scrape)
+      bundle="${3:-}"; [ -n "$bundle" ] \
+        || { echo "[custom] scrape needs a bundle path (custom envs carry no [bundle] header when created without -b)"; exit 1; }
+      "$REPO_ROOT/deploy/harvest-config.sh" --from-pod "${name}_db_1" --env-file "$PWD/deploy/$name.env" "$bundle" ;;
+    export-data) echo "[custom] no pod-owned stores (v1 customs) — data planes are external" ;;
+    clean)
+      ( cd deploy && podman-compose -p "$name" -f "compose-$name.run.yml" down ) 2>/dev/null || true
+      podman pod rm -f "pod_$name" >/dev/null 2>&1 || true
+      for c in $(podman ps -a --filter "name=${name}_" -q); do podman rm -f "$c" >/dev/null 2>&1 || true; done
+      echo "[custom] $name cleaned (volumes kept)" ;;
+    *) echo "unknown custom verb '$action'"; exit 1 ;;
+  esac
+}
+
+# ---------- dispatch ----------
 # ---------- dispatch ----------
 # --config-bundle / --keep-dataplanes may appear anywhere; everything else is positional
 positional=()
@@ -775,5 +975,14 @@ case "${1:-}" in
     out="$1"; shift
     write_bundle_compose "$out" "$@"
     exit 0 ;;
-  *)     usage; echo; echo "unknown command '$1'"; exit 1 ;;
+  create) shift; create_cluster "$@" ;;
+  rm)     shift; [ -n "${1:-}" ] || { echo "usage: startcluster rm <cluster>"; exit 1; }; rm_cluster "$1" ;;
+  *)
+    # custom cluster verbs: name in the registry -> generic handler
+    if registry_is_known "$1"; then
+      name="$1"; action="${2:-status}"; shift 2
+      custom_verb "$name" "$action" "$@"
+    else
+      usage; echo; echo "unknown command '$1'"; exit 1
+    fi ;;
 esac
