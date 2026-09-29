@@ -370,7 +370,13 @@ class TursoVectorStore:
                     using: str | None = None) -> list[ScoredPoint]:
         vec_str = _serialize_vector(vec)
         where, filter_params = _filter_to_sql(filter, "payload")
-        where_clause = f"WHERE {where}" if where else ""
+        # Rows with no vector (e.g. the indexer's __collection_metadata__ point)
+        # make vector_distance_cos raise "vectors must have the same length",
+        # which fails the whole query. They are unmatchable anyway — skip them.
+        vec_present = "embedding IS NOT NULL AND TRIM(embedding) != '' AND embedding != '[]'"
+        where_clause = f"WHERE {vec_present}"
+        if where:
+            where_clause += f" AND {where}"
         all_params = [vec_str] + filter_params + [vec_str, limit]
         sql = f"""
                 SELECT id, payload, vector_distance_cos(embedding, ?) AS d
