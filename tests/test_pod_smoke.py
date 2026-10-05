@@ -294,3 +294,22 @@ def test_probe_10_attribution(pod_ground):
             if n.startswith(f"{pod_ground.name}_")]
     assert mine, "no containers with the ground's project prefix are running"
     assert f"{pod_ground.name}_node1_1" in mine
+
+
+# ── probe 11: two-node grounds share the identity plane ──────────────────
+
+def test_probe_11_cross_node_identity(pod_ground):
+    """The multihost invariant at ground scale: both nodes resolve identity
+    against the ONE shared state plane, so the same admin key authenticates
+    on node1 AND node2 (g2 grounds only — single-node grounds skip)."""
+    if not pod_ground.node2_ports:
+        pytest.skip("single-node ground — cross-node probes need --nodes 2")
+    for tool, port in pod_ground.node2_ports.items():
+        key = _tool_key(tool)
+        st, d = _rpc(tool, key, "tools/list", {}, port=port)
+        assert st == 200, f"node2 {tool}: keyed call failed (HTTP {st})"
+        assert "result" in (d or {}), f"node2 {tool}: no JSON-RPC result"
+    # and the two nodes are genuinely different servers
+    n1 = pod_ground.tool_ports["simplemcp"]
+    n2 = pod_ground.node2_ports["simplemcp"]
+    assert n1 != n2

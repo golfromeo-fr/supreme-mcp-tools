@@ -521,3 +521,16 @@ def test_work_turso_node_parity():
     assert pg["db"]["image"] == "docker.io/pgvector/pgvector:pg16"
     assert "127.0.0.1:9080:8080" in tu["db"]["ports"]
     assert "127.0.0.1:5433:5432" in pg["db"]["ports"]
+
+
+def test_create_two_nodes_records_tools2(sandbox, base):
+    e = None
+    r = run_create(sandbox, "twin", "--nodes", "2", "--port-base", str(base),
+                   "--tools", "simplemcp memorymcp")
+    assert r.returncode == 0, r.stderr + r.stdout
+    e = registry(sandbox, "twin")
+    assert e["ports"]["tools2"] == {"simplemcp": base + 1004,
+                                    "memorymcp": base + 1007}
+    every = [e["ports"]["central"], e["ports"]["central2"],
+             *e["ports"]["tools"].values(), *e["ports"]["tools2"].values()]
+    assert len(every) == len(set(every))

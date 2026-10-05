@@ -4,6 +4,10 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-10-05 — fix(grounds): two-node custom clusters could not coexist
+- **Fixed**: `gen_custom_compose.py` published node2's tool ports identical to node1's — with `--nodes 2` the two nodes could never run simultaneously (never hit: nodes=2 had zero usage). node2 now offsets its tool publishes by +1000, mirroring central2 = central + 1000; the registry records the node2 map as `ports.tools2`; the create port-reservation window covers base+1002..base+1007 for two-node clusters. Proposed g2 ground: probe 11 pins the multihost invariant (the same admin key authenticates on BOTH nodes via the shared state plane).
+- **Tests**: 1076 passed. Probe 11 added (gated on two-node grounds).
+
 ### 2026-10-05 — feat(grounds): three-tier testing + recreatable real-pod grounds + BASIC topology switch
 - **Three-tier test shape**: tier 1 = the hermetic suite (unchanged); tier 2 = NEW real-pod smoke probes run against disposable testing grounds (`./startgrounds probe <name>`, opt-in via `POD_GROUNDS=<name>`, 11 probes, ~30s); tier 3 = manual live sweeps. The tier rule: a test belongs on a real pod iff its claim mentions a container-boundary fact. Motivated by a real catch: TEST-node composes had no HF-cache mount, so local BGE-M3 embeddings could never load there (fixed in Phase 0).
 - **Grounds**: `./startgrounds` (ensure/recreate/switch/status/probe/stop/clean) manages disposable pods created via the existing `startcluster create` registry from pinned bundles. `ensure` recreates on drift; `probe` never does (evidence preservation). v1 grounds are port-shifted (coexist with everything); `--layout work` grounds use the canonical ports + host networking with the three-way mutual-exclusion preflight. Ground data planes are ephemeral (container-local turso file) — zero host-data mounts.

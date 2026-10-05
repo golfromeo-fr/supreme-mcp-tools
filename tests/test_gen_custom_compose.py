@@ -208,3 +208,17 @@ def test_custom_layout_unchanged_by_work_branch():
     doc = gen(make_entry())
     assert "network_mode" not in doc["services"]["node1"]
     assert doc["services"]["node1"]["ports"][0] == "20000:8200"
+
+
+def test_two_nodes_node2_ports_offset_by_1000():
+    """Regression (Phase 3): node2 used to republish node1's tool ports —
+    both nodes could never coexist. node2 = node1 + 1000 (mirrors central2)."""
+    doc = gen(make_entry(nodes=2, tools=["databasemcp", "simplemcp"],
+                         ports={"central": 20000, "central2": 21000,
+                                "tools": {"databasemcp": 20002,
+                                          "simplemcp": 20004}}))
+    n1p = doc["services"]["node1"]["ports"]
+    n2p = doc["services"]["node2"]["ports"]
+    assert "20002:8000" in n1p and "20004:8002" in n1p
+    assert "21002:8000" in n2p and "21004:8002" in n2p
+    assert not (set(n1p) & set(n2p)), "node1/node2 publish the same host port"

@@ -96,6 +96,7 @@ class GroundInfo:
         self.topology = entry["topology"]
         self.bundle = entry.get("bundle", "")
         self.ports_db = entry["ports"].get("db")  # work layout only
+        self.node2_ports = entry["ports"].get("tools2")  # two-node grounds
         self.running = running
 
 

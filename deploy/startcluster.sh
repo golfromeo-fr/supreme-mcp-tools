@@ -114,14 +114,22 @@ pw_tmpfile_from() { # env_file — stash its POSTGRES_PASSWORD in a 0600 temp en
   # bundle_node_env takes an env-file PATH as its third arg, never a value:
   # passing the raw password made open() fail and generated a FRESH random
   # password, bricking the already-initialized pgdata on re-up.
+  # Also matches the DORMANT form ('# [topology:pg-dormant] POSTGRES_PASSWORD=')
+  # written by a turso-era switch — the pg password must survive topology
+  # round trips even while parked (grounds plan edge 2).
   PW_TMPFILE=""
   local envf="$1" pw=""
   [ -f "$envf" ] || return 0
   pw=$(sed -n 's/^POSTGRES_PASSWORD=//p' "$envf" | head -1)
+  [ -n "$pw" ] || pw=$(sed -n 's/^# \[topology:pg-dormant\] POSTGRES_PASSWORD=//p' "$envf" | head -1)
   [ -n "$pw" ] || return 0
   PW_TMPFILE="$(mktemp "${TMPDIR:-/tmp}/startcluster-pw.XXXXXX")"
   printf 'POSTGRES_PASSWORD=%s\n' "$pw" > "$PW_TMPFILE"
   chmod 600 "$PW_TMPFILE"
+}
+
+work_stamp() { # echo the topology stamp from work.env ("pg" when unset)
+  sed -n 's/^\[topology\] //p' "${1:-$REPO_ROOT/deploy/work.env}" 2>/dev/null | head -1
 }
 
 write_bundle_compose() { # outfile, then specs:
@@ -166,8 +174,23 @@ PY
 # ---------- WORK environment ----------
 work_env() { action="${1:-up}"; shift || true
   PROJECT="$WORK_PROJECT"
+  # D7: effective identity-plane topology — explicit `work pg|turso` beats
+  # the stamp in work.env; the stamp defaults to pg. Backups/branches read it.
+  WORK_TOPO="${WORK_TOPO:-$(work_stamp)}"
+  WORK_TOPO="${WORK_TOPO:-pg}"
   if [ "$action" = backup ]; then
     ts=$(date +%Y%m%d-%H%M%S)
+    if [ "$WORK_TOPO" = "turso" ]; then
+      # D10: turso identity backup — sqld has no pg_dump; v1 = stop-free
+      # volume export of work_sqldata (restore = startgrounds/work clean + import)
+      out="${HOME}/supreme-mcp-tools-backups/work-turso-$ts.tar"
+      mkdir -p "$(dirname "$out")"
+      podman volume export "work_sqldata" --output "$out" 2>/dev/null \
+        || podman volume export "${PROJECT}_sqldata" --output "$out" \
+        && echo "[work] backup (turso, volume tar) -> $out ($(wc -c < "$out") bytes)" \
+        || { echo "[work] backup FAILED — is the work env running?"; exit 1; }
+      exit 0
+    fi
     out="${HOME}/supreme-mcp-tools-backups/work-pg-$ts.sql"
     mkdir -p "$(dirname "$out")"
     podman exec "${PROJECT}_db_1" pg_dump -U mcp -d mcp > "$out" \
@@ -349,6 +372,26 @@ OWN
     echo "[work] deploy/work.env created from the host .env (data planes identical; state plane -> own pgvector)"
   fi
 
+  # D7/D8 topology: stamp the chosen identity-plane engine; on turso, park
+  # the pg block dormant (password survives the return trip — edge 2) and
+  # activate the sqld state plane via the PUBLISHED loopback port (the node
+  # is host-networked and cannot resolve podman DNS names).
+  PREV_TOPO="$(work_stamp)"
+  WORK_TOPO="${WORK_TOPO:-$(work_stamp)}"
+  WORK_TOPO="${WORK_TOPO:-pg}"
+  if [ ! -f deploy/work.env ]; then
+    echo "[work] FATAL: work.env missing after env setup"; exit 1
+  fi
+  sed -i '/^\[topology\] /d' deploy/work.env
+  echo "[topology] $WORK_TOPO" >> deploy/work.env
+  if [ "$WORK_TOPO" = "turso" ]; then
+    sed -i -E 's^(POSTGRES_[A-Z_]+=.*)^# [topology:pg-dormant] \1^' deploy/work.env
+    sed -i '/^TURSO_DATABASE_URL=http:/d' deploy/work.env
+    { echo ""; echo "# ---- state plane (turso era; pg block parked dormant above) ----";
+      echo "TURSO_DATABASE_URL=http://127.0.0.1:9080"; } >> deploy/work.env
+    echo "[work] identity plane -> turso (pg block parked dormant; pgdata volume kept)"
+  fi
+
   # concrete compose (host paths inlined — no interpolation dependency)
   # POSIX sed (no GNU grep -oP — busybox/BSD-safe); falls back to /nonexistent
   # bundle mode: the freshly generated work.env carries the bundle's data-plane paths
@@ -376,10 +419,12 @@ OWN
   fi
   export HOST_TURSO_DIR="${HOST_TURSO_DIR:-/nonexistent}"
   export HOST_HF_CACHE="${HOME}/.cache/huggingface"
+  WORK_BASE=deploy/compose-work.yml
+  [ "$WORK_TOPO" = "turso" ] && WORK_BASE=deploy/compose-work.turso.yml
   sed -e "s|\${HOST_CONFIG_DIR}|$HOST_CONFIG_DIR|g" \
       -e "s|\${HOST_TURSO_DIR}|$HOST_TURSO_DIR|g" \
       -e "s|\${HOST_HF_CACHE}|$HOST_HF_CACHE|g" \
-      deploy/compose-work.yml > deploy/compose-work.run.yml
+      "$WORK_BASE" > deploy/compose-work.run.yml
 
   # bundle mode: mounts the bundle's config over the image's baked copies
   # (override file comes LAST in the -f chain — podman-compose unions volumes
@@ -409,10 +454,19 @@ OWN
   # NOTE: the down is project-wide and removes the ui container too, so the
   # up below must bring ui back (8400 is part of the daily surface).
   echo "[work] stopping the running work env (volumes kept)..."
-  ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.yml down ) 2>/dev/null || true
+  ( cd deploy && podman-compose -p "$PROJECT" -f compose-work.run.yml down ) 2>/dev/null || true
   podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true
-  echo "[work] preflight: canonical ports (8000-8005/8200), UI 8400 and pg 5433 must be free (host launcher down?)..."
-  BUSY=$(ss -ltn | grep -cE ":(8000|8001|8002|8003|8004|8005|8200|8400|5433)\b" || true)
+  # topology switch: remove the old engine's containers (podman-compose will
+  # not recreate a definition-changed service over its old container — found
+  # live on the gwork round trip); volumes are KEPT, the dormant engine's
+  # data waits for the return trip
+  if [ -n "$PREV_TOPO" ] && [ "$PREV_TOPO" != "$WORK_TOPO" ]; then
+    echo "[work] topology switch $PREV_TOPO -> $WORK_TOPO: removing old engine containers (volumes kept)"
+    podman rm -f "${PROJECT}_db_1" "${PROJECT}_work_1" >/dev/null 2>&1 || true
+  fi
+  DBPORT=5433; [ "$WORK_TOPO" = "turso" ] && DBPORT=9080
+  echo "[work] preflight: canonical ports (8000-8005/8200), UI 8400 and db $DBPORT must be free (host launcher down?)..."
+  BUSY=$(ss -ltn | grep -cE ":(8000|8001|8002|8003|8004|8005|8200|8400|$DBPORT)\b" || true)
   if [ "${BUSY:-0}" -ne 0 ]; then
     echo "[work] FATAL: canonical ports busy — stop the host launcher (startlauncher) first."; exit 1
   fi
@@ -830,7 +884,9 @@ create_cluster() { # name [flags]: --nodes 1|2 --topology pg|turso --tools "..."
       local base busy p
       for base in $(seq 20000 100 20900); do
         busy=0
-        for p in "$base" "$((base + 1000))" $(seq "$((base + 2))" "$((base + 7))"); do
+        local win2=""
+        [ "$nodes" = "2" ] && win2=$(seq "$((base + 1002))" "$((base + 1007))")
+        for p in "$base" "$((base + 1000))" $(seq "$((base + 2))" "$((base + 7))") $win2; do
           ss -ltn | grep -q ":$p\b" && busy=1 && break
           for other in $(registry_names); do
             grep -qE ": ?$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null && busy=1 && break
@@ -841,8 +897,9 @@ create_cluster() { # name [flags]: --nodes 1|2 --topology pg|turso --tools "..."
       done
       [ -n "$port_base" ] || { echo "FATAL: no free port base in 20000-20999"; exit 1; }
     fi
-    local p
-    for p in "$port_base" "$((port_base + 1000))" $(seq "$((port_base + 2))" "$((port_base + 7))"); do
+    local p win2=""
+    [ "$nodes" = "2" ] && win2=$(seq "$((port_base + 1002))" "$((port_base + 1007))")
+    for p in "$port_base" "$((port_base + 1000))" $(seq "$((port_base + 2))" "$((port_base + 7))") $win2; do
       ss -ltn | grep -q ":$p\b" && { echo "FATAL: port $p is already in use"; exit 1; }
       for other in $(registry_names); do
         [ "$other" = "$name" ] && continue
@@ -878,6 +935,11 @@ else:
              # base). Without the offset databasemcp (container 8000) collides
              # with central — never hit before grounds (clusters.d was empty).
              "tools": {t: int(port_base) + 2 + PORT[t] - 8000 for t in tool_list}}
+    if nodes == "2":
+        # node2 = node1 + 1000 (mirrors central2) — its tools must not
+        # republish node1's ports
+        ports["tools2"] = {t: int(port_base) + 1002 + PORT[t] - 8000
+                           for t in tool_list}
 entry = {"name": name, "nodes": int(nodes), "topology": topology,
          "layout": layout,
          "tools": tool_list,
@@ -1063,12 +1125,18 @@ set -- ${positional[@]+"${positional[@]}"}
 
 case "${1:-}" in
   "")    usage; exit 0 ;;
-  work)  shift
-         # E10: the bundle flag is honored by the BOOT path only — resolving a
-         # missing bundle must not break stop/status/logs/..., and a valid one
-         # must not make them rewrite work.env. (Default action = up.)
-         case "${1:-}" in up|"") resolve_bundle ;; esac
-         work_env "$@" ;;
+work)  shift
+       # E10: the bundle flag is honored by the BOOT path only — resolving a
+       # missing bundle must not break stop/status/logs/..., and a valid one
+       # must not make them rewrite work.env. (Default action = up.)
+       # D7: `work pg|turso` = topology boot (identity-plane engine, grounds
+       # plan §4); plain `work up` boots with the stamped topology (default pg).
+       WORK_TOPO=""
+       case "${1:-}" in
+         pg|turso) WORK_TOPO="$1"; resolve_bundle; shift ;;
+         up|"")    resolve_bundle ;;
+       esac
+       work_env "$@" ;;
   test)  shift
          # same E10 rule: only the topology boots consume the bundle
          # (no topology arg = default `pg` = a boot action)

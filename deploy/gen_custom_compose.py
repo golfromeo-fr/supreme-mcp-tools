@@ -44,7 +44,7 @@ def db_service(name: str, topology: str) -> dict:
 
 
 def node_service(name: str, node: str, central_host: int, tools: list,
-                 tool_ports: dict, depends: dict) -> dict:
+                 tool_ports: dict, depends: dict, port_offset: int = 0) -> dict:
     svc = {
         "build": {"context": "..", "dockerfile": "deploy/Containerfile"},
         "env_file": [f"./{name}.env"],
@@ -58,8 +58,11 @@ def node_service(name: str, node: str, central_host: int, tools: list,
         # ${HOST_HF_CACHE} interpolation resolves at `up` time (custom_up
         # exports it); podman-compose appends override -f volumes (F17).
         "volumes": ["${HOST_HF_CACHE}:/root/.cache/huggingface"],
+        # port_offset: node2 = node1 + 1000 (mirrors central2) — without it
+        # both nodes publish the SAME tool ports and cannot coexist (found
+        # live planning the g2 grounds; never hit while nodes=2 was unused)
         "ports": [f"{central_host}:8200"]
-        + [f"{tool_ports[t]}:{PORT_CONTAINER[t]}" for t in tools],
+        + [f"{tool_ports[t] + port_offset}:{PORT_CONTAINER[t]}" for t in tools],
         "healthcheck": {
             "test": ["CMD", "python3", "/app/healthcheck.py"],
             "interval": "15s", "timeout": "5s", "retries": 5,
@@ -189,7 +192,7 @@ def generate(entry: dict) -> str:
             raise ValueError("nodes=2 needs ports.central2")
         services["node2"] = node_service(
             name, "node2", central2, tools, tool_ports,
-            {"node1": {"condition": "service_started"}})
+            {"node1": {"condition": "service_started"}}, port_offset=1000)
 
     doc = {"name": name, "services": services, "volumes": volumes}
     return yaml.dump(doc, sort_keys=False, default_flow_style=False)
