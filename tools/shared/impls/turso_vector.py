@@ -527,7 +527,10 @@ class TursoVectorStore:
             f"AND name='vec_{_s(name)}'"
         ).fetchone()
         if row is None:
-            raise ValueError(f"Collection '{name}' does not exist")
+            # "doesn't exist" wording is a STRING CONTRACT: ragmcp index_code
+            # and get_collection_stats match this substring to take their
+            # auto-create / not-found paths (qdrant client says the same)
+            raise ValueError(f"Collection '{name}' doesn't exist")
         row = self._conn.execute(
             f"SELECT COUNT(*) FROM vec_{_s(name)}"
         ).fetchone()

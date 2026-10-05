@@ -22,6 +22,7 @@ Probe facts below were verified live on the first g1-pg boot (2026-10-05):
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,16 @@ def _tool_key(tool):
     bundle = Path(_registry().get("bundle", ""))
     return json.loads(
         (bundle / "tools" / tool / "config.json").read_text())["auth"]["api_key"]
+
+
+def _ground_env():
+    envf = REPO / "deploy" / f"{os.environ['POD_GROUNDS'].strip()}.env"
+    vals = {}
+    for line in envf.read_text().splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            vals[k] = v
+    return vals
 
 
 def _result_payload(d):
@@ -313,3 +324,131 @@ def test_probe_11_cross_node_identity(pod_ground):
     n1 = pod_ground.tool_ports["simplemcp"]
     n2 = pod_ground.node2_ports["simplemcp"]
     assert n1 != n2
+
+
+# ── probe 12: the ragmcp indexer subprocess is healthy in the image ──────
+
+def test_probe_12_indexer_subprocess_starts(pod_ground):
+    """Boundary fact: the background indexer is a SUBPROCESS of the node —
+    if any of its imports is missing from the image it dies silently and
+    every index_code 'succeeds' while indexing nothing (found live: tiktoken
+    was absent from the pod image). We pin that the spawned indexer actually
+    produces its collection; search QUALITY is app logic (tier 1/host)."""
+    key = _tool_key("ragmcp")
+    port = pod_ground.tool_ports["ragmcp"]
+    coll = "ground-smoke"
+
+    def call(fn, args):
+        st, d = _rpc("ragmcp", key, "tools/call", {"name": fn, "arguments": args},
+                     port=port, timeout=300)
+        assert st == 200, f"{fn}: HTTP {st}"
+        return _result_payload(d)
+
+    started = call("index_code", {"workspace_root": "/app/tools/shared",
+                                  "collection_name": coll})
+    assert "Indexing started" in str(started), \
+        f"indexer subprocess did not start: {started}"
+
+    listed = None
+    for _ in range(18):  # up to ~90s: the indexer embeds with BGE-M3
+        listed = str(call("list_collections", {}))
+        if coll in listed:
+            break
+        time.sleep(5)
+    assert coll in (listed or ""), \
+        f"indexer collection never appeared — subprocess died at import? {listed}"
+
+    cleaned = call("clear_index", {"collection_name": coll, "confirm": True})
+    assert "rror" not in str(cleaned)[:60] or "deleted" in str(cleaned).lower()
+
+
+# ── probe 13: databasemcp executes real SQL against the ground's own db ──
+
+def test_probe_13_databasemcp_real_query(pod_ground):
+    env = _ground_env()
+    if pod_ground.topology == "pg":
+        host = "127.0.0.1" if pod_ground.ports_db else "db"
+        dbport = pod_ground.ports_db or 5432
+        dsn = (f"postgresql://{env.get('POSTGRES_USER', 'mcp')}:"
+               f"{env.get('POSTGRES_PASSWORD', '')}@{host}:{dbport}/"
+               f"{env.get('POSTGRES_DB', 'mcp')}")
+    else:
+        host = "127.0.0.1" if pod_ground.ports_db else "db"
+        dsn = f"http://{host}:{pod_ground.ports_db or 8080}"
+    key = _tool_key("databasemcp")
+    port = pod_ground.tool_ports["databasemcp"]
+
+    def call(fn, args):
+        st, d = _rpc("databasemcp", key, "tools/call",
+                     {"name": fn, "arguments": args}, port=port, timeout=60)
+        assert st == 200, f"{fn}: HTTP {st}"
+        return _result_payload(d)
+
+    # connect_database registers an ad-hoc connection (a raw URL in query's
+    # connection= is treated as a NAME, not a DSN — live-verified)
+    if pod_ground.topology == "pg":
+        conn = {"name": "ground-probe", "db_type": "postgres",
+                "params": {"host": host, "dbname": env.get("POSTGRES_DB", "mcp"),
+                           "user": env.get("POSTGRES_USER", "mcp"),
+                           "password": env.get("POSTGRES_PASSWORD", ""),
+                           "port": dbport}}
+    else:
+        conn = {"name": "ground-probe", "db_type": "libsql",
+                "params": {"url": dsn}}
+    out = call("connect_database", conn)
+    assert "rror" not in str(out)[:40].lower() or "connected" in str(out).lower(), \
+        f"connect failed: {out}"
+    try:
+        rows = call("query", {"sql": "SELECT 1 AS one",
+                              "connection": "ground-probe"})
+        text = str(rows)
+        assert "Error" not in text[:20], f"query failed: {text[:200]}"
+        assert "1" in text, f"unexpected result: {text[:200]}"
+    finally:
+        call("disconnect_database", {"name": "ground-probe"})
+
+
+# ── probe 14: central mask push propagates to the running node (E1) ──────
+
+def test_probe_14_mask_push_propagation(pod_ground):
+    env = _ground_env()
+    mgmt = env.get("MCP_MANAGEMENT_API_KEY", "")
+    if not mgmt:
+        pytest.skip("ground env has no MCP_MANAGEMENT_API_KEY")
+    base = f"http://127.0.0.1:{pod_ground.central}"
+    tool = "webmcp"
+    anchor_masked = "brave_search_web"   # the bundle's standing mask
+    probe_fn = "fetch_url"               # temporarily masked, then restored
+
+    def put_disabled(names):
+        return requests.put(f"{base}/api/disabled-tools/{tool}",
+                            json=names,
+                            headers={"Authorization": f"Bearer {mgmt}"},
+                            timeout=30)
+
+    # unauthenticated control-plane writes must be rejected
+    r0 = requests.put(f"{base}/api/disabled-tools/{tool}", json=[],
+                      timeout=10)
+    assert r0.status_code in (401, 403), \
+        f"unauthenticated central write not rejected: {r0.status_code}"
+
+    cur = requests.get(f"{base}/api/disabled-tools/{tool}",
+                       headers={"Authorization": f"Bearer {mgmt}"},
+                       timeout=10)
+    current = cur.json() if cur.status_code == 200 else [anchor_masked]
+    if isinstance(current, dict):
+        current = current.get("disabled_tools", [anchor_masked])
+    try:
+        r = put_disabled(sorted(set(current) | {probe_fn}))
+        assert r.status_code == 200, f"mask push failed: {r.text[:200]}"
+        st, d = _rpc(tool, _tool_key(tool), "tools/list", {},
+                     port=pod_ground.tool_ports[tool])
+        names = [t["name"] for t in d["result"]["tools"]]
+        assert probe_fn not in names, \
+            "central mask push did NOT reach the running node (E1 broken)"
+    finally:
+        put_disabled(current)
+    st, d = _rpc(tool, _tool_key(tool), "tools/list", {},
+                 port=pod_ground.tool_ports[tool])
+    names = [t["name"] for t in d["result"]["tools"]]
+    assert probe_fn in names, "mask revert failed — fetch_url still hidden"

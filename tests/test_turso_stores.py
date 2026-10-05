@@ -147,15 +147,17 @@ class TestTursoVectorStoreContract:
         info = turso_vector_store.get_collection("test")
         assert info.dim == self.DIM
 
-    def test_get_collection_missing_does_not_raise(self, turso_vector_store):
-        """A missing collection yields an empty info, never an exception.
+    def test_get_collection_missing_raises(self, turso_vector_store):
+        """Contract parity with the qdrant impl: a missing collection RAISES.
 
-        Callers written against Qdrant's "Not found" error would otherwise
-        silently skip their create-collection path.
+        The old lenient empty-info behavior was live-proven harmful
+        (2026-10-05, first g1-pg ground boot): memory_core's ensure-at-init
+        RELIES on the raise to create the collection — with the error
+        swallowed, init believed the collection existed and upsert failed
+        'no such table' on every fresh turso file.
         """
-        info = turso_vector_store.get_collection("nope")
-        assert info.points_count == 0
-        assert info.dim is None
+        with pytest.raises(ValueError, match="doesn't exist"):
+            turso_vector_store.get_collection("nope")
 
     def test_query_dense_skips_rows_without_vectors(self, turso_vector_store):
         """The indexer's __collection_metadata__ point has an empty vector.

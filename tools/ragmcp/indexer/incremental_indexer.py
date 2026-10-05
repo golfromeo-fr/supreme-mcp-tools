@@ -22,7 +22,12 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import asyncio
 import httpx
-import tiktoken
+
+try:
+    import tiktoken
+except ImportError:  # the character-based fallback at estimate_tokens() is
+    tiktoken = None  # the documented behavior — a bare import killed the
+                     # whole indexer in the pod image (found live, g1-pg)
 
 # Handle both direct execution and module import
 if __name__ == "__main__":

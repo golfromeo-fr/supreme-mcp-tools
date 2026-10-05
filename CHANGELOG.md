@@ -4,6 +4,14 @@ All notable changes to the MCP Launcher will be documented in this file.
 
 ## [Unreleased]
 
+### 2026-10-05 — feat(grounds): probe suite deepened (ragmcp indexer, databasemcp, mask push, automated switch) + code-drift detection
+- **Three new pod probes** (15 total per ground): (12) the ragmcp INDEXER SUBPROCESS actually starts and produces its collection — it previously died silently at import (`tiktoken` missing from the pod image; the bare import also defeated the indexer's own documented fallback — now guarded AND declared in requirements.txt); (13) databasemcp executes real SQL against the ground's own state db (connect_database + query + disconnect; a raw DSN in `query`'s connection= is a NAME not a DSN — live-verified); (14) central mask-push propagation: unauthenticated writes rejected, a pushed mask reaches the RUNNING node's tools/list, revert restores it (the E1 control plane, live-proven on a pod).
+- **Automated switch round trip** (tests/test_pod_switch.py): pg → turso → pg on work-layout grounds, password + users preserved — replaces the retired manual-rehearsal idea; runs inside `./startgrounds probe` for work-layout grounds (2m39s live).
+- **`./startgrounds probe --all`**: sequential ensure+probe across every spec; all three grounds green (39s / 68s / 3m15s).
+- **Code-drift detection**: create stamps the repo HEAD in the registry; ensure treats a moved HEAD as drift and recreates — a ground testing a stale image would lie about the current tree (found live: two grounds were running pre-fix images).
+- **Fixed**: TursoVectorStore missing-collection message aligned to the ecosystem string contract ("doesn't exist") — ragmcp's auto-create path string-matches it, and my previous wording ("does not exist") turned index_code into a hard error.
+- **Tests**: 1076 passed / 0 failed; probe --all green across g1-pg, g2-pg, gwork-pg.
+
 ### 2026-10-05 — fix(grounds): two-node custom clusters could not coexist
 - **Fixed**: `gen_custom_compose.py` published node2's tool ports identical to node1's — with `--nodes 2` the two nodes could never run simultaneously (never hit: nodes=2 had zero usage). node2 now offsets its tool publishes by +1000, mirroring central2 = central + 1000; the registry records the node2 map as `ports.tools2`; the create port-reservation window covers base+1002..base+1007 for two-node clusters. Proposed g2 ground: probe 11 pins the multihost invariant (the same admin key authenticates on BOTH nodes via the shared state plane).
 - **Tests**: 1076 passed. Probe 11 added (gated on two-node grounds).

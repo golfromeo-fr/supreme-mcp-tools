@@ -129,6 +129,11 @@ drift_reason() {
   [ "$reg_topo" = "$SPEC_TOPOLOGY" ] || { echo "topology changed: registry=$reg_topo spec=$SPEC_TOPOLOGY"; return 0; }
   reg_layout="$(registry_field "$name" "e.get('layout','custom')")"
   [ "$reg_layout" = "$SPEC_LAYOUT" ] || { echo "layout changed: registry=$reg_layout spec=$SPEC_LAYOUT"; return 0; }
+  reg_code="$(registry_field "$name" "e.get('code_sha','')")"
+  cur_code="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"
+  if [ -n "$reg_code" ] && [ -n "$cur_code" ] && [ "$reg_code" != "$cur_code" ]; then
+    echo "code changed since create (image may be stale: $reg_code -> $cur_code)"; return 0
+  fi
   if [ -n "$SPEC_BUNDLE" ]; then
     reg_bundle="$(registry_field "$name" "e.get('bundle','')")"
     [ "$reg_bundle" = "$SPEC_BUNDLE" ] || { echo "bundle changed: registry=$reg_bundle spec=$SPEC_BUNDLE"; return 0; }
@@ -298,13 +303,26 @@ json.dump(e, open(p, 'w'), indent=2)"
 }
 
 cmd_probe() {
+  if [ "${1:-}" = "--all" ]; then
+    local rc=0 f name
+    for f in "$GROUNDS_DIR"/*.spec; do
+      [ -f "$f" ] || continue
+      name="$(basename "$f" .spec)"
+      echo "=== probing $name ==="
+      cmd_probe "$name" || rc=1
+    done
+    [ "$rc" = 0 ] && echo "[grounds] all grounds green" || echo "[grounds] FAILURES above"
+    return $rc
+  fi
   local name="${1:-}"
-  [ -n "$name" ] || die "usage: startgrounds probe <name>"
+  [ -n "$name" ] || die "usage: startgrounds probe [--all] <name>"
   parse_spec "$name"
   registered "$name" || { echo "[grounds] $name not registered — ensuring first"; cmd_ensure "$name"; }
   running "$name" || { echo "[grounds] $name not running — ensuring"; cmd_ensure "$name"; }
-  # probes NEVER recreate: a red probe keeps the ground for inspection
-  cd "$REPO_ROOT" && POD_GROUNDS="$name" python3 -m pytest tests/test_pod_smoke.py -v
+  # probes NEVER recreate: a red probe keeps the ground for inspection.
+  # the switch file self-skips unless the ground is work-layout
+  cd "$REPO_ROOT" && POD_GROUNDS="$name" \
+    python3 -m pytest tests/test_pod_smoke.py tests/test_pod_switch.py -v
 }
 
 case "${1:-}" in

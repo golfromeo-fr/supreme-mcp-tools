@@ -945,6 +945,11 @@ entry = {"name": name, "nodes": int(nodes), "topology": topology,
          "tools": tool_list,
          **({"port_base": int(port_base)} if port_base else {}),
          "ports": ports,
+         # code stamp: startgrounds treats a moved HEAD as drift — a ground
+         # testing a stale image would lie about the current tree
+         "code_sha": __import__("subprocess").run(
+             ["git", "rev-parse", "HEAD"], capture_output=True,
+             text=True, cwd="..").stdout.strip() or "",
          "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
 if bundle and bundle != "none":
     entry["bundle"] = bundle
