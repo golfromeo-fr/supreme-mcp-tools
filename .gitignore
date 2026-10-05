@@ -277,3 +277,8 @@ gui-test-screenshots/
 
 # ragmcp incremental indexer metadata store
 .indexing_metadata/
+
+# grounds runtime artifacts (machine-local; generated from gitignored bundles)
+deploy/clusters.d/
+deploy/g*.env
+deploy/compose-g*.bundle.yml
