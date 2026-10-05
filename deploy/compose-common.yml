@@ -33,6 +33,10 @@ services:
       MCP_NODE_CENTRAL_URL: http://node1:8200
     volumes:
       - ./node.env:/app/.env:ro
+      # local embedding model cache — EMBEDDING_PROVIDER=local (BGE-M3) fails
+      # inside the node without it (plan F4: the work compose has this, nodes
+      # didn't). startcluster exports HOST_HF_CACHE on the boot path.
+      - ${HOST_HF_CACHE}:/root/.cache/huggingface
     ports:
       - "18200:8200"
       - "18002:8002"
@@ -58,6 +62,8 @@ services:
       MCP_NODE_CENTRAL_URL: http://node2:8200
     volumes:
       - ./node.env:/app/.env:ro
+      # same as node1 — local embedding cache (plan F4)
+      - ${HOST_HF_CACHE}:/root/.cache/huggingface
     ports:
       - "19200:8200"
       - "19002:8002"

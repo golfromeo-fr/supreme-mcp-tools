@@ -50,6 +50,11 @@ def node_service(name: str, node: str, central_host: int, tools: list,
             "MCP_NODE_NAME": node,
             "MCP_NODE_CENTRAL_URL": f"http://{node}:8200",
         },
+        # plan F4/C2: bundle envs set EMBEDDING_PROVIDER=local — without the
+        # host HF-cache mount the node cannot load BGE-M3. The compose
+        # ${HOST_HF_CACHE} interpolation resolves at `up` time (custom_up
+        # exports it); podman-compose appends override -f volumes (F17).
+        "volumes": ["${HOST_HF_CACHE}:/root/.cache/huggingface"],
         "ports": [f"{central_host}:8200"]
         + [f"{tool_ports[t]}:{PORT_CONTAINER[t]}" for t in tools],
         "healthcheck": {

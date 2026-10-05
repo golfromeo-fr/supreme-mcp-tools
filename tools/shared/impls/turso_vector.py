@@ -518,13 +518,20 @@ class TursoVectorStore:
         return results, next_offset
 
     def get_collection(self, name: str) -> CollectionInfo:
-        try:
-            row = self._conn.execute(
-                f"SELECT COUNT(*) FROM vec_{_s(name)}"
-            ).fetchone()
-            points_count = row[0] if row else 0
-        except Exception:
-            points_count = 0
+        # Contract parity with the qdrant impl: RAISE when the collection's
+        # table does not exist. Swallowing the error here made memory_core's
+        # ensure-at-init skip creation on a FRESH turso file (found live on
+        # the first g1-pg ground boot: upsert then failed "no such table").
+        row = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            f"AND name='vec_{_s(name)}'"
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Collection '{name}' does not exist")
+        row = self._conn.execute(
+            f"SELECT COUNT(*) FROM vec_{_s(name)}"
+        ).fetchone()
+        points_count = row[0] if row else 0
 
         # Try to get dimension from a sample vector
         dim = None
