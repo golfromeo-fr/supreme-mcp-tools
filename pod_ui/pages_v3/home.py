@@ -245,6 +245,21 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                     .tooltip("boot/rebuild topology"
                              + ("" if choices["mode"] == "bundle"
                                 else " — host mode: fixed by node.env (bundle boot to switch)"))
+            if env.key == "work":
+                # D9 (grounds plan §4): the identity-plane engine is now a
+                # boot option on BASIC too — pg (pgvector, default) or turso
+                # (sqld). No external-* options: the users.json import story
+                # is pg/turso only.
+                work_choices = {"pg": "pg (pgvector)", "turso": "turso (sqld)"}
+                work_val = state.UI_PREFS.get("work_topology", "pg")
+                if work_val not in work_choices:
+                    work_val = "pg"
+                ui.select(work_choices, value=work_val, label="topology",
+                          on_change=lambda e: state.UI_PREFS.update({"work_topology": e.value}),
+                          ).classes("w-52").props("dense outlined") \
+                    .tooltip("identity-plane engine: startcluster work <topology>. "
+                             "Switch = stop + env block swap + start; the other "
+                             "engine's volume goes dormant and comes back intact")
             if env.state in ("running", "partial"):
                 ui.button("Stop all", icon="stop",
                           on_click=lambda k=env.key: confirm_action(
@@ -257,6 +272,8 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
                 boot = boot_action(env.key)
                 if env.key == "test":
                     boot = state.UI_PREFS.get("test_topology", boot)
+                if env.key == "work":
+                    boot = state.UI_PREFS.get("work_topology", "pg")
                 ui.button("Boot cluster", icon="rocket_launch",
                           on_click=lambda v=boot: fire(env.key, v)).props("dense color=primary")
             else:
@@ -265,12 +282,18 @@ def _cluster_card(env, sizes: dict[str, str], view_modes: dict, open_state: dict
             rebuild = boot_action(env.key)
             if env.key == "test":
                 rebuild = state.UI_PREFS.get("test_topology", rebuild)
+            if env.key == "work":
+                rebuild = state.UI_PREFS.get("work_topology", "pg")
             ui.button("Rebuild", icon="refresh",
                       on_click=lambda k=env.key, v=rebuild: confirm_action(
                           lambda: fire(k, v),
                           f"Rebuild cluster {k} ({v} topology)?",
                           "Stops the cluster, rebuilds the node image, restarts it. "
-                          "Takes minutes — the console shows progress.",
+                          + ("Identity plane moves to the chosen engine: the other "
+                             "engine's volume goes dormant and comes back intact on "
+                             "the return trip; memories follow the active turso store. "
+                             if k == "work" else "")
+                          + "Takes minutes — the console shows progress.",
                           button="Rebuild")).props("dense flat") \
                 .tooltip("stop + rebuild the image + start (startcluster up)")
             if env.key == "work" and env.containers:

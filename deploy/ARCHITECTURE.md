@@ -63,8 +63,11 @@ Key rules:
 │         canonical ports 8000–8005, central 8200       │
 │         (host networking → same ports as the host     │
 │          stack, hence the mutual exclusion)           │
-│  db ─── pgvector Postgres: THIS env's identity plane  │
-│         (mcp_users_store, mcp_state_docs)             │
+│  db ─── THIS env's identity plane (mcp_users_store,   │
+│         mcp_state_docs), engine per the topology      │
+│         stamp in work.env:                            │
+│           pg (default) → pgvector Postgres :5433      │
+│           turso        → libsql/sqld      :9080       │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -73,6 +76,12 @@ Key rules:
 - `db` exists so the identity/config plane (users, masks, inventory) is
   DB-backed per the M4 design. Your host `users.json` is imported once at
   first boot; afterwards the DB is authoritative for this environment.
+  The engine is switchable (`startcluster work pg|turso`, grounds plan
+  §4): switching keeps BOTH volumes — the inactive engine's data goes
+  dormant and comes back intact (same POSTGRES_PASSWORD, parked dormant
+  in work.env across the turso era). Memories follow the active turso
+  store: pg era → the host turso file (bind-mounted); turso era → the
+  sqld store.
 - Start/stop: `./startcluster work` / `startcluster work stop`.
   UI optional: `startcluster work ui` (port 8400 — conflicts with a host
   `startui`).
@@ -253,7 +262,7 @@ Every environment keeps its identity/config state in ONE place:
 | Environment | Identity/config state lives in |
 |---|---|
 | Host stack | `~/.config/supreme-mcp-tools/` JSON files (`users.json`, `tools_config.json`) |
-| `pod_mcp-work` | its own Postgres (`work_pgdata` volume): `mcp_users_store`, `mcp_state_docs` |
+| `pod_mcp-work` | its own DB (`work_pgdata` volume for pg — the default — or `work_sqldata` for turso; both kept across engine switches): `mcp_users_store`, `mcp_state_docs` |
 | `pod_mcp-multihost` | its own Postgres (`pgdata` volume): same tables + `cluster_nodes`, `env_overrides`, `auth_overrides` |
 
 This is why the environments are isolated: a user created in the work pod

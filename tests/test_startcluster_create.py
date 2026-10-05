@@ -425,3 +425,99 @@ def test_create_work_layout_canonical_port_held_fatal(sandbox, bundle):
         assert r.returncode != 0 and "mutual exclusion" in r.stderr + r.stdout
     finally:
         holder.close()
+
+
+# ── Phase 2b: the work topology switch (`startcluster work pg|turso`) ────
+
+import os
+
+
+@pytest.fixture()
+def work_sandbox(sandbox, monkeypatch):
+    """Sandbox + the two work compose bases; PATH stubs make the full
+    `work <topo>` boot path run hermetically: podman/podman-compose record
+    and succeed, ss reports nothing (preflight passes), curl succeeds
+    (wait_http gate)."""
+    for f in ("compose-work.yml", "compose-work.turso.yml",
+              "compose-common.yml", "compose-pg.yml"):
+        src = DEPLOY / f
+        if src.exists():
+            shutil.copy(src, sandbox / "deploy" / f)
+    bin_dir = sandbox / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "podman").write_text('#!/bin/bash\necho "$@" >> '
+                                    f'{bin_dir}/podman-args.log\nexit 0\n')
+    (bin_dir / "podman-compose").write_text(
+        f'#!/bin/bash\necho "$@" >> {bin_dir}/compose-args.log\nexit 0\n')
+    (bin_dir / "curl").write_text('#!/bin/bash\necho \'{"status":"healthy"}\'\nexit 0\n')
+    (bin_dir / "ss").write_text('#!/bin/bash\necho "Netid State Recv-Q Send-Q"\nexit 0\n')
+    for f in ("podman", "podman-compose", "curl", "ss"):
+        (bin_dir / f).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    return sandbox
+
+
+def run_work(root, *args):
+    return subprocess.run(["bash", str(root / "deploy" / "startcluster.sh"),
+                           "work", *args],
+                          capture_output=True, text=True, cwd=str(root))
+
+
+def test_work_turso_boot_parks_pg_block_and_stamps(sandbox, work_sandbox, bundle):
+    r = run_work(work_sandbox, "turso", "-b", str(bundle))
+    assert r.returncode == 0, r.stderr + r.stdout
+    env = (work_sandbox / "deploy" / "work.env").read_text()
+    assert "[topology] turso" in env
+    # the pg block is parked dormant, not deleted (password survives the trip)
+    dormant = [l for l in env.splitlines()
+               if l.startswith("# [topology:pg-dormant] POSTGRES_PASSWORD=")]
+    assert dormant, "no dormant pg password block"
+    # the turso state plane is active on the PUBLISHED loopback port
+    assert "TURSO_DATABASE_URL=http://127.0.0.1:9080" in env
+    assert "http://db:8080" not in env
+    # the rendered compose is the turso base: sqld on the load-bearing publish
+    run_yml = (work_sandbox / "deploy" / "compose-work.run.yml").read_text()
+    assert "libsql-server" in run_yml and "127.0.0.1:9080:8080" in run_yml
+    # (a pre-existing work.env would have been backed up before regeneration:
+    #  work.env.bak-* — a first-ever boot has no prior env, so no backup)
+
+
+def test_work_pg_round_trip_revives_same_password(sandbox, work_sandbox, bundle):
+    """Edge 2 end-to-end: turso → pg revives the SAME POSTGRES_PASSWORD and
+    an active pg block (no fresh-password bricking of the pgdata volume)."""
+    r1 = run_work(work_sandbox, "turso", "-b", str(bundle))
+    assert r1.returncode == 0, r1.stderr + r1.stdout
+    env_turso = (work_sandbox / "deploy" / "work.env").read_text()
+    dormant_pw = [l for l in env_turso.splitlines()
+                  if l.startswith("# [topology:pg-dormant] POSTGRES_PASSWORD=")][0]
+    r2 = run_work(work_sandbox, "pg", "-b", str(bundle))
+    assert r2.returncode == 0, r2.stderr + r1.stdout
+    env_pg = (work_sandbox / "deploy" / "work.env").read_text()
+    assert "[topology] pg" in env_pg
+    active_pw = [l for l in env_pg.splitlines()
+                 if l.startswith("POSTGRES_PASSWORD=")]
+    assert active_pw, "no active pg block after the return trip"
+    assert active_pw[0].split("=", 1)[1] == dormant_pw.split("=", 1)[1], \
+        "pg password changed across the turso round trip — pgdata would be bricked"
+    run_yml = (work_sandbox / "deploy" / "compose-work.run.yml").read_text()
+    assert "pgvector" in run_yml and "127.0.0.1:5433:5432" in run_yml
+
+
+def test_work_turso_node_parity():
+    """The turso work compose must differ from the pg one ONLY in the db
+    service (+ its volume) — the node/ui services are the daily driver's
+    surface and must never drift between the two files."""
+    import yaml
+
+    def services(path):
+        return yaml.safe_load(Path(path).read_text())["services"]
+
+    pg = services(DEPLOY / "compose-work.yml")
+    tu = services(DEPLOY / "compose-work.turso.yml")
+    assert set(pg) == {"db", "work", "ui"} and set(tu) == {"db", "work", "ui"}
+    assert pg["work"] == tu["work"], "work service drifted between pg/turso bases"
+    assert pg["ui"] == tu["ui"], "ui service drifted between pg/turso bases"
+    assert tu["db"]["image"] == "ghcr.io/tursodatabase/libsql-server:latest"
+    assert pg["db"]["image"] == "docker.io/pgvector/pgvector:pg16"
+    assert "127.0.0.1:9080:8080" in tu["db"]["ports"]
+    assert "127.0.0.1:5433:5432" in pg["db"]["ports"]

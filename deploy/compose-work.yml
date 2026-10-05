@@ -4,13 +4,21 @@
 # (8000-8005, central 8200) with host networking — so existing client
 # configurations (localhost:800x/mcp-stateless) keep working unchanged.
 #
-# Identity/config plane: its OWN pgvector Postgres (users + state docs;
-# pgvector so memory/rag vector data can also live here if configured).
-#   -> first boot imports the HOST users.json (mounted read-only): same
-#      accounts, same API keys — ZCode bindings keep working.
+# Identity/config plane: its OWN DB-backed store (users + state docs),
+# per the topology stamp in work.env:
+#   pg (default)  — pgvector Postgres (pgvector so memory/rag vector data
+#                   can also live here if configured); compose-work.yml
+#   turso         — libsql-server (sqld), published on 127.0.0.1:9080;
+#                   compose-work.turso.yml
+# `startcluster work pg|turso` switches engines: the other engine's volume
+# goes DORMANT (kept, not wiped) and comes back intact on the return trip.
+#   -> first boot of each engine imports the HOST users.json (mounted
+#      read-only): same accounts, same API keys — ZCode bindings keep working.
 # Data planes: EXACTLY the host .env's (work.env is generated from it),
 # with the host turso data dir mounted at the SAME path, so file: URLs
-# and presets resolve identically to the host launcher.
+# and presets resolve identically to the host launcher. Memories created
+# while on the turso identity live in the sqld store (dormant after a
+# switch back to pg), NOT in the host turso file.
 #
 # Run:      startcluster work
 # Isolation: project mcp-work (own volumes); do NOT run the host
