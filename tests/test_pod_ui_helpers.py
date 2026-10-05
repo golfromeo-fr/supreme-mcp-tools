@@ -1,5 +1,9 @@
 """pod_ui pure helpers (plans/pod-ui-plan-2026-09-19.md §5/§6/§8).
-No NiceGUI imports — state.py and ops.build_command only."""
+No NiceGUI imports — state.py and ops.build_command only.
+
+Tier-1 hermetic (plans/testing-grounds-and-work-topology-2026-10-05.md §2):
+`podman ps` rows here are CANNED STRINGS — this file never touches a real
+pod; real-pod behavior lives in the tier-2 ground probes."""
 
 import sys
 from pathlib import Path

@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# startgrounds — disposable real-pod testing environments (tier 2).
+#
+# Design: plans/testing-grounds-and-work-topology-2026-10-05.md §3 (D2-D6).
+# A ground is a custom cluster created from a pinned config bundle via the
+# `startcluster create` registry (deploy/clusters.d/); this script is the
+# POLICY layer on top: ensure / recreate / status / probe / stop / clean.
+#
+#   ensure    [name]   boot if absent; recreate on drift (default) — --no-recreate to refuse
+#   recreate  [name]   stop + rm + create + up (typed confirm unless --yes)
+#   status    [name]   machine-readable JSON (one object per ground)
+#   probe     [name]   ensure, then run the tier-2 probes via pytest (POD_GROUNDS=<name>)
+#   stop      [name]   stop the ground's containers
+#   clean     [name]   stop + rm (removes containers, volumes, registry, env)
+#
+# Specs live in deploy/grounds/<name>.spec — key-free by policy; secrets
+# stay in the gitignored bundle. Grounds are DISPOSABLE: never point a
+# spec's bundle mounts at real user data.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
+STARTCLUSTER="$REPO_ROOT/deploy/startcluster.sh"
+GROUNDS_DIR="$REPO_ROOT/deploy/grounds"
+REGISTRY_DIR="$REPO_ROOT/deploy/clusters.d"
+
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+
+die() { echo "FATAL: $*" >&2; exit 1; }
+
+spec_path() { echo "$GROUNDS_DIR/$1.spec"; }
+
+require_spec() {
+  local name="$1" sp
+  sp="$(spec_path "$name")"
+  [ -f "$sp" ] || die "no spec: $sp (grounds are spec-driven; see deploy/grounds/README.md)"
+  echo "$sp"
+}
+
+# parse_spec <name> — sets SPEC_NODES SPEC_TOPOLOGY SPEC_TOOLS SPEC_BUNDLE SPEC_SHA SPEC_PROBES
+parse_spec() {
+  local name="$1" sp key val
+  sp="$(require_spec "$name")"
+  SPEC_NODES="1"; SPEC_TOPOLOGY="pg"; SPEC_TOOLS=""; SPEC_BUNDLE=""; SPEC_SHA=""; SPEC_PROBES=""
+  while read -r key val; do
+    case "$key" in
+      \#*|"") continue ;;
+      nodes) SPEC_NODES="$val" ;;
+      topology) SPEC_TOPOLOGY="$val" ;;
+      tools) SPEC_TOOLS="$val" ;;
+      bundle) SPEC_BUNDLE="$val" ;;
+      sha256) SPEC_SHA="$val" ;;
+      probes) SPEC_PROBES="$val" ;;
+      *) die "unknown spec key '$key' in $sp" ;;
+    esac
+  done < "$sp"
+  [ -n "$SPEC_TOOLS" ] || die "spec $sp lacks a 'tools' line"
+  case "$SPEC_BUNDLE" in
+    /*) ;;
+    "") ;;
+    *) SPEC_BUNDLE="$REPO_ROOT/$SPEC_BUNDLE" ;;
+  esac
+}
+
+bundle_sha() { # <bundle-dir> — stable hash over sorted file contents
+  find "$1" -type f -print0 2>/dev/null | sort -z \
+    | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+registered() { [ -f "$REGISTRY_DIR/$1.json" ]; }
+
+running() { podman ps --filter "name=${1}_" -q 2>/dev/null | grep -q .; }
+
+registry_field() { # <name> <python-expr on entry e>
+  python3 -c "import json,sys;e=json.load(open('$REGISTRY_DIR/$1.json'));print($2)" 2>/dev/null
+}
+
+set_spec_sha() { # <name> <sha> — write/update the sha256 line in the spec
+  local name="$1" sha="$2" sp
+  sp="$(spec_path "$name")"
+  if grep -q '^sha256 ' "$sp"; then
+    sed -i "s|^sha256 .*|sha256 $sha|" "$sp"
+  else
+    echo "sha256 $sha" >> "$sp"
+  fi
+}
+
+ground_up() { # <name> — boot via the registry verb, wait for central health
+  local name="$1" central
+  "$STARTCLUSTER" "$name" up || die "boot failed for ground '$name'"
+  central="$(registry_field "$name" "e['ports']['central']")"
+  for _ in $(seq 1 40); do
+    curl -sf "http://127.0.0.1:$central/health" >/dev/null 2>&1 && {
+      echo "[grounds] $name up — central on :$central"; return 0; }
+    sleep 3
+  done
+  die "ground '$name' central not healthy on :$central — check: podman logs ${name}_node1_1"
+}
+
+ground_stop_rm() { # <name> — stop + fully remove (piped confirms, non-interactive)
+  local name="$1"
+  "$STARTCLUSTER" "$name" stop >/dev/null 2>&1 || true
+  echo "$name" | "$STARTCLUSTER" rm "$name" >/dev/null 2>&1 || true
+  registered "$name" && die "could not remove ground '$name' from the registry"
+  # drop the project-tagged image so the next up REBUILDS from current code
+  # (podman-compose tags its build localhost/<name>_node1:latest and would
+  # otherwise reuse a stale image forever — found live on the first recreate)
+  podman rmi -f "localhost/${name}_node1:latest" >/dev/null 2>&1 || true
+}
+
+ground_create() { # <name> — create from spec
+  local name="$1"
+  local args=(create "$name" --nodes "$SPEC_NODES" --topology "$SPEC_TOPOLOGY"
+              --tools "$SPEC_TOOLS")
+  [ -n "$SPEC_BUNDLE" ] && args+=(-b "$SPEC_BUNDLE")
+  "$STARTCLUSTER" ${args[@]+"${args[@]}"} || die "create failed for ground '$name'"
+  [ -n "$SPEC_BUNDLE" ] && set_spec_sha "$name" "$(bundle_sha "$SPEC_BUNDLE")"
+}
+
+# drift check: echo "drift-reason" or "" (topology/bundle-path/bundle-sha)
+drift_reason() {
+  local name="$1"
+  registered "$name" || return 0
+  local reg_topo reg_bundle cur_sha
+  reg_topo="$(registry_field "$name" "e['topology']")"
+  [ "$reg_topo" = "$SPEC_TOPOLOGY" ] || { echo "topology changed: registry=$reg_topo spec=$SPEC_TOPOLOGY"; return 0; }
+  if [ -n "$SPEC_BUNDLE" ]; then
+    reg_bundle="$(registry_field "$name" "e.get('bundle','')")"
+    [ "$reg_bundle" = "$SPEC_BUNDLE" ] || { echo "bundle changed: registry=$reg_bundle spec=$SPEC_BUNDLE"; return 0; }
+    if [ -n "$SPEC_SHA" ]; then
+      cur_sha="$(bundle_sha "$SPEC_BUNDLE")"
+      [ "$cur_sha" = "$SPEC_SHA" ] || { echo "bundle content drifted (sha256 $SPEC_SHA -> $cur_sha)"; return 0; }
+    fi
+  fi
+  return 0
+}
+
+do_recreate() { # <name> <confirm:yes|ask>
+  local name="$1" mode="$2" ans
+  if [ "$mode" = "ask" ]; then
+    echo "recreate ground '$name' — removes its containers/volumes and reboots from the spec — type '$name' to confirm:"
+    read -r ans
+    [ "$ans" = "$name" ] || { echo "aborted"; exit 1; }
+  fi
+  echo "[grounds] recreating $name (stop + rm + create + up)"
+  ground_stop_rm "$name"
+  ground_create "$name"
+  ground_up "$name"
+}
+
+cmd_ensure() {
+  local name="${1:-}" no_recreate="" reason
+  [ "${1:-}" = "--no-recreate" ] && { no_recreate=1; name="${2:-}"; }
+  [ -n "$name" ] || die "usage: startgrounds ensure [--no-recreate] <name>"
+  parse_spec "$name"
+  if ! registered "$name"; then
+    echo "[grounds] $name not registered — creating from spec"
+    ground_create "$name"
+    ground_up "$name"
+    return 0
+  fi
+  reason="$(drift_reason "$name")"
+  if [ -n "$reason" ]; then
+    if [ -n "$no_recreate" ]; then
+      die "ground '$name' drifted ($reason) — recreate it: ./startgrounds recreate $name"
+    fi
+    echo "[grounds] $name drifted ($reason) — recreating (ensure default; --no-recreate refuses)"
+    do_recreate "$name" yes
+    return 0
+  fi
+  if running "$name"; then
+    echo "[grounds] $name up to date and running"
+  else
+    echo "[grounds] $name registered, not running — booting"
+    ground_up "$name"
+  fi
+}
+
+cmd_recreate() {
+  local name="" mode="ask" a
+  for a in "$@"; do
+    case "$a" in --yes) mode="yes" ;; *) name="$a" ;; esac
+  done
+  [ -n "$name" ] || die "usage: startgrounds recreate [--yes] <name>"
+  parse_spec "$name"
+  do_recreate "$name" "$mode"
+}
+
+cmd_stop() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "usage: startgrounds stop <name>"
+  registered "$name" || die "ground '$name' is not registered"
+  "$STARTCLUSTER" "$name" stop
+}
+
+cmd_clean() {
+  local name="${1:-}" ans
+  [ -n "$name" ] || die "usage: startgrounds clean <name>"
+  registered "$name" || die "ground '$name' is not registered"
+  echo "clean ground '$name' — removes containers, volumes, registry entry and env — type '$name' to confirm:"
+  read -r ans
+  [ "$ans" = "$name" ] || { echo "aborted"; exit 1; }
+  ground_stop_rm "$name"
+  echo "[grounds] $name removed"
+}
+
+cmd_status() {
+  python3 - "$REPO_ROOT" "$@" <<'PY'
+import json, subprocess, sys, urllib.request
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+names = sys.argv[2:] or sorted(p.stem for p in (repo / "deploy" / "grounds").glob("*.spec"))
+out = []
+for name in names:
+    reg = repo / "deploy" / "clusters.d" / f"{name}.json"
+    item = {"name": name, "registered": reg.exists()}
+    if reg.exists():
+        e = json.loads(reg.read_text())
+        item["topology"] = e["topology"]
+        item["nodes"] = e["nodes"]
+        item["ports"] = e["ports"]
+        item["bundle"] = e.get("bundle", "")
+        ps = subprocess.run(["podman", "ps", "--filter", f"name={name}_",
+                             "--format", "{{.Names}}|{{.Status}}"],
+                            capture_output=True, text=True)
+        rows = [l.split("|", 1) for l in ps.stdout.splitlines() if "|" in l]
+        item["containers"] = [{"name": n, "status": s} for n, s in rows]
+        item["running"] = bool(rows)
+        central = e["ports"]["central"]
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{central}/health", timeout=3) as r:
+                item["central_health"] = r.status
+        except Exception:
+            item["central_health"] = None
+    spec = repo / "deploy" / "grounds" / f"{name}.spec"
+    item["spec"] = spec.exists()
+    out.append(item)
+print(json.dumps({"grounds": out}, indent=1))
+PY
+}
+
+cmd_probe() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "usage: startgrounds probe <name>"
+  parse_spec "$name"
+  registered "$name" || { echo "[grounds] $name not registered — ensuring first"; cmd_ensure "$name"; }
+  running "$name" || { echo "[grounds] $name not running — ensuring"; cmd_ensure "$name"; }
+  # probes NEVER recreate: a red probe keeps the ground for inspection
+  cd "$REPO_ROOT" && POD_GROUNDS="$name" python3 -m pytest tests/test_pod_smoke.py -v
+}
+
+case "${1:-}" in
+  ensure)   shift; cmd_ensure "$@" ;;
+  recreate) shift; cmd_recreate "$@" ;;
+  status)   shift; cmd_status "$@" ;;
+  probe)    shift; cmd_probe "$@" ;;
+  stop)     shift; cmd_stop "$@" ;;
+  clean)    shift; cmd_clean "$@" ;;
+  help|--help|-h) usage ;;
+  *) usage; [ -n "${1:-}" ] && { echo; echo "unknown command '$1'"; exit 1; } ;;
+esac

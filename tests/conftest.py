@@ -81,6 +81,56 @@ def db_backend(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Tier-2 ground fixture (plans/testing-grounds-and-work-topology-2026-10-05.md
+# §3 D6): opt-in via POD_GROUNDS=<name>. Ensures the ground through
+# ./startgrounds (idempotent; recreates on drift) and exposes its registry
+# ports. Unset POD_GROUNDS -> skip, so the default suite stays hermetic.
+# ---------------------------------------------------------------------------
+
+
+class GroundInfo:
+    def __init__(self, name: str, entry: dict, running: bool):
+        self.name = name
+        self.central = entry["ports"]["central"]
+        self.tool_ports = entry["ports"]["tools"]
+        self.topology = entry["topology"]
+        self.bundle = entry.get("bundle", "")
+        self.running = running
+
+
+@pytest.fixture(scope="session")
+def pod_ground():
+    import json
+    import subprocess
+
+    name = os.environ.get("POD_GROUNDS", "").strip()
+    if not name:
+        pytest.skip("tier-2 ground not requested (set POD_GROUNDS=<name>)")
+
+    def status():
+        r = subprocess.run([str(Path(__file__).resolve().parents[1] / "startgrounds"),
+                            "status", name], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)["grounds"][0]
+
+    info = status()
+    if not info.get("registered"):
+        subprocess.run([str(Path(__file__).resolve().parents[1] / "startgrounds"),
+                        "ensure", name], check=True,
+                       capture_output=True, text=True)
+        info = status()
+    if not info.get("running"):
+        subprocess.run([str(Path(__file__).resolve().parents[1] / "startgrounds"),
+                        "ensure", name], check=True,
+                       capture_output=True, text=True)
+        info = status()
+    assert info["running"], f"ground {name} failed to run: {info}"
+    entry = {"ports": info["ports"], "topology": info["topology"],
+             "bundle": info.get("bundle", "")}
+    return GroundInfo(name, entry, running=True)
+
+
+# ---------------------------------------------------------------------------
 # Canonical fake SQL backend (M5 — was duplicated ×3 across test files).
 # Implements exactly the surface state_docs.shared_exec() relies on since the
 # SqlStore.execute consolidation: the STORE exposes execute() and delegates
