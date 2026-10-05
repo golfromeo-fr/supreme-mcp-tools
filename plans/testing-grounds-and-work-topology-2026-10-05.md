@@ -1,6 +1,6 @@
 # Testing grounds + BASIC topology switch — design
 
-**Status:** DRAFT 3 · FINAL, 2026-10-05 — self-check (§0.1) + MiniMax counter-review adjudicated (§0.2); all open questions resolved by veto-able default (§7). Execution checklist lives in `TODO.md` ("Open — testing grounds + work topology"). Ready for implementation handoff.
+**Status:** IMPLEMENTED 2026-10-05 — Phases 0-3 complete (commits 8b08238..db6ff41 on feature/pod-ui-gaps). All gates passed: 12/12 probes on g1-pg; 11/11 on gwork-pg in BOTH topologies; pg→turso→pg round trip preserved the pgdata volume, its users and the exact POSTGRES_PASSWORD; two-node g2-pg cross-node identity 12/12; default suite 1076 passed / 0 failed with grounds coexisting. Deferred to the user: the REAL-cluster rehearsal (`startcluster work turso` → `work pg` on the live daily driver), the TEST-node embedding probe at the next TEST boot, and the Q10 cron decision.
 **Supersedes:** nothing. Complements `plans/pod-config-bundle-2026-09-17.md` (bundle machinery reused, not changed).
 **Tracker:** pointer in `TODO.md` (Open — design).
 
