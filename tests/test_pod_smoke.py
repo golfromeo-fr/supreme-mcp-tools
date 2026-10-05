@@ -184,16 +184,38 @@ def test_probe_05_embedding_model_loads_in_container(pod_ground):
 
 # ── probe 6: the state plane is real SQL and reachable ───────────────────
 
+def _db_scalar(pod_ground, sql):
+    """Run a scalar SQL on the ground's state plane — pg via psql in the db
+    container; turso via libsql from node1 (the db is sqld, published on the
+    host loopback the host-networked node shares)."""
+    if pod_ground.topology == "pg":
+        r = subprocess.run(
+            ["podman", "exec", f"{pod_ground.name}_db_1",
+             "psql", "-U", "mcp", "-d", "mcp", "-tAc", sql],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip()
+    node = f"{pod_ground.name}_node1_1"
+    py = ("import libsql_experimental as l;\n"
+          f"c = l.connect('http://127.0.0.1:{pod_ground.ports_db}');\n"
+          f"print(c.execute({sql!r}).fetchone()[0])")
+    r = subprocess.run(["podman", "exec", node, "python3", "-c", py],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"sqld query failed: {r.stderr[-400:]}"
+    return r.stdout.strip()
+
+
 def test_probe_06_state_plane_tables(pod_ground):
-    r = subprocess.run(
-        ["podman", "exec", f"{pod_ground.name}_db_1",
-         "psql", "-U", "mcp", "-d", "mcp", "-tAc",
-         "SELECT to_regclass('mcp_state_docs') IS NOT NULL AND "
-         "to_regclass('mcp_users_store') IS NOT NULL"],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "t", \
-        "identity/state tables missing from the ground db"
+    if pod_ground.topology == "pg":
+        out = _db_scalar(pod_ground,
+                         "SELECT to_regclass('mcp_state_docs') IS NOT NULL AND "
+                         "to_regclass('mcp_users_store') IS NOT NULL")
+        assert out == "t", "identity/state tables missing from the ground db"
+    else:
+        out = _db_scalar(pod_ground,
+                         "SELECT count(*) FROM sqlite_master WHERE name IN "
+                         "('mcp_state_docs','mcp_users_store')")
+        assert int(out) == 2,             f"identity/state tables missing from sqld (count={out})"
 
 
 # ── probe 7: identity import actually took the db path (R9 oracle) ───────
@@ -201,13 +223,8 @@ def test_probe_06_state_plane_tables(pod_ground):
 def test_probe_07_identity_import_in_db(pod_ground):
     # users.json was mounted RO into node1 and imported ONCE at first boot —
     # assert the DATA is in SQL and the node never fell back to JSON
-    r = subprocess.run(
-        ["podman", "exec", f"{pod_ground.name}_db_1",
-         "psql", "-U", "mcp", "-d", "mcp", "-tAc",
-         "SELECT count(*) FROM mcp_users_store"],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert int(r.stdout.strip() or "0") >= 1, \
+    n = _db_scalar(pod_ground, "SELECT count(*) FROM mcp_users_store")
+    assert int(n or "0") >= 1, \
         "mcp_users_store empty — identity import did not run"
     logs = subprocess.run(
         ["podman", "logs", f"{pod_ground.name}_node1_1"],

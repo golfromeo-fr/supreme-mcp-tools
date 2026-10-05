@@ -67,7 +67,10 @@ def test_turso_db_shape():
     assert db["image"] == "ghcr.io/tursodatabase/libsql-server:latest"
     assert db["env_file"] == ["./g1-turso.env"]
     assert db["volumes"] == ["g1-turso_sqldata:/var/lib/sqld"]
-    assert "curl -sf http://127.0.0.1:8080/health" in _hc_cmd(db)
+    # the libsql image has no curl/wget — the healthcheck must be the bash
+    # /dev/tcp connect check (found live via gwork, Phase 2a)
+    assert "/dev/tcp/127.0.0.1/8080" in _hc_cmd(db)
+    assert "curl" not in _hc_cmd(db)
 
 
 def test_volumes_are_dict_not_list():
@@ -163,3 +166,45 @@ def test_generated_yaml_round_trips_through_compose_shape():
     doc = yaml.safe_load(raw)
     assert doc["name"] == "g1-pg"
     assert set(doc["services"]) == {"db", "node1"}
+
+
+# ── work layout (grounds plan §4 D7/D8 — gwork grounds) ──────────────────
+
+def make_work_entry(**over):
+    e = make_entry(name="gwork-pg", layout="work", nodes=1,
+                   ports={"central": 8200, "central2": None, "db": 5433,
+                          "tools": {"databasemcp": 8000, "webmcp": 8001,
+                                    "simplemcp": 8002, "convertermcp": 8003,
+                                    "ragmcp": 8004, "memorymcp": 8005}})
+    e.update(over)
+    return e
+
+
+def test_work_layout_pg_shape():
+    doc = gen(make_work_entry())
+    n1 = doc["services"]["node1"]
+    assert n1["network_mode"] == "host"
+    assert "ports" not in n1  # host networking publishes nothing
+    assert n1["environment"]["MCP_NODE_CENTRAL_URL"] == "http://127.0.0.1:8200"
+    assert n1["depends_on"] == {"db": {"condition": "service_healthy"}}
+    vols = " ".join(n1["volumes"])
+    assert "huggingface" in vols and "artifacts" in vols and "/app/logs" in vols
+    db = doc["services"]["db"]
+    assert db["image"] == "docker.io/pgvector/pgvector:pg16"  # work parity
+    assert db["ports"] == ["127.0.0.1:5433:5432"]  # the publish is LOAD-BEARING
+    assert doc["volumes"]["gwork-pg_pgdata"] is None
+
+
+def test_work_layout_turso_shape():
+    doc = gen(make_work_entry(name="gwork-turso", topology="turso"))
+    db = doc["services"]["db"]
+    assert db["image"] == "ghcr.io/tursodatabase/libsql-server:latest"
+    assert db["ports"] == ["127.0.0.1:9080:8080"]
+    assert doc["volumes"]["gwork-turso_sqldata"] is None
+
+
+def test_custom_layout_unchanged_by_work_branch():
+    """The default custom shape must be untouched by the layout branch."""
+    doc = gen(make_entry())
+    assert "network_mode" not in doc["services"]["node1"]
+    assert doc["services"]["node1"]["ports"][0] == "20000:8200"

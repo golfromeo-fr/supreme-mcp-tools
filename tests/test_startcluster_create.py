@@ -342,3 +342,86 @@ def test_no_bundle_up_has_no_override(sandbox, base, fake_compose):
     assert up(sandbox, "plain").returncode == 0
     calls = compose_calls(fake_compose)
     assert all("bundle.yml" not in c for c in calls), calls
+
+
+# ── work layout (grounds plan §4 — gwork grounds, Phase 2a) ──────────────
+
+CANONICAL_WINDOW = (8000, 8001, 8002, 8003, 8004, 8005, 8200, 5433, 9080)
+
+
+def canonical_window_free():
+    return not (_busy_ports() & set(CANONICAL_WINDOW))
+
+
+def test_create_work_layout_requires_bundle(sandbox):
+    r = run_create(sandbox, "gworkx", "--layout", "work", "--port-base", "20000",
+                   "--tools", "simplemcp")
+    assert r.returncode != 0 and "requires a config bundle" in r.stderr + r.stdout
+
+
+def test_create_work_layout_rejects_two_nodes(sandbox, base, bundle):
+    r = run_create(sandbox, "gworkx", "--layout", "work", "--nodes", "2",
+                   "--port-base", str(base), "--tools", "simplemcp",
+                   "-b", str(bundle))
+    assert r.returncode != 0 and "single-node" in r.stderr + r.stdout
+
+
+def test_create_work_layout_rejects_bad_layout(sandbox):
+    r = run_create(sandbox, "gworkx", "--layout", "k8s", "--port-base", "20000",
+                   "--tools", "simplemcp")
+    assert r.returncode != 0 and "custom or work" in r.stderr + r.stdout
+
+
+@pytest.mark.skipif(not canonical_window_free(),
+                    reason="canonical window held — host stack or a gwork ground is up")
+def test_create_work_layout_registry_and_env_rewrite(sandbox, bundle):
+    r = run_create(sandbox, "gworkp", "--layout", "work",
+                   "--tools", ALL_TOOLS, "-b", str(bundle))
+    assert r.returncode == 0, r.stderr + r.stdout
+    e = registry(sandbox, "gworkp")
+    assert e["layout"] == "work"
+    assert e["ports"]["central"] == 8200 and e["ports"]["db"] == 5433
+    assert e["ports"]["tools"] == {"databasemcp": 8000, "webmcp": 8001,
+                                   "simplemcp": 8002, "convertermcp": 8003,
+                                   "ragmcp": 8004, "memorymcp": 8005}
+    env = (sandbox / "deploy" / "gworkp.env").read_text()
+    # D8: host networking — state plane reaches the db via the PUBLISHED
+    # loopback port, never via podman DNS
+    assert "POSTGRES_HOST=127.0.0.1" in env and "POSTGRES_PORT=5433" in env
+    assert "POSTGRES_HOST=db" not in env
+    # bundle data-plane lines stay stripped (a comment mentions the drop)
+    assert not [l for l in env.splitlines()
+                if not l.startswith("#") and "file:" in l]
+
+
+@pytest.mark.skipif(not canonical_window_free(),
+                    reason="canonical window held — host stack or a gwork ground is up")
+def test_create_work_layout_turso_env_rewrite(sandbox, bundle):
+    r = run_create(sandbox, "gworkt", "--layout", "work", "--topology", "turso",
+                   "--tools", ALL_TOOLS, "-b", str(bundle))
+    assert r.returncode == 0, r.stderr + r.stdout
+    e = registry(sandbox, "gworkt")
+    assert e["ports"]["db"] == 9080
+    env = (sandbox / "deploy" / "gworkt.env").read_text()
+    assert "TURSO_DATABASE_URL=http://127.0.0.1:9080" in env
+    assert "http://db:8080" not in env
+    assert "POSTGRES_HOST" not in env
+
+
+def test_create_work_layout_canonical_port_held_fatal(sandbox, bundle):
+    """Any held canonical port must refuse the work-layout create (the
+    three-way mutual exclusion: host launcher XOR mcp-work XOR gwork)."""
+    free = [p for p in CANONICAL_WINDOW if p not in _busy_ports()]
+    if not free:
+        pytest.skip("every canonical port is held — cannot stage a holder")
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(("127.0.0.0", free[0]))
+    holder.listen(1)
+    try:
+        time.sleep(0.05)
+        r = run_create(sandbox, "gworkh", "--layout", "work",
+                       "--tools", ALL_TOOLS, "-b", str(bundle))
+        assert r.returncode != 0 and "mutual exclusion" in r.stderr + r.stdout
+    finally:
+        holder.close()

@@ -282,3 +282,5 @@ gui-test-screenshots/
 deploy/clusters.d/
 deploy/g*.env
 deploy/compose-g*.bundle.yml
+# ...but grounds specs ARE committed (key-free by policy)
+!deploy/grounds/*.spec

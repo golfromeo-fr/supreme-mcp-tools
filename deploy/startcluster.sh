@@ -780,14 +780,15 @@ CANONICAL_TOOL_PORT() { # tool -> container port (config/ports.json assignments)
   esac
 }
 
-create_cluster() { # name [flags]: --nodes 1|2 --topology pg|turso --tools "..." --port-base N -b <bundle>
-  local name="" nodes=1 topology="pg" tools="simplemcp convertermcp webmcp" port_base="" bundle=""
+create_cluster() { # name [flags]: --nodes 1|2 --topology pg|turso --tools "..." --port-base N --layout custom|work -b <bundle>
+  local name="" nodes=1 topology="pg" tools="simplemcp convertermcp webmcp" port_base="" bundle="" layout="custom"
   while [ $# -gt 0 ]; do
     case "$1" in
       --nodes) nodes="$2"; shift 2 ;;
       --topology) topology="$2"; shift 2 ;;
       --tools) tools="$2"; shift 2 ;;
       --port-base) port_base="$2"; shift 2 ;;
+      --layout) layout="$2"; shift 2 ;;
       -b) bundle="$2"; shift 2 ;;
       *) name="$1"; shift ;;
     esac
@@ -800,59 +801,88 @@ create_cluster() { # name [flags]: --nodes 1|2 --topology pg|turso --tools "..."
   registry_is_known "$name" && { echo "FATAL: cluster '$name' already exists in the registry"; exit 1; }
   case "$nodes" in 1|2) ;; *) echo "FATAL: --nodes must be 1 or 2"; exit 1 ;; esac
   case "$topology" in pg|turso) ;; *) echo "FATAL: create supports pg|turso topologies (external via -b bundle)"; exit 1 ;; esac
+  case "$layout" in custom|work) ;; *) echo "FATAL: --layout must be custom or work"; exit 1 ;; esac
+  if [ "$layout" = "work" ]; then
+    # work-shaped ground (grounds plan §4 D7/D8): single node on the
+    # CANONICAL ports with host networking — the three-way mutual exclusion
+    # (host launcher XOR mcp-work XOR gwork) is enforced here, loudly.
+    [ "$nodes" = "1" ] || { echo "FATAL: work layout is single-node (--nodes 1)"; exit 1; }
+    [ -n "$bundle" ] || { echo "FATAL: work layout requires a config bundle (-b)"; exit 1; }
+    local dbport=5433; [ "$topology" = "turso" ] && dbport=9080
+    local cp
+    for cp in 8000 8001 8002 8003 8004 8005 8200 "$dbport"; do
+      ss -ltn | grep -q ":$cp\b" \
+        && { echo "FATAL: canonical port $cp is held — work-layout grounds need the host launcher, mcp-work and other gwork grounds DOWN (mutual exclusion)"; exit 1; }
+    done
+  fi
   for t in $tools; do
     [ "$(CANONICAL_TOOL_PORT "$t")" = "0" ] && { echo "FATAL: unknown tool '$t'"; exit 1; }
   done
   [ -n "$bundle" ] && [ ! -f "$bundle/env/.env" ] \
     && { echo "FATAL: bundle missing env/.env: $bundle"; exit 1; }
 
-  # port_base: given, or auto-pick the lowest free base in 20000-20999
-  if [ -z "$port_base" ]; then
-    local base busy p
-    for base in $(seq 20000 100 20900); do
-      busy=0
-      for p in "$base" "$((base + 1000))" $(seq "$((base + 2))" "$((base + 7))"); do
-        ss -ltn | grep -q ":$p\b" && busy=1 && break
-        for other in $(registry_names); do
-          grep -qE ": ?$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null && busy=1 && break
+  # port_base: given, or auto-pick the lowest free base in 20000-20999.
+  # work layout skips the window entirely — its ports are the canonical ones,
+  # already checked free above.
+  if [ "$layout" = "work" ]; then port_base=""; fi
+  if [ "$layout" != "work" ]; then
+    if [ -z "$port_base" ]; then
+      local base busy p
+      for base in $(seq 20000 100 20900); do
+        busy=0
+        for p in "$base" "$((base + 1000))" $(seq "$((base + 2))" "$((base + 7))"); do
+          ss -ltn | grep -q ":$p\b" && busy=1 && break
+          for other in $(registry_names); do
+            grep -qE ": ?$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null && busy=1 && break
+          done
+          [ "$busy" = 1 ] && break
         done
-        [ "$busy" = 1 ] && break
+        [ "$busy" = 0 ] && { port_base=$base; break; }
       done
-      [ "$busy" = 0 ] && { port_base=$base; break; }
+      [ -n "$port_base" ] || { echo "FATAL: no free port base in 20000-20999"; exit 1; }
+    fi
+    local p
+    for p in "$port_base" "$((port_base + 1000))" $(seq "$((port_base + 2))" "$((port_base + 7))"); do
+      ss -ltn | grep -q ":$p\b" && { echo "FATAL: port $p is already in use"; exit 1; }
+      for other in $(registry_names); do
+        [ "$other" = "$name" ] && continue
+        grep -qE ": ?$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null \
+          && { echo "FATAL: port $p already mapped by cluster '$other'"; exit 1; }
+      done
     done
-    [ -n "$port_base" ] || { echo "FATAL: no free port base in 20000-20999"; exit 1; }
   fi
-  local p
-  for p in "$port_base" "$((port_base + 1000))" $(seq "$((port_base + 2))" "$((port_base + 7))"); do
-    ss -ltn | grep -q ":$p\b" && { echo "FATAL: port $p is already in use"; exit 1; }
-    for other in $(registry_names); do
-      [ "$other" = "$name" ] && continue
-      grep -qE ": ?$p\b" "$REGISTRY_DIR/$other.json" 2>/dev/null \
-        && { echo "FATAL: port $p already mapped by cluster '$other'"; exit 1; }
-    done
-  done
 
   local host_ports=""
-  for t in $tools; do
-    host_ports="$host_ports $t:$((port_base + 2 + $(CANONICAL_TOOL_PORT "$t") - 8000))"
-  done
+  if [ "$layout" != "work" ]; then
+    for t in $tools; do
+      host_ports="$host_ports $t:$((port_base + 2 + $(CANONICAL_TOOL_PORT "$t") - 8000))"
+    done
+  fi
 
   # registry + env (create does NOT boot — cheap and reversible)
   mkdir -p "$REGISTRY_DIR"
-  python3 - "$name" "$nodes" "$topology" "$tools" "$port_base" "$bundle" <<'PY'
+  python3 - "$name" "$nodes" "$topology" "$tools" "$port_base" "$bundle" "$layout" <<'PY'
 import json, sys, datetime
-name, nodes, topology, tools, port_base, bundle = sys.argv[1:7]
+name, nodes, topology, tools, port_base, bundle, layout = sys.argv[1:8]
 tool_list = tools.split()
 PORT = {"databasemcp": 8000, "webmcp": 8001, "simplemcp": 8002,
         "convertermcp": 8003, "ragmcp": 8004, "memorymcp": 8005}
-ports = {"central": int(port_base),
-         "central2": int(port_base) + 1000 if nodes == "2" else None,
-         # +2: tools occupy the RESERVED base+2..base+7 window (central owns
-         # base). Without the offset databasemcp (container 8000) collides
-         # with central — never hit before grounds (clusters.d was empty).
-         "tools": {t: int(port_base) + 2 + PORT[t] - 8000 for t in tool_list}}
+if layout == "work":
+    # canonical ports; recorded for attribution/probes (host networking)
+    ports = {"central": 8200, "central2": None, "db": 5433 if topology == "pg" else 9080,
+             "tools": {t: PORT[t] for t in tool_list}}
+else:
+    ports = {"central": int(port_base),
+             "central2": int(port_base) + 1000 if nodes == "2" else None,
+             # +2: tools occupy the RESERVED base+2..base+7 window (central owns
+             # base). Without the offset databasemcp (container 8000) collides
+             # with central — never hit before grounds (clusters.d was empty).
+             "tools": {t: int(port_base) + 2 + PORT[t] - 8000 for t in tool_list}}
 entry = {"name": name, "nodes": int(nodes), "topology": topology,
-         "tools": tool_list, "port_base": int(port_base), "ports": ports,
+         "layout": layout,
+         "tools": tool_list,
+         **({"port_base": int(port_base)} if port_base else {}),
+         "ports": ports,
          "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
 if bundle and bundle != "none":
     entry["bundle"] = bundle
@@ -872,6 +902,20 @@ PY
     } >> "deploy/$name.env"
   fi
   echo "[create] env -> deploy/$name.env"
+  if [ "$layout" = "work" ]; then
+    # work layout (grounds plan §4 D8): the node shares the HOST netns and
+    # cannot resolve podman DNS names — rewrite the state-plane addresses
+    # from bridge form (db:5432 / db:8080) to the published loopback ports.
+    # The publish in the generated compose is LOAD-BEARING (see the D8 trap:
+    # do not copy compose-turso.yml's no-publish shape).
+    sed -i -e 's|^POSTGRES_HOST=db$|POSTGRES_HOST=127.0.0.1|' \
+           -e 's|^TURSO_DATABASE_URL=http://db:8080$|TURSO_DATABASE_URL=http://127.0.0.1:9080|' \
+           -e '/^POSTGRES_PORT=/d' "deploy/$name.env"
+    if [ "$topology" = "pg" ]; then
+      echo "POSTGRES_PORT=5433" >> "deploy/$name.env"
+    fi
+    echo "[create] state plane rewritten for host networking (127.0.0.1)"
+  fi
   echo "[create] cluster '$name' ready: $nodes node(s), $topology topology, ports:$host_ports"
   echo "[create] boot it with: startcluster $name up"
 }
@@ -905,9 +949,10 @@ custom_up() { # name
   # env file. Regenerated on EVERY up from the recorded bundle path, so a
   # bare re-up keeps the chain (same failure class as the work env's bare
   # re-up, fixed 138b471).
-  local bundle nodes f t
+  local bundle nodes f t topology
   bundle=$(python3 -c "import json;print(json.load(open('$REGISTRY_DIR/$name.json')).get('bundle',''))")
   nodes=$(python3 -c "import json;print(json.load(open('$REGISTRY_DIR/$name.json'))['nodes'])")
+  topology=$(python3 -c "import json;print(json.load(open('$REGISTRY_DIR/$name.json'))['topology'])")
   BUNDLE_F=()
   if [ -n "$bundle" ]; then
     local specs=()
@@ -920,7 +965,10 @@ custom_up() { # name
     # (silent no-ops — found live on the first g1-pg boot). A container-local
     # turso file gives them a REAL vector/SQL plane that dies with the ground:
     # zero host mounts, zero real-data risk.
-    specs+=("env|node1|TURSO_DATABASE_URL=file:/app/ground-memory.db")
+    # pg topology ONLY: in the turso topology TURSO_DATABASE_URL already
+    # points at the sqld state plane, which then also serves the data plane.
+    [ "$topology" = "pg" ] \
+      && specs+=("env|node1|TURSO_DATABASE_URL=file:/app/ground-memory.db")
     shopt -s nullglob
     for f in "$bundle"/config/*.json; do
       specs+=("node1|$f|/app/config/$(basename "$f")|ro")

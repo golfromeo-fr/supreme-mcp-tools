@@ -37,15 +37,18 @@ require_spec() {
   echo "$sp"
 }
 
-# parse_spec <name> — sets SPEC_NODES SPEC_TOPOLOGY SPEC_TOOLS SPEC_BUNDLE SPEC_SHA SPEC_PROBES
+# parse_spec <name> — sets SPEC_NODES SPEC_LAYOUT SPEC_TOPOLOGY SPEC_TOOLS
+# SPEC_BUNDLE SPEC_SHA SPEC_PROBES
 parse_spec() {
   local name="$1" sp key val
   sp="$(require_spec "$name")"
-  SPEC_NODES="1"; SPEC_TOPOLOGY="pg"; SPEC_TOOLS=""; SPEC_BUNDLE=""; SPEC_SHA=""; SPEC_PROBES=""
+  SPEC_NODES="1"; SPEC_LAYOUT="custom"; SPEC_TOPOLOGY="pg"; SPEC_TOOLS=""
+  SPEC_BUNDLE=""; SPEC_SHA=""; SPEC_PROBES=""
   while read -r key val; do
     case "$key" in
       \#*|"") continue ;;
       nodes) SPEC_NODES="$val" ;;
+      layout) SPEC_LAYOUT="$val" ;;
       topology) SPEC_TOPOLOGY="$val" ;;
       tools) SPEC_TOOLS="$val" ;;
       bundle) SPEC_BUNDLE="$val" ;;
@@ -110,8 +113,8 @@ ground_stop_rm() { # <name> — stop + fully remove (piped confirms, non-interac
 
 ground_create() { # <name> — create from spec
   local name="$1"
-  local args=(create "$name" --nodes "$SPEC_NODES" --topology "$SPEC_TOPOLOGY"
-              --tools "$SPEC_TOOLS")
+  local args=(create "$name" --nodes "$SPEC_NODES" --layout "$SPEC_LAYOUT"
+              --topology "$SPEC_TOPOLOGY" --tools "$SPEC_TOOLS")
   [ -n "$SPEC_BUNDLE" ] && args+=(-b "$SPEC_BUNDLE")
   "$STARTCLUSTER" ${args[@]+"${args[@]}"} || die "create failed for ground '$name'"
   [ -n "$SPEC_BUNDLE" ] && set_spec_sha "$name" "$(bundle_sha "$SPEC_BUNDLE")"
@@ -121,9 +124,11 @@ ground_create() { # <name> — create from spec
 drift_reason() {
   local name="$1"
   registered "$name" || return 0
-  local reg_topo reg_bundle cur_sha
+  local reg_topo reg_layout reg_bundle cur_sha
   reg_topo="$(registry_field "$name" "e['topology']")"
   [ "$reg_topo" = "$SPEC_TOPOLOGY" ] || { echo "topology changed: registry=$reg_topo spec=$SPEC_TOPOLOGY"; return 0; }
+  reg_layout="$(registry_field "$name" "e.get('layout','custom')")"
+  [ "$reg_layout" = "$SPEC_LAYOUT" ] || { echo "layout changed: registry=$reg_layout spec=$SPEC_LAYOUT"; return 0; }
   if [ -n "$SPEC_BUNDLE" ]; then
     reg_bundle="$(registry_field "$name" "e.get('bundle','')")"
     [ "$reg_bundle" = "$SPEC_BUNDLE" ] || { echo "bundle changed: registry=$reg_bundle spec=$SPEC_BUNDLE"; return 0; }
@@ -218,6 +223,7 @@ for name in names:
     if reg.exists():
         e = json.loads(reg.read_text())
         item["topology"] = e["topology"]
+        item["layout"] = e.get("layout", "custom")
         item["nodes"] = e["nodes"]
         item["ports"] = e["ports"]
         item["bundle"] = e.get("bundle", "")
@@ -240,6 +246,57 @@ print(json.dumps({"grounds": out}, indent=1))
 PY
 }
 
+# switch <name> <pg|turso> — change the identity-plane engine of a
+# work-layout ground WITHOUT wiping volumes (the dress rehearsal of the
+# Phase-2b `startcluster work <topology>` switch): stop node+db, dormant-
+# toggle the env's state-plane blocks, update registry + spec, up. The
+# pgdata/sqldata volume of the engine left behind goes dormant and comes
+# back intact on the return trip (edge 2: same POSTGRES_PASSWORD).
+cmd_switch() {
+  local name="${1:-}" target="${2:-}"
+  [ -n "$name" ] && [ -n "$target" ] || die "usage: startgrounds switch <name> <pg|turso>"
+  case "$target" in pg|turso) ;; *) die "switch target must be pg or turso" ;; esac
+  parse_spec "$name"
+  registered "$name" || die "ground '$name' is not registered"
+  [ "$(registry_field "$name" "e.get('layout','custom')")" = "work" ] \
+    || die "switch applies to work-layout grounds only"
+  local cur dbport
+  cur="$(registry_field "$name" "e['topology']")"
+  [ "$cur" = "$target" ] && { echo "[grounds] $name already on $target"; return 0; }
+  local spec; spec="$(spec_path "$name")"
+  local envf="$REPO_ROOT/deploy/$name.env"
+
+  echo "[grounds] switching $name: $cur -> $target (volumes kept)"
+  "$STARTCLUSTER" "$name" stop >/dev/null 2>&1 || true
+  # remove the old CONTAINERS (never the volumes) — podman-compose up will
+  # not recreate a definition-changed service while its old container sits
+  # around (found live on the first pg→turso→pg round trip)
+  podman rm -f "${name}_db_1" "${name}_node1_1" >/dev/null 2>&1 || true
+  if [ "$target" = "turso" ]; then
+    # park the pg block (password survives for the return trip)
+    sed -i -E 's^(POSTGRES_[A-Z_]+=.*)^# [topology:pg-dormant] \1^' "$envf"
+    sed -i '/^TURSO_DATABASE_URL=/d' "$envf"
+    { echo ""; echo "# ---- state plane (turso era) ----";
+      echo "TURSO_DATABASE_URL=http://127.0.0.1:9080"; } >> "$envf"
+    dbport=9080
+  else
+    # revive the parked pg block (same password, same pgdata volume)
+    sed -i 's^# \[topology:pg-dormant\] ^^' "$envf"
+    sed -i '/^TURSO_DATABASE_URL=/d' "$envf"
+    grep -q '^POSTGRES_PORT=' "$envf" || echo "POSTGRES_PORT=5433" >> "$envf"
+    dbport=5433
+  fi
+  python3 -c "
+import json
+p = '$REGISTRY_DIR/$name.json'
+e = json.load(open(p))
+e['topology'] = '$target'
+e['ports']['db'] = $dbport
+json.dump(e, open(p, 'w'), indent=2)"
+  sed -i "s|^topology .*|topology $target|" "$spec"
+  ground_up "$name"
+}
+
 cmd_probe() {
   local name="${1:-}"
   [ -n "$name" ] || die "usage: startgrounds probe <name>"
@@ -253,6 +310,7 @@ cmd_probe() {
 case "${1:-}" in
   ensure)   shift; cmd_ensure "$@" ;;
   recreate) shift; cmd_recreate "$@" ;;
+  switch)   shift; cmd_switch "$@" ;;
   status)   shift; cmd_status "$@" ;;
   probe)    shift; cmd_probe "$@" ;;
   stop)     shift; cmd_stop "$@" ;;
