@@ -14,7 +14,7 @@ picture is in one place.
 | | What it is | How it starts | Ports |
 |---|---|---|---|
 | **Host stack** | The classic way: `startlauncher` runs all 6 tools as host processes, `startui` the management UI | `./startlauncher`, `startui` | canonical: 8000–8005 tools, 8200 central, 8400 UI |
-| **`pod_mcp-work`** | The pod-based daily driver: ONE launcher container (all 6 tools) + its own state DB, host networking | `./startcluster work` | same canonical ports (that's the point) |
+| **`pod_mcp-work`** | The pod-based launcher bench (the daily driver is the host startlauncher): ONE launcher container (all 6 tools) + its own state DB, host networking | `./startcluster work` | same canonical ports (that's the point) |
 | **`pod_mcp-multihost`** | The multi-host TEST bench: TWO launcher clones + shared DB + MinIO + load balancer | `./startcluster test pg` | 18200/19200 centrals, 18080 LB, 18xxx/19xxx tools |
 
 ```
@@ -48,7 +48,7 @@ Key rules:
 
 ---
 
-## pod_mcp-work — the daily driver
+## pod_mcp-work — the boxed launcher bench
 
 ```
         HOST

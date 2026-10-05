@@ -11,7 +11,7 @@ system using the commands below.
 |---|---|
 | `startlauncher` (repo root) | host working stack: 6 tools + central 8200 |
 | `startui` (repo root) | management UI on 8400 |
-| `startcluster` (repo root) | podman environments: `work` (daily driver, canonical ports) and `test` (M4 bench, ports 18xxx/19xxx) |
+| `startcluster` (repo root) | podman environments: `work` (launcher bench, canonical ports — the daily driver is the host startlauncher) and `test` (M4 bench, ports 18xxx/19xxx) |
 
 `startcluster` is generated/maintained on the machine that runs podman; a
 copy of the currently-proven version lives at `deploy/startcluster.sh`

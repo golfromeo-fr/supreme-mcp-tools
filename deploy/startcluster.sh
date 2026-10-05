@@ -412,7 +412,7 @@ OWN
   fi
   if [ -n "$BUNDLE_DIR" ]; then
     [ -f "$BUNDLE_DIR/identity/users.json" ] \
-      || { echo "[work] FATAL: bundle missing identity/users.json (the daily driver needs its users)"; exit 1; }
+      || { echo "[work] FATAL: bundle missing identity/users.json (the work bench needs its users)"; exit 1; }
     export HOST_CONFIG_DIR="$BUNDLE_DIR/identity"
   else
     export HOST_CONFIG_DIR="$CONFIG_DIR"

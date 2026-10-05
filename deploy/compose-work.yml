@@ -1,4 +1,6 @@
-# WORK environment — the pod-based daily driver.
+# WORK environment — the pod-based verification bench (the user's daily
+# driver is the HOST startlauncher, which cannot run alongside this pod —
+# same canonical ports).
 #
 # One launcher node serving ALL SIX tools on the CANONICAL ports
 # (8000-8005, central 8200) with host networking — so existing client

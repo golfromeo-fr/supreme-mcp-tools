@@ -119,7 +119,7 @@ The 7 stopped containers from your screenshot, color-coded:
 | `..._lb_1` (nginx) | The doorman — spreads requests over copy #1 and #2 |
 | `..._minio_1` (MinIO) | The lab's filing cabinet: big memory blobs |
 
-**Group `pod_mcp-work` — the boxed daily driver (2 containers):**
+**Group `pod_mcp-work` — the boxed launcher bench (2 containers):**
 
 | Container | In plain words |
 |---|---|
