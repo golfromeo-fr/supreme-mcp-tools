@@ -41,6 +41,14 @@ except ImportError:
     SPARSE_VECTORS_AVAILABLE = False
     logging.warning("Sparse vector generator not available. Install sparse_vector_gen.py to enable sparse search.")
 
+# P2 embedding lanes + dead-endpoint latch (stdlib-only modules, core deps)
+from indexer.lanes import (
+    lane_slug, lane_fingerprint, resolve_lane, list_lanes, lane_label,
+    dense_dim_of, collection_fingerprint, matches_active_embedder,
+    check_lane_compatibility, resolve_search_candidates,
+)
+from indexer import embedding_gate
+
 try:
     from copilot_context_injector import CopilotContextInjector, get_injector
     COPILOT_INJECTOR_AVAILABLE = True
@@ -633,7 +641,7 @@ def validate_search_request(collection_name: str, query_vector: list, using_vect
 
 def _get_collection_dimensions(collection_info) -> int | None:
     """Get the dense vector dimensions from a CollectionInfo object."""
-    return collection_info.dim
+    return dense_dim_of(collection_info)
 
 
 def setup_fef_v3():
@@ -850,7 +858,9 @@ async def search(
     function_name: str | None = None,
     copilot_format: str | None = None,  # "comment" | "sidebar"
     language: str = "c",
-    max_lines: int = 50
+    max_lines: int = 50,
+    embedding_model: str | None = None,  # P2 lanes: preset for the query embedder + active lane (auto | fast | high-quality)
+    search_all_lanes: bool = False,      # P2 lanes: opt-in multi-lane search (one query embedding per lane model)
 ) -> str:
     """
     Unified code search with automatic detection of collection capabilities.
@@ -859,6 +869,13 @@ async def search(
     - mode='dense': Semantic search using embeddings (requires matching dimension)
     - mode='sparse': BM25 lexical search for exact identifiers
     - mode='hybrid': Combined dense + sparse (requires hybrid collection)
+
+    P2 embedding lanes: when `<collection_name>-<provider-model-dim>` lanes
+    exist, search targets the ACTIVE lane (matching embedding_model, or the
+    server env config) plus any legacy collection built by the same embedder.
+    search_all_lanes=true queries every lane (embeds the query once per lane
+    model — remote lanes cost one API call each). Sparse mode is
+    model-independent and sweeps every lane.
 
     copilot_format adds GitHub Copilot formatting:
     - 'comment': Inline comment block
@@ -874,6 +891,18 @@ async def search(
 
     if not query:
         raise ValueError("Missing argument: query")
+
+    # P2 lanes: when lane collections exist for this base, search across
+    # them; with no lanes the single-collection flow below is unchanged.
+    lane_collections = [
+        c for c in list_lanes(vector_store, collection_name) if c != collection_name
+    ]
+    if lane_collections:
+        return await _search_lanes(
+            query, limit, collection_name, lane_collections, mode, file_type,
+            function_name, copilot_format, language, max_lines,
+            embedding_model, search_all_lanes,
+        )
 
     # Detect collection capabilities
     try:
@@ -913,51 +942,56 @@ async def search(
         return f"Error: Unknown mode '{mode}'. Use: auto, dense, sparse, hybrid"
 
 
-async def _do_dense_search(query: str, limit: int, collection_name: str,
-                           file_type: str | None, function_name: str | None) -> list:
-    """Execute dense search and return raw scoreless points list.
+async def _embed_query(query: str, preset: dict | None = None) -> list[float]:
+    """Embed one query string.
 
-    Returns list of dicts: {id, score, payload}.
-    Raises on error (caller handles).
+    preset ({'provider','model',...}) selects the embedder explicitly (P2
+    lanes: each lane is searched with its own model); None uses the server
+    env config (pre-lane behavior). Local models embed in-process.
     """
-    from shared.store_models import Filter, FieldCondition, MatchValue
+    provider = (preset or {}).get('provider') or os.getenv('EMBEDDING_PROVIDER', 'azure')
 
-    embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'azure')
-
-    if embedding_provider == 'azure':
+    if provider == 'azure':
         import httpx
         azure_api_url = os.getenv('AZURE_EMBEDDING_API_URL',
                                   'https://put.your.API.gateway.ai/v1/embeddings')
-        azure_model = os.getenv('AZURE_EMBEDDING_MODEL', 'text-embedding-3-large')
+        azure_model = (preset or {}).get('model') or os.getenv('AZURE_EMBEDDING_MODEL', 'text-embedding-3-large')
         api_key = os.getenv('AI_API_KEY', '')
 
         if not api_key:
             raise ValueError("AI_API_KEY not set. Cannot generate search embedding.")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                azure_api_url,
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-                json={"input": [query], "model": azure_model}
-            )
-            response.raise_for_status()
-            data = response.json()
-            query_vector = data['data'][0]['embedding']
+        embedding_gate.check(azure_api_url)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    azure_api_url,
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                    json={"input": [query], "model": azure_model}
+                )
+                response.raise_for_status()
+                data = response.json()
+                query_vector = data['data'][0]['embedding']
+            embedding_gate.record_success()
+            return query_vector
+        except Exception:
+            embedding_gate.record_failure(azure_api_url)
+            raise
     else:
         if not LOCAL_EMBEDDINGS_AVAILABLE:
             raise ValueError("Local embeddings module not available. Install sentence-transformers.")
 
-        model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
-        query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
+        model_name = (preset or {}).get('model') or LOCAL_EMBEDDING_MODEL
+        query_embeddings = generate_local_embeddings([query], model_name=model_name)
         if query_embeddings is None or len(query_embeddings) == 0:
             raise ValueError("Failed to generate local embedding for query.")
-        query_vector = query_embeddings[0].tolist()
+        return query_embeddings[0].tolist()
 
-    validation = validate_search_request(collection_name, query_vector)
-    if not validation.get('valid', True) and 'error' in validation:
-        raise ValueError(validation['error'])
-    if validation.get('warning'):
-        logger.warning(validation['warning'])
+
+async def _dense_search_with_vector(query_vector: list, limit: int, collection_name: str,
+                                    file_type: str | None, function_name: str | None) -> list:
+    """Dense search with a pre-computed query vector."""
+    from shared.store_models import Filter, FieldCondition, MatchValue
 
     conditions = []
     if file_type:
@@ -995,6 +1029,54 @@ async def _do_dense_search(query: str, limit: int, collection_name: str,
             for p in results]
 
 
+async def _do_dense_search(query: str, limit: int, collection_name: str,
+                           file_type: str | None, function_name: str | None) -> list:
+    """Execute dense search and return raw scoreless points list.
+
+    Returns list of dicts: {id, score, payload}.
+    Raises on error (caller handles).
+    """
+    query_vector = await _embed_query(query)
+
+    validation = validate_search_request(collection_name, query_vector)
+    if not validation.get('valid', True) and 'error' in validation:
+        raise ValueError(validation['error'])
+    if validation.get('warning'):
+        logger.warning(validation['warning'])
+
+    return await _dense_search_with_vector(
+        query_vector, limit, collection_name, file_type, function_name)
+
+
+async def _sparse_search_with_vector(query_text: str, sparse_vec: dict,
+                                     limit: int, collection_name: str,
+                                     file_type: str | None, function_name: str | None) -> list:
+    """Sparse (BM25) search with a pre-built term-hash vector (model-independent)."""
+    from shared.store_models import Filter, FieldCondition, MatchValue, SparseVector as NeutralSparseVector
+
+    conditions = []
+    if file_type:
+        conditions.append(FieldCondition(key="fileType", match=MatchValue(value=file_type)))
+    if function_name:
+        conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
+    search_filter = Filter(must=conditions) if conditions else None
+
+    neutral_vec = NeutralSparseVector(
+        indices=list(sparse_vec.keys()),
+        values=list(sparse_vec.values()),
+    )
+    # Pass the raw query text so lexical backends (Turso FTS5 / PG tsvector) can
+    # run a real MATCH. The integer sparse_vec is Qdrant-native only.
+    results = vector_store.query_sparse(
+        collection_name, neutral_vec,
+        limit=limit, filter=search_filter,
+        query_text=query_text,
+    )
+
+    return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
+            for p in results]
+
+
 async def _do_sparse_search(query: str, limit: int, collection_name: str,
                             file_type: str | None, function_name: str | None) -> list:
     """Execute sparse search and return structured results list.
@@ -1002,7 +1084,7 @@ async def _do_sparse_search(query: str, limit: int, collection_name: str,
     Returns list of dicts: {id, score, payload}.
     Raises on error (caller handles).
     """
-    from shared.store_models import Filter, FieldCondition, MatchValue, SparseVector as NeutralSparseVector
+    from shared.store_models import SparseVector as NeutralSparseVector
 
     if not SPARSE_VECTORS_AVAILABLE:
         raise ValueError("Sparse vector search not available. Missing sparse_vector_gen.py module.")
@@ -1013,27 +1095,8 @@ async def _do_sparse_search(query: str, limit: int, collection_name: str,
     if not query_sparse_vec:
         raise ValueError("Failed to generate sparse vector for query.")
 
-    conditions = []
-    if file_type:
-        conditions.append(FieldCondition(key="fileType", match=MatchValue(value=file_type)))
-    if function_name:
-        conditions.append(FieldCondition(key="functionName", match=MatchValue(value=function_name)))
-    search_filter = Filter(must=conditions) if conditions else None
-
-    sparse_vec = NeutralSparseVector(
-        indices=list(query_sparse_vec.keys()),
-        values=list(query_sparse_vec.values()),
-    )
-    # Pass the raw query text so lexical backends (Turso FTS5 / PG tsvector) can
-    # run a real MATCH. The integer sparse_vec is Qdrant-native only.
-    results = vector_store.query_sparse(
-        collection_name, sparse_vec,
-        limit=limit, filter=search_filter,
-        query_text=query,
-    )
-
-    return [{"id": str(p.id), "score": float(p.score), "payload": p.payload}
-            for p in results]
+    return await _sparse_search_with_vector(
+        query, query_sparse_vec, limit, collection_name, file_type, function_name)
 
 
 def _reciprocal_rank_fusion(ranked_lists: list[list[dict]], k: int = 60) -> list[dict]:
@@ -1081,6 +1144,8 @@ def _format_structured_results(results: list[dict]) -> str:
         formatted.append(f"File: {payload.get('filePath', 'Unknown')}\n")
         formatted.append(f"Lines: {payload.get('startLine', '?')}-{payload.get('endLine', '?')}\n")
         formatted.append(f"Type: {payload.get('fileType', 'Unknown')}\n")
+        if payload.get('_lane'):
+            formatted.append(f"Lane: {payload['_lane']}\n")
 
         if payload.get('functionName'):
             formatted.append(f"Function: {payload['functionName']}\n")
@@ -1099,6 +1164,131 @@ def _format_structured_results(results: list[dict]) -> str:
         formatted.append("-" * 80 + "\n")
 
     return ''.join(formatted)
+
+
+def _resolve_active_preset(embedding_model: str | None) -> dict:
+    """Preset for the 'active embedder': explicit param wins, else env config."""
+    if embedding_model:
+        preset = EMBEDDING_MODEL_PRESETS.get(embedding_model)
+        if preset is None:
+            raise ValueError(
+                f"Unknown embedding_model '{embedding_model}'. Use: {', '.join(EMBEDDING_MODEL_PRESETS)}"
+            )
+        return {**preset, "label": embedding_model}
+    provider = os.getenv('EMBEDDING_PROVIDER', 'azure')
+    if provider == 'local':
+        model = LOCAL_EMBEDDING_MODEL
+        dims = LOCAL_EMBEDDING_MODELS.get(model, LOCAL_EMBEDDING_MODELS['bge-m3'])['dimensions']
+    else:
+        model = os.getenv('AZURE_EMBEDDING_MODEL', 'text-embedding-3-large')
+        dims = int(os.getenv('AZURE_EMBEDDING_DIMENSIONS', '3072'))
+    return {"provider": provider, "model": model, "dimensions": dims, "label": f"{provider}:{model}"}
+
+
+async def _search_lanes(query: str, limit: int, base: str, lane_collections: list[str],
+                        mode: str, file_type: str | None, function_name: str | None,
+                        copilot_format: str | None, language: str, max_lines: int,
+                        embedding_model: str | None, search_all_lanes: bool) -> str:
+    """Multi-lane search (P2): per-candidate mode detection, one query
+    embedding per distinct fingerprint, RRF fusion across candidates."""
+    try:
+        active = _resolve_active_preset(embedding_model)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    resolved = resolve_search_candidates(
+        vector_store, base,
+        mode=mode, active=active, search_all_lanes=search_all_lanes,
+    )
+    candidates, notes = resolved["candidates"], resolved["notes"]
+
+    if not candidates:
+        msg = f"No searchable collections for `{base}`."
+        if notes:
+            msg += "\n\n" + "\n".join(f"- {n}" for n in notes)
+        return msg
+
+    # copilot formatting keeps single-collection semantics: first candidate.
+    if copilot_format:
+        coll = candidates[0][0]
+        return await _search_copilot(query, limit, coll, file_type, function_name,
+                                     copilot_format, language, max_lines)
+
+    dense_lists: list[list[dict]] = []
+    sparse_lists: list[list[dict]] = []
+    embed_cache: dict[str, list[float]] = {}
+    sparse_vec: dict | None = None
+
+    for coll, label, preset in candidates:
+        try:
+            info = vector_store.get_collection(coll)
+        except Exception as e:
+            notes.append(f"'{coll}' unreadable: {e}")
+            continue
+
+        cmode = mode
+        if cmode == "auto":
+            cmode = "hybrid" if (info.has_sparse and info.has_dense) else ("sparse" if info.has_sparse else "dense")
+        if cmode == "sparse" and not info.has_sparse:
+            notes.append(f"'{coll}' ({label}): no sparse index — skipped")
+            continue
+        if cmode in ("dense", "hybrid") and not info.has_dense:
+            if info.has_sparse:
+                cmode = "sparse"
+            else:
+                notes.append(f"'{coll}' ({label}): no vectors — skipped")
+                continue
+
+        try:
+            if cmode in ("dense", "hybrid"):
+                fp = lane_fingerprint(preset['provider'], preset['model'], preset['dimensions'])
+                if fp not in embed_cache:
+                    embed_cache[fp] = await _embed_query(query, preset)
+                qv = embed_cache[fp]
+                validation = validate_search_request(coll, qv)
+                if validation.get('valid') is False:
+                    notes.append(f"'{coll}' ({label}) dense skipped: {validation.get('error')}")
+                else:
+                    if validation.get('warning'):
+                        notes.append(f"'{coll}' ({label}): {validation['warning']}")
+                    hits = await _dense_search_with_vector(qv, limit, coll, file_type, function_name)
+                    for h in hits:
+                        h["payload"]["_lane"] = label
+                    dense_lists.append(hits)
+            if cmode in ("sparse", "hybrid"):
+                if sparse_vec is None:
+                    if not SPARSE_VECTORS_AVAILABLE:
+                        notes.append(f"'{coll}' ({label}): sparse generator unavailable — skipped")
+                    else:
+                        sparse_vec = generate_sparse_vector(query, {'language': file_type or 'unknown'})
+                if sparse_vec:
+                    hits = await _sparse_search_with_vector(
+                        query, sparse_vec, limit, coll, file_type, function_name)
+                    for h in hits:
+                        h["payload"]["_lane"] = label
+                    sparse_lists.append(hits)
+        except embedding_gate.EmbeddingEndpointDown as e:
+            notes.append(f"'{coll}' ({label}): {e}")
+        except Exception as e:
+            notes.append(f"'{coll}' ({label}): {e}")
+
+    fused = _reciprocal_rank_fusion(dense_lists + sparse_lists)[:limit]
+
+    if not fused:
+        msg = (f"No results found for `{base}` across {len(candidates)} lane candidate(s).")
+        if notes:
+            msg += "\n\n" + "\n".join(f"- {n}" for n in notes)
+        return msg
+
+    parts = [
+        f"Lane search results for `{base}` "
+        f"(RRF across {len(dense_lists)} dense + {len(sparse_lists)} sparse lists, "
+        f"active embedder: {active['label']}):"
+    ]
+    parts.append(_format_structured_results(fused))
+    if notes:
+        parts.append("Notes:\n" + "\n".join(f"- {n}" for n in notes))
+    return "\n".join(parts)
 
 
 async def _search_dense(query: str, limit: int, collection_name: str,
@@ -1228,6 +1418,8 @@ def _format_search_results(search_results) -> str:
         formatted.append(f"File: {payload.get('filePath', 'Unknown')}\n")
         formatted.append(f"Lines: {payload.get('startLine', '?')}-{payload.get('endLine', '?')}\n")
         formatted.append(f"Type: {payload.get('fileType', 'Unknown')}\n")
+        if payload.get('_lane'):
+            formatted.append(f"Lane: {payload['_lane']}\n")
 
         if payload.get('functionName'):
             formatted.append(f"Function: {payload['functionName']}\n")
@@ -1305,40 +1497,49 @@ async def index_code(
     preset = EMBEDDING_MODEL_PRESETS.get(embedding_model, EMBEDDING_MODEL_PRESETS["auto"])
     logger.info(f"Using embedding preset '{embedding_model}': provider={preset['provider']}, model={preset['model']}, dims={preset['dimensions']}")
 
+    # P2 lanes: each embedding fingerprint indexes into its own
+    # `<base>-<provider-model-dim>` collection, so switching models never
+    # collides with an existing collection's fixed vector size. Sparse-only
+    # mode is model-independent → plain base collection, no lane.
+    sparse_only = os.getenv('SPARSE_ONLY_MODE', 'false').lower() in ('true', '1', 'yes')
+    if sparse_only:
+        target_collection = collection_name
+    else:
+        target_collection = resolve_lane(collection_name, preset['provider'], preset['model'], preset['dimensions'])
+
     # Auto-create collection if it doesn't exist (with correct dimensions)
     collection_exists = False
     try:
-        vector_store.get_collection(collection_name)
+        vector_store.get_collection(target_collection)
         collection_exists = True
-        logger.info(f"Collection '{collection_name}' already exists")
+        logger.info(f"Collection '{target_collection}' already exists")
     except Exception as e:
         if "Not found" in str(e) or "doesn't exist" in str(e):
-            logger.info(f"Collection '{collection_name}' does not exist, will be auto-created by indexer")
+            logger.info(f"Collection '{target_collection}' does not exist, will be auto-created by indexer")
             collection_exists = False
         else:
             return f"Error: Error checking collection: {str(e)}"
 
-    # Validate embedding dimensions match existing collection
+    # Pre-flight dim check (P2): abort BEFORE spawning the indexer instead of
+    # failing mid-run at the first upsert (ensure_collection never re-validates
+    # an existing collection's vector size).
     if collection_exists:
-        try:
-            existing_info = vector_store.get_collection(collection_name)
-            existing_dims = _get_collection_dimensions(existing_info)
-            preset_dims = preset['dimensions']
-            if existing_dims and preset_dims != existing_dims:
-                logger.warning(f"Collection '{collection_name}' has {existing_dims}d vectors but preset '{embedding_model}' uses {preset_dims}d. "
-                               f"Will use existing collection dimensions for incremental indexing.")
-        except Exception as dim_e:
-            logger.warning(f"Could not validate collection dimensions: {dim_e}")
+        mismatch = check_lane_compatibility(
+            vector_store, target_collection,
+            preset['provider'], preset['model'], preset['dimensions'],
+        )
+        if mismatch:
+            return mismatch
 
     # If force=True and collection exists, warn but don't delete automatically
     if force and collection_exists:
         return f"""Warning: Collection Already Exists
 
-Collection `{collection_name}` already exists. The `force` parameter is no longer used to delete existing collections for safety.
+Collection `{target_collection}` already exists. The `force` parameter is no longer used to delete existing collections for safety.
 
 Options:
 1. Continue indexing (recommended): Remove `force=true` and rerun. The indexer will skip already-indexed files.
-2. Clear and reindex: First use `clear_index(collection_name="{collection_name}", confirm=true)` to delete the collection, then start indexing again.
+2. Clear and reindex: First use `clear_index(collection_name="{target_collection}", confirm=true)` to delete the collection, then start indexing again.
 
 Why this changed: To prevent accidental data loss, the indexer now requires explicit confirmation before deleting existing indexes."""
 
@@ -1357,7 +1558,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
         "python3",
         str(indexer_script),
         workspace_root,
-        "--collection", collection_name
+        "--collection", target_collection
     ]
 
     if force:
@@ -1377,7 +1578,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     # Create log file path in logs/ subfolder
-    log_file = logs_dir / f"indexing_{collection_name}.log"
+    log_file = logs_dir / f"indexing_{target_collection}.log"
 
     # Prepare environment with embedding configuration from preset
     env = os.environ.copy()
@@ -1429,7 +1630,9 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
         json.dump({
             "pid": pid,
             "workspace_root": workspace_root,
-            "collection_name": collection_name,
+            "collection_name": target_collection,
+            "base_collection": collection_name,
+            "embedding_preset": embedding_model,
             "log_file": str(log_file),
             "started_at": time.time(),
             "embedding_model": embedding_model,
@@ -1441,7 +1644,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
 Process Information:
 - PID: {pid}
 - Workspace: {workspace_root}
-- Collection: {collection_name}
+- Collection: {target_collection}
 - Embedding model: {embedding_model} ({preset['dimensions']}d)
 - Force reindex: {force}
 - Log file: {log_file}
@@ -1777,7 +1980,8 @@ async def stop_indexing(
 @mcp.tool()
 async def clear_index(
     collection_name: str = "folder.to.index-application-code",
-    confirm: bool = False
+    confirm: bool = False,
+    include_lanes: bool = False,  # P2 lanes: also delete every <collection>-<slug> lane
 ) -> str:
     """Clear all indexed code from Qdrant vector database. Only use this when you are CERTAIN an index needs to be deleted."""
     _client_id, _allowed = _caller_rag_access()
@@ -1789,6 +1993,10 @@ async def clear_index(
 
         # Check if user wants to delete ALL collections
         delete_all = collection_name.upper() == "ALL"
+
+        # P2 lanes: collections belonging to this base (base itself + lanes)
+        lane_collections = list_lanes(vector_store, collection_name)
+        lane_only = [c for c in lane_collections if c != collection_name]
 
         # Safety check - require explicit confirmation
         if not confirm:
@@ -1815,10 +2023,19 @@ clear_index(collection_name="ALL", confirm=true)
 ```
 """
             else:
+                lane_note = ""
+                if lane_only and not include_lanes:
+                    lane_list = "\n".join([f"  - {c}" for c in lane_only])
+                    lane_note = f"""
+
+Note: `{collection_name}` has {len(lane_only)} embedding lane(s) that will NOT be deleted:
+{lane_list}
+Add `include_lanes: true` to delete them too.
+"""
                 return f"""CONFIRMATION REQUIRED
 
 You are about to DELETE ALL DATA from collection: `{collection_name}`
-
+{lane_note}
 This action is IRREVERSIBLE and will:
 - Delete all indexed code chunks
 - Remove all embeddings
@@ -1874,15 +2091,30 @@ start_indexing(workspace_root="/path/to/your/workspace", collection_name="your-a
             # Delete the collection
             vector_store.delete_collection(collection_name)
 
+            # P2 lanes: optionally sweep the base's lane collections too
+            lane_results = []
+            if include_lanes:
+                for lane in lane_only:
+                    try:
+                        lane_info = vector_store.get_collection(lane)
+                        vector_store.delete_collection(lane)
+                        lane_results.append(f"  - {lane} ({lane_info.points_count:,} chunks)")
+                    except Exception as lane_e:
+                        lane_results.append(f"  - {lane} (error: {lane_e})")
+
+            lane_section = ""
+            if lane_results:
+                lane_section = f"\nLane collections deleted:\n" + "\n".join(lane_results)
+
             result = f"""Index Cleared Successfully
 
 Collection: `{collection_name}`
-Deleted: {points_count:,} code chunks
+Deleted: {points_count:,} code chunks{lane_section}
 Status: Collection removed from Qdrant
 
 The vector database has been wiped clean. You can now start a fresh indexing with:
 ```
-start_indexing(workspace_root="/path/to/your/workspace", collection_name="{collection_name}")
+start_indexing(workspace_root="/path/to/your/workspace")
 ```
 """
             logger.info(f"Cleared collection '{collection_name}' - deleted {points_count} chunks")

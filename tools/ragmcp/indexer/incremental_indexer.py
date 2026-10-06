@@ -33,6 +33,8 @@ if __name__ == "__main__":
     from indexer.smart_chunkers import get_smart_chunker
     from indexer.sparse_vector_gen import generate_sparse_vector
     from indexer.local_embeddings import generate_local_embeddings
+    from indexer.lanes import lane_slug, check_lane_compatibility
+    from indexer import embedding_gate
 else:
     # When imported as module, use relative imports
     from .file_filters import should_keep_file
@@ -40,6 +42,8 @@ else:
     from .smart_chunkers import get_smart_chunker
     from .sparse_vector_gen import generate_sparse_vector
     from .local_embeddings import generate_local_embeddings
+    from .lanes import lane_slug, check_lane_compatibility
+    from . import embedding_gate
 
 from shared.store_models import PointStruct as NeutralPointStruct, SparseVector as NeutralSparseVector, Filter, FieldCondition, MatchText
 from shared.vector_store import get_vector_store
@@ -428,6 +432,7 @@ async def generate_embeddings_azure(texts: list[str]) -> list[list[float]]:
     if not AZURE_API_KEY:
         raise ValueError("AI_API_KEY environment variable not set")
 
+    embedding_gate.check(AZURE_EMBEDDING_API_URL)
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.post(
@@ -446,12 +451,15 @@ async def generate_embeddings_azure(texts: list[str]) -> list[list[float]]:
 
             # Extract embeddings from response
             embeddings = [item['embedding'] for item in data['data']]
+            embedding_gate.record_success()
             return embeddings
 
         except httpx.HTTPStatusError as e:
+            embedding_gate.record_failure(AZURE_EMBEDDING_API_URL)
             logger.error(f"Azure API error: {e.response.status_code} - {e.response.text}")
             raise
         except Exception as e:
+            embedding_gate.record_failure(AZURE_EMBEDDING_API_URL)
             logger.error(f"Error generating embeddings: {e}")
             raise
 
@@ -761,8 +769,16 @@ def main():
             logger.info(f"🎯 Mode override: HYBRID (from --mode argument)")
 
     workspace_path = Path(args.workspace_root).resolve()
+
+    # P2 lanes: per-embedding-config metadata sidecar. Sparse-only indexing
+    # is model-independent → legacy sidecar filename.
+    lane = None
+    if not SPARSE_ONLY_MODE:
+        _lane_model = LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL
+        lane = lane_slug(EMBEDDING_PROVIDER, _lane_model, EMBEDDING_DIMENSIONS)
+
     # Use centralized metadata path unless explicitly overridden
-    metadata_file = Path(args.metadata_file) if args.metadata_file else get_metadata_path(args.workspace_root)
+    metadata_file = Path(args.metadata_file) if args.metadata_file else get_metadata_path(args.workspace_root, lane)
 
     logger.info("=" * 80)
     logger.info("🚀 INCREMENTAL CODE INDEXER")
@@ -788,59 +804,74 @@ def main():
 
     # Check/create collection with correct vector configuration
     logger.info("📊 Checking collection...")
+    collection_exists = False
     try:
         vector_store.get_collection(args.collection)
+        collection_exists = True
         logger.info(f"   ✓ Collection '{args.collection}' exists")
     except Exception as e:
-        if "Not found" in str(e) or "doesn't exist" in str(e):
-            # Determine vector configuration based on mode
-            if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
-                logger.info(f"   Creating SPARSE-ONLY collection '{args.collection}'...")
-                vector_store.ensure_collection(
-                    args.collection,
-                    dense_dim=None,
-                    sparse=True,
-                )
-            elif USE_SPARSE_VECTORS:
-                logger.info(f"   Creating HYBRID collection '{args.collection}' (dense + sparse)...")
-                logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings with {EMBEDDING_DIMENSIONS} dimensions")
-                vector_store.ensure_collection(
-                    args.collection,
-                    dense_dim=EMBEDDING_DIMENSIONS,
-                    sparse=True,
-                )
-            else:
-                logger.info(f"   Creating DENSE-ONLY collection '{args.collection}' with {EMBEDDING_DIMENSIONS} dimensions...")
-                logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings")
-                vector_store.ensure_collection(
-                    args.collection,
-                    dense_dim=EMBEDDING_DIMENSIONS,
-                    sparse=False,
-                )
-            logger.info(f"   ✓ Collection '{args.collection}' created successfully")
-
-            # Store collection metadata for search-time validation
-            collection_meta = {
-                "embedding_provider": EMBEDDING_PROVIDER,
-                "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
-                "embedding_dimensions": EMBEDDING_DIMENSIONS,
-                "indexed_at": datetime.now(timezone.utc).isoformat(),
-                "indexer_version": "2.0"
-            }
-            logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
-
-            meta_point = NeutralPointStruct(
-                id="__collection_metadata__",
-                vector=[],  # No vectors for metadata point
-                payload={**collection_meta, "_is_metadata": True}
-            )
-            try:
-                vector_store.upsert(args.collection, [meta_point])
-            except Exception as meta_e:
-                logger.warning(f"   Could not store collection metadata: {meta_e}")
-        else:
+        if not ("Not found" in str(e) or "doesn't exist" in str(e)):
             logger.error(f"   ✗ Error checking collection: {e}")
             raise
+
+    if collection_exists and not SPARSE_ONLY_MODE:
+        # Pre-flight dim check (P2): abort BEFORE embedding work instead of
+        # failing mid-run at the first upsert (ensure_collection never
+        # re-validates an existing collection's vector size).
+        _preflight_model = LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL
+        _mismatch = check_lane_compatibility(
+            vector_store, args.collection, EMBEDDING_PROVIDER, _preflight_model, EMBEDDING_DIMENSIONS
+        )
+        if _mismatch:
+            logger.error(f"   ✗ {_mismatch}")
+            sys.exit(2)
+
+    if not collection_exists:
+        # Determine vector configuration based on mode
+        if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
+            logger.info(f"   Creating SPARSE-ONLY collection '{args.collection}'...")
+            vector_store.ensure_collection(
+                args.collection,
+                dense_dim=None,
+                sparse=True,
+            )
+        elif USE_SPARSE_VECTORS:
+            logger.info(f"   Creating HYBRID collection '{args.collection}' (dense + sparse)...")
+            logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings with {EMBEDDING_DIMENSIONS} dimensions")
+            vector_store.ensure_collection(
+                args.collection,
+                dense_dim=EMBEDDING_DIMENSIONS,
+                sparse=True,
+            )
+        else:
+            logger.info(f"   Creating DENSE-ONLY collection '{args.collection}' with {EMBEDDING_DIMENSIONS} dimensions...")
+            logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings")
+            vector_store.ensure_collection(
+                args.collection,
+                dense_dim=EMBEDDING_DIMENSIONS,
+                sparse=False,
+            )
+        logger.info(f"   ✓ Collection '{args.collection}' created successfully")
+
+        # Store collection metadata for search-time validation
+        collection_meta = {
+            "embedding_provider": EMBEDDING_PROVIDER,
+            "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
+            "embedding_dimensions": EMBEDDING_DIMENSIONS,
+            "indexed_at": datetime.now(timezone.utc).isoformat(),
+            "indexer_version": "2.0"
+        }
+        logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
+
+        meta_point = NeutralPointStruct(
+            id="__collection_metadata__",
+            vector=[],  # No vectors for metadata point
+            payload={**collection_meta, "_is_metadata": True}
+        )
+        try:
+            vector_store.upsert(args.collection, [meta_point])
+        except Exception as meta_e:
+            logger.warning(f"   Could not store collection metadata: {meta_e}")
 
     # Get already-indexed files
     qdrant_files = get_indexed_files(args.collection, workspace_path, vector_store)
