@@ -34,7 +34,16 @@ class SqlStore(Protocol):
     def upsert_memory(self, memory_id: str, text: str, memory_type: str,
                       source: str, tags: list[str], path: str | None,
                       commit: str | None, agent_id: str | None,
-                      sensitivity: str, retention_policy: str) -> str: ...
+                      sensitivity: str, retention_policy: str,
+                      owner: str | None = None,
+                      text_hash_override: str | None = None) -> str:
+        """
+        owner keys the dedup hash namespace (E3 multi-user — P1): identical
+        text+type from two users stays two rows. text_hash_override lets
+        bulk_upsert preserve an exported hash instead of recomputing it
+        (owner-mixed hashes are NOT recoverable from text alone).
+        """
+        ...
     def get_memory(self, memory_id: str) -> dict | None: ...
     def delete_memory(self, memory_id: str) -> bool: ...
 

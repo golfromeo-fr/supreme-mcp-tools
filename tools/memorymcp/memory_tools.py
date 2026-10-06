@@ -37,7 +37,7 @@ from memory_core import (
     redact_sensitive_text, check_sensitivity,
 )
 from shared.store_models import Filter, FieldCondition, MatchValue, MatchContains, PointStruct
-from text_utils import similarity_with_fallback
+from text_utils import mergeable_owners, similarity_with_fallback
 
 # Artifact store for large-text offloading. Import is side-effect-free:
 # ArtifactStore.__init__ only reads env vars — the S3 client is created
@@ -241,7 +241,13 @@ async def upsertMemory(
 
     payload = memory_item_to_payload(item)
     payload["sensitivity"] = sensitivity
-    # E3.5 owner attribution: the memory belongs to the caller
+    # E3.5/E3.6 owner attribution: the memory belongs to the caller, and the
+    # caller id keys the SQL dedup hash namespace (owner-mixed text_hash).
+    # Admin may pass an explicit owner to create shared memories — not yet a
+    # tool parameter (verified 2026-10-07); if added, the hash must switch to
+    # the effective owner. Legacy records (no owner) are treated as
+    # admin-owned. This block was previously duplicated back-to-back.
+    _owner_client_id = None
     try:
         from fastmcp.server.dependencies import get_http_request
         from tools.shared.identity import resolve_identity
@@ -252,22 +258,7 @@ async def upsertMemory(
                 get_http_request(), lambda: auth_verifier.tokens()
             )
             if ident is not None:
-                payload["owner"] = ident[0]
-    except Exception:
-        pass  # mono mode / non-HTTP scope: no owner concept
-    # E3.5: attribute the memory to the caller (admin may pass an explicit
-    # owner to create shared memories). Legacy records (no owner) are
-    # treated as admin-owned.
-    try:
-        from fastmcp.server.dependencies import get_http_request
-        from tools.shared.identity import resolve_identity
-
-        auth_verifier = getattr(mcp, "auth", None)
-        if auth_verifier is not None and hasattr(auth_verifier, "tokens"):
-            ident = resolve_identity(
-                get_http_request(), lambda: auth_verifier.tokens()
-            )
-            if ident is not None:
+                _owner_client_id = ident[0]
                 payload["owner"] = ident[0]
     except Exception:
         pass  # mono mode / non-HTTP scope: no owner concept
@@ -296,7 +287,9 @@ async def upsertMemory(
         )
         logger.info(f"{'Updated' if is_update else 'Stored'} memory {memory_id}")
 
-        # Also store in SQL backend for metadata/dedup (if available)
+        # Also store in SQL backend for metadata/dedup (if available).
+        # owner keys the dedup hash namespace (E3/P1) so two users' identical
+        # memories never collapse onto one SQL row.
         if sql_store.is_available:
             actual_id = sql_store.upsert_memory(
                 memory_id=memory_id,
@@ -309,6 +302,7 @@ async def upsertMemory(
                 agent_id=agent_id,
                 sensitivity=sensitivity,
                 retention_policy=retention_policy,
+                owner=_owner_client_id,
             )
             if actual_id != memory_id:
                 logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
@@ -1267,6 +1261,7 @@ async def mergeDuplicates(
         to_delete = []
         already_marked = set()
         method_counts = defaultdict(int)  # similarity method -> scored pairs
+        skipped_cross_owner = 0
 
         for mtype, points in groups.items():
             for i, p1 in enumerate(points):
@@ -1274,6 +1269,11 @@ async def mergeDuplicates(
                     continue
                 for p2 in points[i+1:]:
                     if str(p2.id) in already_marked:
+                        continue
+                    # E3/P1 owner scoping: never merge across owners — identical
+                    # text from two users is two memories, not a duplicate.
+                    if not mergeable_owners(p1.payload, p2.payload):
+                        skipped_cross_owner += 1
                         continue
                     # Compare similarity (LOW-4): cosine over stored embedding
                     # vectors when both are available, word-level Jaccard
@@ -1306,11 +1306,12 @@ async def mergeDuplicates(
             f"{method_counts[m]} {m}" for m in ("cosine", "jaccard") if method_counts[m]
         )
         method_line = f"\nSimilarity methods: {breakdown}" if breakdown else ""
+        owner_line = f"\nCross-owner pairs skipped: {skipped_cross_owner}" if skipped_cross_owner else ""
 
         if dry_run:
             return (
                 f"Would merge {merged_count} duplicate pairs\n"
-                f"Would delete {len(to_delete)} memories{method_line}"
+                f"Would delete {len(to_delete)} memories{method_line}{owner_line}"
             )
         else:
             if to_delete:
@@ -1323,7 +1324,7 @@ async def mergeDuplicates(
                     COLLECTION_NAME,
                     ids=delete_ids,
                 )
-            return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories{method_line}"
+            return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories{method_line}{owner_line}"
 
     except Exception as e:
         logger.error(f"Merge duplicates failed: {e}")

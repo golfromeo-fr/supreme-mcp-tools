@@ -252,12 +252,18 @@ class PostgresSqlStore:
         agent_id: str | None,
         sensitivity: str,
         retention_policy: str,
+        owner: str | None = None,
+        text_hash_override: str | None = None,
     ) -> str:
-        """Upsert a memory. Uses text_hash + memory_type as dedup key."""
+        """Upsert a memory. Uses text_hash + memory_type as dedup key.
+
+        owner mixes into the hash (per-user dedup namespace, E3/P1);
+        text_hash_override preserves an exported hash during bulk import.
+        """
         if not self.is_available:
             return memory_id
 
-        thash = text_hash(text)
+        thash = text_hash_override or text_hash(text, owner)
         now = datetime.now(timezone.utc).isoformat()
         tags_json = json.dumps(tags)
 
@@ -518,7 +524,12 @@ class PostgresSqlStore:
             logger.error(f"PG iter_all failed: {_safe_error(e)}")
 
     def bulk_upsert(self, rows) -> int:
-        """Bulk upsert memory records. Returns count inserted."""
+        """Bulk upsert memory records. Returns count inserted.
+
+        Prefers the exported text_hash over a recompute: owner-mixed hashes
+        (E3/P1) are not recoverable from text alone, so recomputing would
+        collapse a multi-user export back onto single rows.
+        """
         count = 0
         for row in rows:
             self.upsert_memory(
@@ -532,6 +543,7 @@ class PostgresSqlStore:
                 agent_id=row.get("agent_id"),
                 sensitivity=row.get("sensitivity", "low"),
                 retention_policy=row.get("retention_policy", "auto-delete"),
+                text_hash_override=row.get("text_hash"),
             )
             count += 1
         return count
