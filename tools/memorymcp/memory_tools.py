@@ -37,7 +37,18 @@ from memory_core import (
     redact_sensitive_text, check_sensitivity,
 )
 from shared.store_models import Filter, FieldCondition, MatchValue, MatchContains, PointStruct
-from text_utils import mergeable_owners, similarity_with_fallback
+from shared.relevance_scorer import (
+    blend_hybrid, cosine_similarity, normalize_keyword_rows, type_boost,
+)
+from text_utils import mergeable_owners, similarity_with_fallback, word_jaccard_similarity
+
+# P3/P4 instrumentation (surfaced via getMemoryMetrics): keyword-lane usage,
+# vector-only degradations, and tidy passes skipped by the state fingerprint.
+_recall_stats = {
+    "kw_lane_candidates": 0,
+    "vector_only_fallback_count": 0,
+    "tidy_skip_count": 0,
+}
 
 # Artifact store for large-text offloading. Import is side-effect-free:
 # ArtifactStore.__init__ only reads env vars — the S3 client is created
@@ -315,6 +326,28 @@ async def upsertMemory(
         return f"Error: {str(e)}"
 
 
+async def _keyword_lane_scores(query: str, k: int,
+                               memory_type: str | None,
+                               agent_id: str | None) -> dict[str, float]:
+    """
+    P3 keyword lane: SqlStore.search_text (PG pg_trgm / Turso FTS5)
+    normalized to [0,1]. Returns {} when no SQL backend is configured or the
+    lane fails — the caller degrades to a vector-only query and counts it in
+    _recall_stats. Rows arrive best-first from both impls (OQ5).
+    """
+    if not sql_store.is_available:
+        _recall_stats["vector_only_fallback_count"] += 1
+        return {}
+    try:
+        rows = sql_store.search_text(query, limit=max(k * 3, k),
+                                     memory_type=memory_type, agent_id=agent_id)
+        return normalize_keyword_rows(rows)
+    except Exception as e:
+        logger.warning(f"Keyword lane failed ({e}); vector-only query")
+        _recall_stats["vector_only_fallback_count"] += 1
+        return {}
+
+
 @mcp.tool()
 async def queryMemory(
     query: str,
@@ -323,9 +356,10 @@ async def queryMemory(
     tags: list[str] | None = None,
     agent_id: str | None = None,
     recency_weight: float = 0.5,
+    kw_weight: float | None = None,
 ) -> str:
     """
-    Query memories with recency and usage weighting.
+    Query memories with recency and usage weighting (plus a keyword lane).
 
     💡 Tip: Before starting a new task, query memory for relevant past learnings.
     When stuck, search for similar problems others have solved.
@@ -337,6 +371,13 @@ async def queryMemory(
         tags: Filter by tags (optional)
         agent_id: Filter by agent ID (optional)
         recency_weight: Weight for recency vs semantic similarity (0-1, higher = more recency)
+        kw_weight: Keyword-lane weight for hybrid recall (0-1). None →
+            MEMORY_KW_WEIGHT (default 0.35). 0 disables the lane and
+            reproduces the pre-P3 vector-only query. Final score =
+            (1-kw_weight)·(semantic/recency blend) + kw_weight·(keyword score
+            + type boost). With a SQL backend the lane is pg_trgm/FTS5;
+            without one, a cheap Jaccard keyword signal over the vector hits
+            is used instead.
 
     Returns:
         Formatted list of memory hits with scores
@@ -369,6 +410,15 @@ async def queryMemory(
 
     search_filter = Filter(must=conditions) if conditions else None
 
+    # P3 keyword-lane weight: call-time param wins; MEMORY_KW_WEIGHT sets the
+    # default (0.35). 0 disables the lane and reproduces the pre-P3 query.
+    if kw_weight is None:
+        try:
+            kw_weight = float(os.getenv("MEMORY_KW_WEIGHT", "0.35"))
+        except ValueError:
+            kw_weight = 0.35
+    kw_weight = min(1.0, max(0.0, kw_weight))
+
     # Perform search
     try:
         results = vector_store.query_dense(
@@ -378,7 +428,6 @@ async def queryMemory(
             filter=search_filter,
         )
 
-        hits = []
         weights = ScoringWeights()
         weights.alpha = 1.0 - recency_weight
         weights.beta = recency_weight
@@ -387,6 +436,8 @@ async def queryMemory(
         now_iso = get_now_iso()
         usage_updates: dict[int, list[str]] = {}
 
+        # --- vector lane candidates --------------------------------------
+        candidates: dict[str, dict] = {}
         for result in results:
             payload = result.payload
             payload["id"] = str(result.id)
@@ -396,14 +447,70 @@ async def queryMemory(
             text, _warning = await _rehydrate_payload_text(payload)
             payload["text"] = text
 
-            relevance = score_relevance(payload, query_embedding, weights, semantic_score=result.score)
+            candidates[str(result.id)] = {"payload": payload, "semantic_score": result.score}
 
-            hit = payload_to_memory_hit(payload, result.score)
-            hit.score = relevance
+        # --- keyword lane (P3 hybrid recall) ------------------------------
+        kw_scores: dict[str, float] = {}
+        if kw_weight > 0:
+            kw_scores = await _keyword_lane_scores(query, k, memory_type, agent_id)
+            if not kw_scores:
+                # No SQL lane: cheap Jaccard keyword signal over the vector
+                # candidates (zero new dependencies).
+                for cid, cand in candidates.items():
+                    j = word_jaccard_similarity(query, cand["payload"].get("text", ""))
+                    if j:
+                        kw_scores[cid] = j
+            if kw_scores:
+                _recall_stats["kw_lane_candidates"] += len(kw_scores)
+
+            # kw-only candidates: fetch payload + stored vector so the blend
+            # uses a true semantic score (one retrieve for ≤3k ids).
+            kw_only_ids = [pid for pid in kw_scores if pid not in candidates]
+            if kw_only_ids:
+                for point in vector_store.retrieve(COLLECTION_NAME, kw_only_ids,
+                                                   with_payload=True, with_vectors=True):
+                    payload = point.payload or {}
+                    payload["id"] = str(point.id)
+                    text, _warning = await _rehydrate_payload_text(payload)
+                    payload["text"] = text
+                    sem = cosine_similarity(query_embedding, point.vector) if point.vector else 0.0
+                    candidates[str(point.id)] = {"payload": payload, "semantic_score": sem}
+
+            # Owner post-filter: SQL rows carry no owner column (P1 kept the
+            # dedup hash owner-mixed instead), so drop kw-only hits the
+            # caller must not see. Vector-lane hits were already scoped by
+            # the Qdrant owner filter.
+            if _scoped and not _is_admin:
+                for pid in [p for p in kw_scores if p in candidates]:
+                    if (candidates[pid]["payload"] or {}).get("owner") != _caller:
+                        candidates.pop(pid, None)
+                        kw_scores.pop(pid, None)
+
+        # --- blend, rank, trim ---------------------------------------------
+        hits = []
+        for cid, cand in candidates.items():
+            payload = cand["payload"]
+            current_blend = score_relevance(
+                payload, query_embedding, weights,
+                semantic_score=cand["semantic_score"] if cand["semantic_score"] is not None else 0.0,
+            )
+            if kw_weight > 0:
+                boost = type_boost(payload.get("memory_type"), query)
+                final = blend_hybrid(current_blend, kw_scores.get(cid, 0.0) + boost, kw_weight)
+            else:
+                final = current_blend
+
+            hit = payload_to_memory_hit(payload, cand["semantic_score"] or 0.0)
+            hit.score = final
             hits.append(hit)
 
+        hits.sort(key=lambda h: h.score, reverse=True)
+        hits = hits[:k]
+
+        for hit in hits:
+            payload = candidates[hit.id]["payload"]
             new_usage = payload.get("usage_count", 0) + 1
-            usage_updates.setdefault(new_usage, []).append(str(result.id))
+            usage_updates.setdefault(new_usage, []).append(hit.id)
 
         for new_usage, point_ids in usage_updates.items():
             vector_store.set_payload(
@@ -953,6 +1060,13 @@ By Type:
 
         output += f"\nTotal Retrieval Count: {total_usage}\n"
         output += f"Avg Usage per Memory: {total_usage / total if total > 0 else 0:.2f}\n"
+
+        output += (
+            f"\nRecall instrumentation (process lifetime):\n"
+            f"  kw-lane candidates fused: {_recall_stats['kw_lane_candidates']}\n"
+            f"  vector-only fallbacks (no SQL / lane failure): {_recall_stats['vector_only_fallback_count']}\n"
+            f"  tidy passes skipped (unchanged fingerprint): {_recall_stats['tidy_skip_count']}\n"
+        )
 
         return output
 

@@ -5,6 +5,7 @@ recency decay, and usage frequency.
 
 import math
 import os
+import re
 from datetime import datetime, timezone
 
 class ScoringWeights:
@@ -129,6 +130,71 @@ def compute_relevance_score(
     )
 
     return min(1.0, max(0.0, score))
+
+
+# ---------------------------------------------------------------------------
+# P3 hybrid recall — keyword lane (plans/odysseus-reuse-2026-10-06.md)
+# ---------------------------------------------------------------------------
+
+_MEMORY_TYPE_BOOST_TOKENS = {
+    "architectural_decision": {"architectural", "architecture", "decision"},
+    "decision": {"decision", "decide"},
+    "code_pattern": {"pattern", "code", "coding"},
+    "trick": {"trick", "tip", "hack"},
+    "lesson": {"lesson", "learned", "learning"},
+    "plan": {"plan", "planning", "planned"},
+    "idea": {"idea"},
+}
+
+
+def type_boost(memory_type: str | None, query: str) -> float:
+    """
+    Additive keyword-lane boost when query tokens overlap the memory-type
+    label (odysseus's category boost, adapted to this repo's memory types).
+    Capped by MEMORY_TYPE_BOOST_CAP (default 0.10); 0.0 without overlap.
+    """
+    try:
+        cap = float(os.getenv("MEMORY_TYPE_BOOST_CAP", "0.10"))
+    except ValueError:
+        cap = 0.10
+    if not memory_type or not query or cap <= 0:
+        return 0.0
+    mtype = memory_type.strip().lower()
+    tokens = set(_MEMORY_TYPE_BOOST_TOKENS.get(mtype, {mtype.replace("_", " ")}))
+    qtokens = set(re.findall(r"[a-z]+", query.lower()))
+    return cap if tokens & qtokens else 0.0
+
+
+def normalize_keyword_rows(rows: list[dict]) -> dict[str, float]:
+    """
+    Map SqlStore.search_text rows to {id: kw_score in [0,1]}.
+
+    Two score shapes exist across the impls (OQ5): PG pg_trgm returns a
+    native 0-1 similarity (higher = better) — used directly. Turso FTS5
+    bm25() returns negative lower-is-better scores, and the PG ILIKE degrade
+    path returns all zeros — those are rank-normalized (best row = 1.0).
+    Rows must arrive best-first, as both impls order them.
+    """
+    if not rows:
+        return {}
+    scores = [float(r.get("sim_score") or 0.0) for r in rows]
+    lo, hi = min(scores), max(scores)
+    if 0.0 <= lo and hi <= 1.0 and hi > 0.0:
+        return {str(r.get("id")): s for r, s in zip(rows, scores)}
+    n = len(rows)
+    if n == 1:
+        return {str(rows[0].get("id")): 1.0}
+    return {str(r.get("id")): 1.0 - (i / n) for i, r in enumerate(rows)}
+
+
+def blend_hybrid(current_blend: float, kw_norm: float, kw_weight: float) -> float:
+    """
+    Final hybrid score: (1 - kw_weight) * existing α/β/γ blend + kw_weight *
+    boosted keyword score. kw_weight=0 reproduces the pre-P3 score exactly.
+    """
+    kw = min(1.0, max(0.0, kw_norm))
+    w = min(1.0, max(0.0, kw_weight))
+    return (1.0 - w) * current_blend + w * kw
 
 
 def score_relevance(
