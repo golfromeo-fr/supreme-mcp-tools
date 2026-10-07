@@ -87,7 +87,7 @@ logger = logging.getLogger("memorymcp")
 root_env = SCRIPT_DIR.parent.parent / ".env"
 if root_env.exists():
     from dotenv import load_dotenv
-    load_dotenv(root_env)
+    load_dotenv(root_env, encoding="utf-8-sig")
     logger.info(f"Loaded configuration from {root_env}")
 
 # ============================================================================

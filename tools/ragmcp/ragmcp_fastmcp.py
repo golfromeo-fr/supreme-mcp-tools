@@ -119,7 +119,7 @@ def _collection_allowed(name: str, allowed: set[str] | None) -> bool:
 # Load configuration from root .env
 root_env = SCRIPT_DIR.parent.parent / ".env"
 if root_env.exists():
-    load_dotenv(root_env)
+    load_dotenv(root_env, encoding="utf-8-sig")
     logger.info(f"Loaded configuration from {root_env}")
 
 # Read embedding configuration

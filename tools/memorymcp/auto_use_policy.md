@@ -8,6 +8,7 @@ Treat memorymcp as a reflex, not a lookup DB. The tools are local, fast, and sid
 2. **Before any non-trivial task** → call `queryMemory` for prior art on the topic.
 3. **After every file_open, file_edit, test_run, commit, or discovery** → call `onAgentAction` (one-liner, cheap).
 4. **End of task / before context compaction** → call `upsertMemory` for any new pattern, decision, or lesson.
+5. **Keep each memory ≤2 short sentences** — split compound learnings into separate memories instead of one dump. Small, focused memories retrieve well; walls of text don't.
 
 If your client does not support skills, call `getMemoryCheatsheet()` at session start, or `getMemoryAutousePolicy()` for the full body. Both MCP tools return the same content as this file.
 
