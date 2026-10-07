@@ -13,6 +13,20 @@
 > shrink guard (#4). Remaining there: live sweeps after launcher restart from the worktree,
 > grounds probe before P2 merge. This doc remains the design record for §4 (two-pass),
 > which is NOT part of that branch.
+>
+> **GROUNDS GATE RESULT (2026-10-07 evening): PASS — 14 passed / 1 skipped** (skip =
+> cross-node probe, needs the 2-node g2 ground). First run failed 2 probes; all root
+> causes were REAL pre-merge defects, fixed on the branch: (1) stale
+> `turso_vector.get_collection` swallowed the missing-table error → memorymcp ensure-at-init
+> skipped on fresh turso files AND the lane pre-flight misread fresh lanes as sparse-only
+> (pulled forward from pod-ui-gaps 3452dfd/193fca1 + tiktoken dep, commit 497cd98);
+> (2) the indexer rewrite dropped the tools/ `sys.path` bootstrap → the spawned subprocess
+> died silently at `from shared...`; (3) org-prefix normalization (`BAAI/bge-m3` vs bare
+> `bge-m3`) → 768d derived for a 1024d model, lane/dim mismatch. Ground mechanics: image
+> built FROM THE WORKTREE via a temporary build-context override in
+> deploy/compose-g1-pg.run.yml (reverted after); probes executed from the pod-ui-gaps
+> checkout (that branch carries probes 12–14 and the grounds tooling). Remaining merge
+> gate: live sweeps (launcher restart from the worktree — user-timed).
 
 ---
 
