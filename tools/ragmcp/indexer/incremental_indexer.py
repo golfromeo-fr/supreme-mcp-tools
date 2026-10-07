@@ -45,6 +45,16 @@ else:
     from .lanes import lane_slug, check_lane_compatibility
     from . import embedding_gate
 
+# `shared` lives in tools/, which has no __init__.py — script execution puts
+# only the script's own directory on sys.path, so the SPAWNED subprocess dies
+# at import with "No module named 'shared'" unless tools/ is added explicitly
+# (found live on the g1-pg ground: indexer died silently, index_code still
+# reported success).
+if __name__ == "__main__":
+    _tools_dir = str(Path(__file__).parent.parent.parent)
+    if _tools_dir not in sys.path:
+        sys.path.insert(0, _tools_dir)
+
 from shared.store_models import PointStruct as NeutralPointStruct, SparseVector as NeutralSparseVector, Filter, FieldCondition, MatchText
 from shared.vector_store import get_vector_store
 
