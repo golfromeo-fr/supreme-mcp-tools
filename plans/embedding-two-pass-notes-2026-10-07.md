@@ -170,6 +170,38 @@ Scripts live in `/tmp/emb_bench/` (volatile — re-create if rebooted):
 5. From the 10-04 doc, still open: keep-or-delete arctic-embed-l-v2.0 (2.2G, referenced by
    nothing).
 
+### 6.3 RESULT (2026-10-07 run) — dense model choice is NOT the code lever
+
+Corpus: 1,186 real `.py` files (fastmcp 305 gold / graphify 152 / nicegui 131 / fastapi 12 —
+fastapi's docstring style resisted extraction; noted skew), 600 AST-mined queries,
+content-only docs at 512-token truncation (production CHUNK_SIZE=300 is shorter).
+
+| Model | nDCG@10 | MRR@10 | ms/doc |
+|---|---|---|---|
+| MiniLM-L6 (pass-1 candidate) | 0.5467 | 0.3358 | 82 |
+| bge-base (anchor) | 0.5517 | 0.3862 | 356 |
+| bge-m3 (pass-2 candidate) | 0.5483 | 0.3936 | 1211 |
+
+**Findings:**
+1. **nDCG@10 is flat** (spread 0.005 over 600 queries) — on whole-file Python retrieval with
+   natural-language queries, all three local models sit at the same quality plateau. The
+   SciFact gaps (8–10 pts) do not transfer to code.
+2. **MRR@10 keeps a small ordering** (MiniLM 0.336 < base 0.386 ≈ m3 0.394): the bigger
+   models put the right file at rank 1 somewhat more often — the only measured pass-2 gain
+   on code.
+3. **Implication for the two-pass plan:** Variant B's pass-2 (m3) on code buys ~nothing in
+   nDCG and a modest MRR polish. Its remaining justifications: multilingual content, 8k
+   context (this bench truncated at 512 — m3's long-context edge untested), future reranker
+   carrier. The bigger quality levers on code appear to be **chunking granularity, the
+   sparse lane, and reranking** — not the dense model.
+4. Bench-shape caveat: synthetic docstring queries saturate lexical overlap and may
+   understate differences that production-style queries ("where is X handled") would show.
+   A 30-query hand-written set would be the higher-fidelity arbiter before major effort
+   goes into pass-2 tuning.
+
+(All-MiniLM-L6-v2 was downloaded via sentence-transformers for this run — ~90MB now in the
+project HF cache; delete with the other test artifacts if unwanted.)
+
 ## 7. Addendum — multilingual sibling bench (2026-10-07)
 
 `paraphrase-multilingual-MiniLM-L12-v2` (384d, the multilingual sibling of odysseus's
