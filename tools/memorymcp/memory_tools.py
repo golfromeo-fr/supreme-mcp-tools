@@ -40,6 +40,10 @@ from shared.store_models import Filter, FieldCondition, MatchValue, MatchContain
 from shared.relevance_scorer import (
     blend_hybrid, cosine_similarity, normalize_keyword_rows, type_boost,
 )
+from shared.tidy_state import (
+    clear_state, current_fingerprint, load_state, max_drop,
+    params_fingerprint, save_state, shrink_suspicious,
+)
 from text_utils import mergeable_owners, similarity_with_fallback, word_jaccard_similarity
 
 # P3/P4 instrumentation (surfaced via getMemoryMetrics): keyword-lane usage,
@@ -776,6 +780,9 @@ async def deleteMemory(memory_id: str) -> str:
             ids=[memory_id],
         )
         await _delete_artifact_key(artifact_key)
+        # P4 row-count invariant: a single delete invalidates the tidy
+        # fingerprint so the next maintenance pass recomputes honestly.
+        clear_state()
         logger.info(f"Deleted memory {memory_id}")
         return f"Deleted memory: {memory_id}"
 
@@ -819,6 +826,7 @@ async def decayOrExpire(
     ttl_days: int = 30,
     min_usage_count: int = 0,
     dry_run: bool = True,
+    force: bool = False,
 ) -> str:
     """
     Clean up expired memories based on TTL and usage.
@@ -826,10 +834,16 @@ async def decayOrExpire(
     💡 Tip: Call periodically to clean up temporary memories and enforce
     retention policies. Use dry_run=true first to see what would be deleted.
 
+    P4 guards: a fingerprint skip short-circuits unchanged stores (same
+    parameters only), a shrunken store read requires force=true (suspected
+    degraded scroll), and a destructive pass deleting more than
+    max(MEMORY_TIDY_MAX_DROP_ABS, MEMORY_TIDY_MAX_DROP_FRAC·N) is refused.
+
     Args:
         ttl_days: Delete memories not accessed in this many days (default: 30)
         min_usage_count: Delete memories with fewer accesses than this
         dry_run: If True, only report what would be deleted (default: True)
+        force: Run even when the fingerprint/shrink guards would skip or block
 
     Returns:
         Summary of cleanup operation
@@ -843,6 +857,21 @@ async def decayOrExpire(
 
         # Get all points
         all_points = scroll_all(COLLECTION_NAME)
+
+        # --- P4 guards ----------------------------------------------------
+        params_fp = params_fingerprint(ttl_days=ttl_days, min_usage_count=min_usage_count)
+        pre_fp = current_fingerprint(all_points)
+        state = load_state()
+        if not force and state.get("fp") == pre_fp and state.get("params_fp") == params_fp:
+            _recall_stats["tidy_skip_count"] += 1
+            return ("Nothing changed since the last decay pass (fingerprint match) — "
+                    "nothing to do. Use force=true to run anyway.")
+        suspicious = shrink_suspicious(int(state.get("count") or 0), len(all_points))
+        if not force and suspicious:
+            return (f"Refusing to run: store holds {len(all_points)} memories but the last "
+                    f"pass recorded {state.get('count')} — a shrunken read is suspected "
+                    f"(degraded scroll or a wipe outside this tool). Verify and retry with "
+                    f"force=true. (Tunable via MEMORY_TIDY_MAX_DROP_ABS / _FRAC.)")
 
         to_delete = []
         for point in all_points:
@@ -887,8 +916,17 @@ async def decayOrExpire(
                 to_delete.append(str(point.id))
 
         if dry_run:
-            return f"Would delete {len(to_delete)} memories (ttl={ttl_days}d, min_usage={min_usage_count})\nIDs: {to_delete[:10]}{'...' if len(to_delete) > 10 else ''}"
+            note = (f"\n⚠ Store shrank vs the last pass ({state.get('count')} → {len(all_points)}) — "
+                    f"this view may be degraded; the destructive pass will require force=true."
+                    ) if suspicious else ""
+            return f"Would delete {len(to_delete)} memories (ttl={ttl_days}d, min_usage={min_usage_count})\nIDs: {to_delete[:10]}{'...' if len(to_delete) > 10 else ''}{note}"
         else:
+            allowed = max_drop(len(all_points))
+            if len(to_delete) > allowed:
+                return (f"Refusing to delete {len(to_delete)} of {len(all_points)} memories — "
+                        f"that exceeds the over-deletion floor ({allowed}). Tighten "
+                        f"ttl_days/min_usage_count, or raise MEMORY_TIDY_MAX_DROP_ABS/_FRAC "
+                        f"if this is expected. Nothing was deleted.")
             if to_delete:
                 # Remove artifact sidecars of the doomed memories first
                 # (no orphaned blobs).
@@ -900,6 +938,8 @@ async def decayOrExpire(
                     ids=to_delete,
                 )
             pg_deleted = sql_store.decay_memories(ttl_days, min_usage_count) if sql_store.is_available else 0
+            survivors = [p for p in all_points if str(p.id) not in set(to_delete)]
+            save_state(current_fingerprint(survivors), len(survivors), params_fp)
             return f"Deleted {len(to_delete)} expired from Qdrant, {pg_deleted} from SQL backend"
 
     except Exception as e:
@@ -1324,6 +1364,7 @@ Sensitivity: {payload.get('sensitivity', 'unknown')}
 async def mergeDuplicates(
     threshold: float = 0.95,
     dry_run: bool = True,
+    force: bool = False,
 ) -> str:
     """
     Find and merge duplicate memories based on similarity threshold.
@@ -1337,9 +1378,14 @@ async def mergeDuplicates(
     is missing fall back to word-level Jaccard overlap. No new embeddings
     are computed.
 
+    P4 guards: fingerprint skip for unchanged stores (same threshold only),
+    shrunken-store reads require force=true, and a destructive pass merging
+    away more than max(MEMORY_TIDY_MAX_DROP_ABS, _FRAC·N) memories is refused.
+
     Args:
         threshold: Similarity threshold for duplicates (0-1, default: 0.95)
         dry_run: If True, only report what would be merged
+        force: Run even when the fingerprint/shrink guards would skip or block
 
     Returns:
         Summary of merge operation
@@ -1354,6 +1400,21 @@ async def mergeDuplicates(
         # use cosine similarity (LOW-4); points without vectors degrade to the
         # word-Jaccard fallback per pair.
         all_points = list(vector_store.iter_all(COLLECTION_NAME, with_vectors=True))
+
+        # --- P4 guards ----------------------------------------------------
+        params_fp = params_fingerprint(threshold=threshold)
+        pre_fp = current_fingerprint(all_points)
+        state = load_state()
+        if not force and state.get("fp") == pre_fp and state.get("params_fp") == params_fp:
+            _recall_stats["tidy_skip_count"] += 1
+            return ("No memories changed since the last merge pass (fingerprint match) — "
+                    "nothing to do. Use force=true to run anyway.")
+        suspicious = shrink_suspicious(int(state.get("count") or 0), len(all_points))
+        if not force and suspicious:
+            return (f"Refusing to run: store holds {len(all_points)} memories but the last "
+                    f"pass recorded {state.get('count')} — a shrunken read is suspected "
+                    f"(degraded scroll or a wipe outside this tool). Verify and retry with "
+                    f"force=true. (Tunable via MEMORY_TIDY_MAX_DROP_ABS / _FRAC.)")
 
         # Rehydrate texts up front so artifact-backed memories compare on
         # their full text (falls back to text_preview on fetch failure).
@@ -1423,11 +1484,20 @@ async def mergeDuplicates(
         owner_line = f"\nCross-owner pairs skipped: {skipped_cross_owner}" if skipped_cross_owner else ""
 
         if dry_run:
+            note = (f"\n⚠ Store shrank vs the last pass ({state.get('count')} → {len(all_points)}) — "
+                    f"this view may be degraded; the destructive pass will require force=true."
+                    ) if suspicious else ""
             return (
                 f"Would merge {merged_count} duplicate pairs\n"
-                f"Would delete {len(to_delete)} memories{method_line}{owner_line}"
+                f"Would delete {len(to_delete)} memories{method_line}{owner_line}{note}"
             )
         else:
+            allowed = max_drop(len(all_points))
+            if len(to_delete) > allowed:
+                return (f"Refusing to merge away {len(to_delete)} of {len(all_points)} memories — "
+                        f"that exceeds the over-deletion floor ({allowed}). Raise the "
+                        f"threshold, or adjust MEMORY_TIDY_MAX_DROP_ABS/_FRAC if this is "
+                        f"expected. Nothing was deleted.")
             if to_delete:
                 delete_ids = list(set(to_delete))
                 # Remove artifact sidecars of the merged-away losers first
@@ -1438,6 +1508,8 @@ async def mergeDuplicates(
                     COLLECTION_NAME,
                     ids=delete_ids,
                 )
+            survivors = [p for p in all_points if str(p.id) not in set(to_delete)]
+            save_state(current_fingerprint(survivors), len(survivors), params_fp)
             return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories{method_line}{owner_line}"
 
     except Exception as e:

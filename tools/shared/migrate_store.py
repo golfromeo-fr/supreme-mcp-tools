@@ -245,6 +245,15 @@ def cmd_import(args):
             count = vector_store.bulk_upsert(coll_name, structs)
             logger.info(f"Imported {count} vectors into '{coll_name}'")
 
+    # P4 row-count invariant: an import changes the memory count, so clear
+    # the maintenance-pass sidecar (best-effort; the next pass recomputes).
+    if sql_rows or vec_points:
+        try:
+            from shared.tidy_state import clear_state
+            clear_state()
+        except Exception as e:
+            logger.debug(f"Could not clear tidy state: {e}")
+
 
 def cmd_verify(args):
     """Verify two backends hold the same data."""
