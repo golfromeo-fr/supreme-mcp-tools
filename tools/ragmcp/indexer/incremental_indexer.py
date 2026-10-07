@@ -86,12 +86,17 @@ AZURE_EMBEDDING_DIMENSIONS = int(os.getenv('AZURE_EMBEDDING_DIMENSIONS', '3072')
 AZURE_API_KEY = os.getenv('AI_API_KEY', '')
 
 # Determine embedding dimensions based on provider
+# Normalize the org prefix ('BAAI/bge-m3' -> 'bge-m3'): the env var carries
+# the full HF id while the dim table and the tool-side lane slug use the bare
+# name — without this the indexer derived 768d for bge-m3 and built lane
+# collections with mismatched dims (found live on the g1-pg ground).
+LOCAL_EMBEDDING_MODEL_NORM = (LOCAL_EMBEDDING_MODEL or '').split('/')[-1].strip().lower()
 if EMBEDDING_PROVIDER == 'local':
-    if LOCAL_EMBEDDING_MODEL == 'bge-m3':
+    if LOCAL_EMBEDDING_MODEL_NORM == 'bge-m3':
         EMBEDDING_DIMENSIONS = 1024
     else:
         EMBEDDING_DIMENSIONS = 768
-    logger.info(f"Using local embeddings: {LOCAL_EMBEDDING_MODEL} model ({EMBEDDING_DIMENSIONS} dims)")
+    logger.info(f"Using local embeddings: {LOCAL_EMBEDDING_MODEL_NORM} model ({EMBEDDING_DIMENSIONS} dims)")
 else:
     EMBEDDING_DIMENSIONS = AZURE_EMBEDDING_DIMENSIONS
     logger.info(f"Using Azure embeddings: {AZURE_EMBEDDING_MODEL} ({EMBEDDING_DIMENSIONS} dims)")
@@ -784,7 +789,7 @@ def main():
     # is model-independent → legacy sidecar filename.
     lane = None
     if not SPARSE_ONLY_MODE:
-        _lane_model = LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL
+        _lane_model = LOCAL_EMBEDDING_MODEL_NORM if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL
         lane = lane_slug(EMBEDDING_PROVIDER, _lane_model, EMBEDDING_DIMENSIONS)
 
     # Use centralized metadata path unless explicitly overridden
