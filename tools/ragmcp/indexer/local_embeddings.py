@@ -29,7 +29,7 @@ _model_cache: dict[str, SentenceTransformer] = {}
 # Recommended models (ranked by quality vs speed tradeoff)
 MODELS = {
     "bge-m3": "BAAI/bge-m3",
-    "base": "BAAI/bge-base-en",
+    "base": "BAAI/bge-base-en-v1.5",
 }
 
 DEFAULT_MODEL = "bge-m3"
@@ -43,7 +43,7 @@ def get_local_model(
     Get or load local embedding model (cached in memory).
 
     Args:
-        model_name: Model identifier ('base', 'small', or full HuggingFace name)
+        model_name: Model identifier ('bge-m3', 'base', or full HuggingFace name)
         cache_folder: Directory to cache downloaded models (default: ~/.cache/torch)
 
     Returns:
