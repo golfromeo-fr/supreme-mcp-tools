@@ -1,0 +1,87 @@
+# WORK environment — TURSO identity-plane variant (grounds plan §4/D8).
+#
+# Selected by: startcluster work turso (the topology stamp in work.env
+# decides which base file the boot renders). `work pg` (the default) uses
+# compose-work.yml. Volumes are SHARED NAMES with the pg variant:
+#   work_pgdata  — the pgvector identity db, DORMANT while on turso, comes
+#                  back intact on `work pg` (same password: the state-plane
+#                  block is parked dormant in work.env, never regenerated
+#                  away — see the work state-plane writer)
+#   work_sqldata — the sqld identity db for the turso era
+# The work/ui services MUST stay identical to compose-work.yml (pinned by
+# tests/test_deploy_configs.py::test_work_turso_node_parity).
+#
+# NETWORK MODEL — deliberately different from compose-turso.yml (whose db
+# has NO publish and is reached over podman DNS): the work node runs
+# network_mode host and reaches the identity db ONLY through the published
+# loopback port. The publish below is LOAD-BEARING.
+
+services:
+  db:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    env_file:
+      - work.env
+    ports:
+      - "127.0.0.1:9080:8080"
+    volumes:
+      - work_sqldata:/var/lib/sqld
+    healthcheck:
+      # no curl/wget in the libsql-server image — bash /dev/tcp connect check
+      test: ["CMD-SHELL",
+             "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  work:
+    image: mcp-node:latest
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    network_mode: host            # canonical ports + host-side DSNs/presets
+    environment:
+      TOOLS_LIST: "simplemcp convertermcp webmcp memorymcp ragmcp databasemcp"
+      MCP_NODE_NAME: work
+      MCP_NODE_CENTRAL_URL: http://127.0.0.1:8200
+    volumes:
+      - ./work.env:/app/.env:ro
+      # one-time identity adoption: same accounts/keys as the host stack
+      - ${HOST_CONFIG_DIR}/users.json:/root/.config/supreme-mcp-tools/users.json:ro
+      - ${HOST_CONFIG_DIR}/tools_config.json:/root/.config/supreme-mcp-tools/tools_config.json:ro
+      # real memory data plane at the SAME path the host .env references
+      - ${HOST_TURSO_DIR}:${HOST_TURSO_DIR}
+      # local embedding model cache — no re-download in the container
+      - ${HOST_HF_CACHE}:/root/.cache/huggingface
+      # H3: memory artifacts survive container rebuilds (declared volume)
+      - work_artifacts:/root/.memorymcp/artifacts
+      # launcher log persists across container recreation
+      - work_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ui:
+    profiles: ["ui"]
+    image: mcp-node:latest
+    command: ["python3", "-m", "mcp_ui.management_ui"]
+    network_mode: host            # serves on 8400; conflicts with host startui
+    volumes:
+      - ./work.env:/app/.env:ro
+    environment:
+      MCP_API_URL: http://127.0.0.1:8200
+    restart: unless-stopped
+
+volumes:
+  work_sqldata:
+  work_artifacts:
+  work_logs:

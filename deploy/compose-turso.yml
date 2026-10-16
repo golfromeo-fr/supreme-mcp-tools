@@ -12,8 +12,11 @@ services:
     volumes:
       - sqldata:/var/lib/sqld
     healthcheck:
+      # the libsql-server image ships NO curl/wget — this check could never
+      # pass (found live via the gwork grounds, 2026-10-05). bash IS in the
+      # image, so use a /dev/tcp connect check.
       test: ["CMD-SHELL",
-             "curl -sf http://127.0.0.1:8080/health || exit 1"]
+             "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20

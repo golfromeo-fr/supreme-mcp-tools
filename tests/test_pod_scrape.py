@@ -3,6 +3,10 @@
 The --from-pod tests inject a FAKE `podman` executable on PATH that answers
 the exact `podman exec <db> psql/pg_isready` invocations harvest-config.sh
 makes — no real podman, no real containers.
+
+Tier-1 hermetic (plans/testing-grounds-and-work-topology-2026-10-05.md §2):
+this file NEVER touches a real pod — real-pod behavior lives in the tier-2
+ground probes (tests/test_pod_smoke.py, opt-in POD_GROUNDS).
 """
 
 import json

@@ -4,7 +4,7 @@
 
 **Status**: Tested as single user server (not yet tested as multi-user)
 
-**Available Tools**: `oraclemcp` `webmcp` `simplemcp` `convertermcp` `ragmcp` `memorymcp`
+**Available Tools**: `databasemcp` `webmcp` `simplemcp` `convertermcp` `ragmcp` `memorymcp`
 
 A unified launcher system for running multiple MCP (Model Context Protocol) tools in a single Python process.
 This reduces memory usage by approximately 50% compared to running each tool as a separate process.
@@ -21,13 +21,12 @@ that the primary CLI doesn't expose).
 |------|------|-------------|
 | `databasemcp` | 8000 | Multi-database registry (Oracle / Postgres / libSQL): query, execute, schema, transactions, connection presets |
 | `webmcp` | 8001 | Web search (Brave Search, Google API), URL fetch, HTTP POST |
-| `simplemcp` | 8002 | Simple test tools (double, square, greet) |
+| `simplemcp` | 8002 | Simple test tools (double, square, greet, get_secret) |
 | `convertermcp` | 8003 | Document conversion (DOCX to text, local path or URL) |
 | `ragmcp` | 8004 | RAG-like codebase indexing using local or API embeddings |
 | `memorymcp` | 8005 | Persistent memory store with knowledge graph and semantic search |
 
-(the retired `oraclemcp` remains in `tools/` for standalone use but is not part
-of the default launcher set.)
+(`oraclemcp` was renamed to `databasemcp` on 2026-09-06; the `oraclemcp` directory no longer exists.)
 
 ---
 
@@ -94,7 +93,7 @@ INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher (the tool servers use PEP 604 `X | Y` annotations at runtime)
 - pip
 
 ### Install Dependencies
@@ -128,7 +127,7 @@ python launchmcp.py --list-tools
 ### Launch Specific Tools
 
 ```bash
-python launchmcp.py webmcp oraclemcp convertermcp ragmcp
+python launchmcp.py webmcp databasemcp convertermcp ragmcp
 ```
 
 ### Launch All Discovered Tools
@@ -140,19 +139,19 @@ python launchmcp.py
 ### Use Custom Configuration
 
 ```bash
-python launchmcp.py --config custom_config.json webmcp oraclemcp
+python launchmcp.py --config custom_config.json webmcp databasemcp
 ```
 
 ### Verbose Mode
 
 ```bash
-python launchmcp.py --verbose webmcp oraclemcp
+python launchmcp.py --verbose webmcp databasemcp
 ```
 
 ### Dry Run (Preview Without Starting)
 
 ```bash
-python launchmcp.py --dry-run webmcp oraclemcp
+python launchmcp.py --dry-run webmcp databasemcp
 ```
 
 ## Ports and Management
@@ -177,6 +176,11 @@ The NiceGUI management UI is a separate process: `python -m mcp_ui` (port 8400; 
 The launcher uses a JSON configuration file (`config/launcher_config.json` is the checked-in default;
 pass a custom file with `--config`). Port ranges and tool→port assignments live in `config/ports.json`.
 You can override configuration values using environment variables or CLI arguments.
+
+Per-tool `tools/<name>/config.json` files are **gitignored runtime state** (they carry each tool's
+real API key). The committed template is `tools/<name>/config.example.json`; the launcher copies it
+to `config.json` on first boot — replace the `CHANGE-ME-` placeholder key (or set `<NAME>_API_KEY`)
+before serving real clients.
 
 ### Configuration Options
 
@@ -274,7 +278,7 @@ Example:
 ```bash
 export LAUNCHER_PORT_MODE=auto
 export LAUNCHER_BASE_PORT=9000
-python launchmcp.py webmcp oraclemcp
+python launchmcp.py webmcp databasemcp
 ```
 
 ## CLI Arguments
@@ -368,6 +372,7 @@ A multi-database connection-registry MCP server (Oracle, Postgres, libSQL/SQLite
 - **begin_transaction / commit_transaction / rollback_transaction**: interactive transactions with idle reaping
 - **connect_preset / list_presets**: `.env`-defined connection presets (`DB_PRESET_<NN>`), grantable per user
 - **get_proc_rules / get_sql_optimization_rules / get_valid_languages**: user-local rules references
+- **optimize_sql_with_ai**: AI-assisted SQL optimization using `AI_BASE_URL`/`AI_MODEL` with live schema context
 
 Per-user E3.5 grants: preset access is deny-by-default for non-admins and grantable in the Users UI; destructive
 functions (`execute_sql`, `connect_database`, `disconnect_database`) are pre-masked for `role=user` accounts.
@@ -388,6 +393,7 @@ A RAG (Retrieval-Augmented Generation) and Code Indexing MCP server that provide
 - **get_copilot_context**: Copilot context injection for GitHub Copilot integration
 - **index_code**: Index code files into Qdrant for semantic search
 - **start_indexing**: Background indexing of code files into Qdrant vector database
+- **stop_indexing**: Stop a running background indexing job
 - **check_indexing_progress**: Check indexing status and statistics
 - **clear_index**: Clear indexed code collections
 - **list_collections**: List all collections with statistics
@@ -397,9 +403,14 @@ A RAG (Retrieval-Augmented Generation) and Code Indexing MCP server that provide
 ### memorymcp (Port 8005)
 A persistent memory MCP server that provides:
 - **upsertMemory / queryMemory / getMemory / deleteMemory**: Store and retrieve memories with semantic search, recency weighting, and PII redaction
+- **listMemories / listMemoryTypes**: Paged browse and type inventory over the vector store (no embedding, no usage side effects)
 - **textToGraph / textToSmartGraph**: Convert structured text into LLM-friendly knowledge graphs
-- **createMemoryEdge / getMemoryGraph / exportGraphAsMarkdown**: Knowledge-graph linking, neighborhood queries, and export
+- **createMemoryEdge / getMemoryGraph / exportGraphAsMarkdown / memoryTypeChart**: Knowledge-graph linking, neighborhood queries, export, and visualization
 - **getMetaDecisions / mergeDuplicates / decayOrExpire**: Curated architectural-decision lookup, dedup, and TTL cleanup
+- **attachProvenance / auditTrail**: Provenance capture and per-memory audit history
+- **redactSensitive / getMemoryMetrics / reindexMemory**: Standalone redaction, store metrics, and re-embedding
+- **onAgentAction**: Record an agent action against the memory store
+- **getMemoryAutousePolicy / getMemoryCheatsheet / getMemorySystemPrompt**: Reflex-use policy and discovery prompts
 - Pluggable SQL + vector storage backends (Postgres, Turso/libSQL, Qdrant, pgvector)
 
 **Documentation**: [`tools/memorymcp/BACKENDS.md`](tools/memorymcp/BACKENDS.md) (backend architecture and migration)
@@ -409,7 +420,7 @@ A persistent memory MCP server that provides:
 ### Example 1: Launch All Tools
 
 ```bash
-python launchmcp.py oraclemcp webmcp simplemcp convertermcp ragmcp memorymcp
+python launchmcp.py databasemcp webmcp simplemcp convertermcp ragmcp memorymcp
 ```
 
 Or with the primary entry point, just run `python -m launcher` (no args = all discovered tools).
@@ -419,7 +430,7 @@ Output:
 ============================================================
 MCP Launcher Running
 ============================================================
-  oraclemcp: http://0.0.0.0:8000
+  databasemcp: http://0.0.0.0:8000
   webmcp: http://0.0.0.0:8001
   simplemcp: http://0.0.0.0:8002
   convertermcp: http://0.0.0.0:8003
@@ -432,7 +443,7 @@ Press Ctrl+C to stop all servers
 ### Example 2: Launch Specific Tools
 
 ```bash
-python launchmcp.py webmcp oraclemcp
+python launchmcp.py webmcp databasemcp
 ```
 
 Output:
@@ -441,7 +452,7 @@ Output:
 MCP Launcher Running
 ============================================================
   webmcp: http://0.0.0.0:8001
-  oraclemcp: http://0.0.0.0:8000
+  databasemcp: http://0.0.0.0:8000
 ============================================================
 Press Ctrl+C to stop all servers
 ```
@@ -461,7 +472,7 @@ Configure `config.json` with:
 
 Then run:
 ```bash
-python launchmcp.py webmcp oraclemcp convertermcp ragmcp
+python launchmcp.py webmcp databasemcp convertermcp ragmcp
 ```
 
 The launcher will automatically allocate ports 8000, 8001, 8003, 8004.
@@ -525,10 +536,11 @@ A `config/monitoring_config.json` is already checked in with monitoring enabled.
 
 ### Metrics Endpoints
 
-When monitoring is enabled:
-- `GET /metrics` - Prometheus-formatted metrics
-- `GET /metrics/health` - Health status
-- `GET /metrics/stats` - Basic statistics
+**Not yet implemented.** The port corridor reserves 8300 for a metrics server
+(`ports.json` → `reserved.metrics_server`) and `config/monitoring_config.json` ships with
+`"enabled": true`, and `launcher/monitoring/fef_metrics.py` provides the `FEFMetrics` collector.
+But no metrics *server* is started, and no `/metrics`, `/metrics/health`, or `/metrics/stats`
+routes exist in the tree yet. Treat 8300 as reserved, not live.
 
 ### Configuration
 
@@ -555,7 +567,7 @@ If a tool is not discovered:
 If you see import errors:
 1. Ensure all dependencies are installed: `pip install -r requirements.txt`
 2. Check that tool-specific dependencies are installed
-3. Verify Python version compatibility (3.9+)
+3. Verify Python version compatibility (3.10+)
 
 ### Server Fails to Start
 

@@ -274,3 +274,19 @@ my-bundles/
 startpodui
 .podui-history.json
 gui-test-screenshots/
+
+# ragmcp incremental indexer metadata store
+.indexing_metadata/
+
+# grounds runtime artifacts (machine-local; generated from gitignored bundles)
+deploy/clusters.d/
+deploy/g*.env
+deploy/compose-g*.bundle.yml
+# ...but grounds specs ARE committed (key-free by policy)
+!deploy/grounds/*.spec
+
+# per-tool runtime config — machine-written by the management API, carries
+# the real auth.api_key (six historical values are public in git history;
+# rotation declined 2026-10-17). Ship config.example.json instead; the
+# launcher bootstraps config.json from it on fresh checkouts.
+tools/*/config.json

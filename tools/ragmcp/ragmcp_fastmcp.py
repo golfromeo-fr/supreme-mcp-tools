@@ -170,6 +170,26 @@ _local_embedding_model = None
 _local_embedding_model_name = None
 
 
+def resolve_local_model_alias(model_name: str) -> str | None:
+    """Map a stored model name to a LOCAL_EMBEDDING_MODELS key.
+
+    Collections record the model that indexed them, which may be either a short
+    alias ('base') or the full HuggingFace id the indexer resolved it to
+    ('BAAI/bge-base-en-v1.5'). Accept both, so a query embeds with the model
+    that actually built the index instead of falling back to bge-m3.
+
+    Returns None when the name is unknown.
+    """
+    if not model_name:
+        return None
+    if model_name in LOCAL_EMBEDDING_MODELS:
+        return model_name
+    for alias, cfg in LOCAL_EMBEDDING_MODELS.items():
+        if cfg.get('model_name') == model_name:
+            return alias
+    return None
+
+
 def get_local_embedding_model(model_name: str = None):
     """
     Get or create a local embedding model instance.
@@ -189,19 +209,23 @@ def get_local_embedding_model(model_name: str = None):
     if model_name is None:
         model_name = LOCAL_EMBEDDING_MODEL
 
-    if _local_embedding_model is not None and _local_embedding_model_name == model_name:
-        logger.debug(f"Using cached local embedding model: {model_name}")
-        return _local_embedding_model
-
-    model_config = LOCAL_EMBEDDING_MODELS.get(model_name)
+    alias = resolve_local_model_alias(model_name)
+    model_config = LOCAL_EMBEDDING_MODELS.get(alias) if alias else None
     if not model_config:
         logger.warning(f"Unknown local embedding model: {model_name}, falling back to bge-m3")
-        model_config = LOCAL_EMBEDDING_MODELS['bge-m3']
+        alias = 'bge-m3'
+        model_config = LOCAL_EMBEDDING_MODELS[alias]
+
+    # Key the cache on the alias so 'base' and 'BAAI/bge-base-en-v1.5' share
+    # one loaded model instead of thrashing it.
+    if _local_embedding_model is not None and _local_embedding_model_name == alias:
+        logger.debug(f"Using cached local embedding model: {alias} ({model_name})")
+        return _local_embedding_model
 
     try:
         logger.info(f"Loading local embedding model: {model_config['model_name']}")
         _local_embedding_model = SentenceTransformer(model_config['model_name']).to(model_config['device'])
-        _local_embedding_model_name = model_name
+        _local_embedding_model_name = alias
         logger.info(f"Local embedding model loaded: {model_config['description']} ({model_config['dimensions']}d)")
         return _local_embedding_model
     except Exception as e:
@@ -511,6 +535,7 @@ async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
         env['EMBEDDING_PROVIDER'] = preset['provider']
         if preset['provider'] == 'local':
             env['LOCAL_EMBEDDING_MODEL'] = preset['model']
+            env['USE_SPARSE_VECTORS'] = 'true'
 
         logs_dir = SCRIPT_DIR / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -947,8 +972,22 @@ async def _do_dense_search(query: str, limit: int, collection_name: str,
         if not LOCAL_EMBEDDINGS_AVAILABLE:
             raise ValueError("Local embeddings module not available. Install sentence-transformers.")
 
-        model_info = LOCAL_EMBEDDING_MODELS.get(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODELS['bge-m3'])
-        query_embeddings = generate_local_embeddings([query], model_name=LOCAL_EMBEDDING_MODEL)
+        # Prefer the model recorded in the collection's __collection_metadata__
+        # point (written by the indexer) so queries match the index even when
+        # the server's global embedding model differs (e.g. bge-m3 server,
+        # bge-base index). Azure model names are ignored here — this branch
+        # only embeds locally.
+        query_model = LOCAL_EMBEDDING_MODEL
+        try:
+            meta_points = vector_store.retrieve(collection_name, ids=["__collection_metadata__"])
+            if meta_points:
+                stored_model = (meta_points[0].payload or {}).get('embedding_model')
+                if stored_model and not stored_model.startswith('text-embedding'):
+                    query_model = stored_model
+        except Exception as meta_err:
+            logger.debug(f"Could not read collection metadata for model selection: {meta_err}")
+
+        query_embeddings = generate_local_embeddings([query], model_name=query_model)
         if query_embeddings is None or len(query_embeddings) == 0:
             raise ValueError("Failed to generate local embedding for query.")
         query_vector = query_embeddings[0].tolist()
@@ -1384,6 +1423,7 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
     env['EMBEDDING_PROVIDER'] = preset['provider']
     if preset['provider'] == 'local':
         env['LOCAL_EMBEDDING_MODEL'] = preset['model']
+        env['USE_SPARSE_VECTORS'] = 'true'
 
     # Start process in background
     logger.info(f"Starting indexing process: {' '.join(cmd)}")

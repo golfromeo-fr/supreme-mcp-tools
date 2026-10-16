@@ -370,7 +370,13 @@ class TursoVectorStore:
                     using: str | None = None) -> list[ScoredPoint]:
         vec_str = _serialize_vector(vec)
         where, filter_params = _filter_to_sql(filter, "payload")
-        where_clause = f"WHERE {where}" if where else ""
+        # Rows with no vector (e.g. the indexer's __collection_metadata__ point)
+        # make vector_distance_cos raise "vectors must have the same length",
+        # which fails the whole query. They are unmatchable anyway — skip them.
+        vec_present = "embedding IS NOT NULL AND TRIM(embedding) != '' AND embedding != '[]'"
+        where_clause = f"WHERE {vec_present}"
+        if where:
+            where_clause += f" AND {where}"
         all_params = [vec_str] + filter_params + [vec_str, limit]
         sql = f"""
                 SELECT id, payload, vector_distance_cos(embedding, ?) AS d
@@ -512,19 +518,30 @@ class TursoVectorStore:
         return results, next_offset
 
     def get_collection(self, name: str) -> CollectionInfo:
-        try:
-            row = self._conn.execute(
-                f"SELECT COUNT(*) FROM vec_{_s(name)}"
-            ).fetchone()
-            points_count = row[0] if row else 0
-        except Exception:
-            points_count = 0
+        # Contract parity with the qdrant impl: RAISE when the collection's
+        # table does not exist. Swallowing the error here made memory_core's
+        # ensure-at-init skip creation on a FRESH turso file (found live on
+        # the first g1-pg ground boot: upsert then failed "no such table").
+        row = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            f"AND name='vec_{_s(name)}'"
+        ).fetchone()
+        if row is None:
+            # "doesn't exist" wording is a STRING CONTRACT: ragmcp index_code
+            # and get_collection_stats match this substring to take their
+            # auto-create / not-found paths (qdrant client says the same)
+            raise ValueError(f"Collection '{name}' doesn't exist")
+        row = self._conn.execute(
+            f"SELECT COUNT(*) FROM vec_{_s(name)}"
+        ).fetchone()
+        points_count = row[0] if row else 0
 
         # Try to get dimension from a sample vector
         dim = None
         try:
             row = self._conn.execute(
-                f"SELECT embedding FROM vec_{_s(name)} WHERE embedding IS NOT NULL LIMIT 1"
+                f"SELECT embedding FROM vec_{_s(name)} "
+                f"WHERE embedding IS NOT NULL AND TRIM(embedding) != '' AND embedding != '[]' LIMIT 1"
             ).fetchone()
             if row and row[0]:
                 # Parse "[0.1,0.2,...]" (tight or legacy spaced) → count dims

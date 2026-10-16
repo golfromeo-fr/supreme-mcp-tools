@@ -28,14 +28,20 @@ the management website (8400).
 
 One container that does exactly what `startlauncher` does — all six tools,
 same ports (8000–8005, central 8200) — plus a small database next to it
-that holds the users and masks for this box.
+that holds the users and masks for this box. The database engine is YOUR
+choice, made at boot: `./startcluster work pg` (Postgres-with-pgvector,
+the default) or `./startcluster work turso` (libSQL/sqld). Switching is
+non-destructive: the other engine's database goes dormant (kept, never
+wiped) and comes back intact when you switch back. Memories created while
+on turso live in the turso store and wait there while you are on pg.
 
 - **Identity:** its own private database. Your host users were imported
   into it once, so your accounts and keys are the same.
-- **Your memories:** it reads the same real data as the host (your turso
-  folder is mounted inside it).
-- **Start it:** `./startcluster work`
-- **Good for:** working exactly like before, but containerized.
+- **Your memories (pg identity):** it reads the same real data as the host
+  (your turso folder is mounted inside it).
+- **Start it:** `./startcluster work` (boots with the last-used engine)
+- **Good for:** working exactly like before, but containerized — with a
+  choice of identity database the host stack doesn't offer.
 
 ⚠️ **This and the host stack cannot run at the same time** — same ports.
 Starting one while the other is up will refuse with a clear message.
@@ -113,7 +119,7 @@ The 7 stopped containers from your screenshot, color-coded:
 | `..._lb_1` (nginx) | The doorman — spreads requests over copy #1 and #2 |
 | `..._minio_1` (MinIO) | The lab's filing cabinet: big memory blobs |
 
-**Group `pod_mcp-work` — the boxed daily driver (2 containers):**
+**Group `pod_mcp-work` — the boxed launcher bench (2 containers):**
 
 | Container | In plain words |
 |---|---|

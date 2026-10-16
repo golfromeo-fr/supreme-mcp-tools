@@ -141,12 +141,10 @@ QDRANT_PORT=6333
 EMBEDDING_PROVIDER=azure
 
 # Local Embedding Model (if using local provider)
-# Options:
-#   'sbert-large' (1024d) - SBERT Large - English semantic similarity
-#   'e5-large' (1024d) - Multilingual E5 Large - Multilingual semantic similarity (default)
-#   'small' (384d) - BGE Small - Fast English embeddings
-#   'base' (768d) - BGE Base - Balanced English embeddings
-LOCAL_EMBEDDING_MODEL=e5-large
+# Options (both cached in the HF cache — no silent downloads):
+#   'bge-m3' (1024d) - BGE-M3 - multilingual, dense+sparse hybrid (default)
+#   'base'   (768d)  - BGE Base - fast English dense preset
+LOCAL_EMBEDDING_MODEL=bge-m3
 
 # Azure OpenAI Embeddings (if using azure provider)
 AZURE_EMBEDDING_API_URL=https://put.your.API.gateway.ai/v1/embeddings
@@ -313,40 +311,29 @@ clear_index(
 
 ## Local Embedding Models
 
-When using `EMBEDDING_PROVIDER=local`, you can choose from the following models:
+When using `EMBEDDING_PROVIDER=local`, you can choose from the following models
+(both are in the local HF cache; the presets removed on 2026-10-17 — `sbert-large`,
+`e5-large`, `small` — were deleted from the cache and only triggered silent
+multi-hundred-MB re-downloads):
 
-### SBERT Large (`sbert-large`)
-- **Model**: `stsb-bert-large`
+### BGE-M3 (`bge-m3`) - **Default**
+- **Model**: `BAAI/bge-m3`
 - **Dimensions**: 1024
-- **Description**: English semantic similarity model
-- **Best For**: English code with semantic understanding
-- **Performance**: Slower, higher quality
-
-### Multilingual E5 Large (`e5-large`) - **Default**
-- **Model**: `intfloat/multilingual-e5-large`
-- **Dimensions**: 1024
-- **Description**: Multilingual semantic similarity model
-- **Best For**: Multilingual codebases, general purpose
-- **Performance**: Balanced, supports multiple languages
-
-### BGE Small (`small`)
-- **Model**: `BAAI/bge-small-en-v1.5`
-- **Dimensions**: 384
-- **Description**: Fast English embeddings
-- **Best For**: Quick searches, English-only code
-- **Performance**: Fastest, good quality
+- **Description**: Multilingual, dense + learned-sparse outputs; powers hybrid search
+- **Best For**: Multilingual codebases, maximum retrieval quality
+- **Performance**: ~1.6 s/doc on this VM, 4.3G on disk
 
 ### BGE Base (`base`)
 - **Model**: `BAAI/bge-base-en-v1.5`
 - **Dimensions**: 768
-- **Description**: Balanced English embeddings
-- **Best For**: Balanced performance and quality
-- **Performance**: Balanced speed and quality
+- **Description**: Balanced English dense embeddings
+- **Best For**: Fast indexing runs, English-only code
+- **Performance**: ~3× faster than bge-m3 (0.5 s/doc), 419M on disk
 
 **Configuration**:
 ```bash
 EMBEDDING_PROVIDER=local
-LOCAL_EMBEDDING_MODEL=e5-large  # or sbert-large, small, base
+LOCAL_EMBEDDING_MODEL=bge-m3  # or base
 ```
 
 ## Architecture

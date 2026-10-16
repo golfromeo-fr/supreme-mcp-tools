@@ -7,6 +7,7 @@ MCP tools from configured directories.
 
 import importlib.util
 import logging
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -114,6 +115,7 @@ class ToolDiscovery:
             
             for tool_dir in expanded:
                 logger.info(f"Searching for MCP tools in: {tool_dir}")
+                self._bootstrap_config(tool_dir)
 
                 # Find Python files in the tool directory only (not subdirectories)
                 # Subdirectories contain support modules (indexer/, shared/, etc.)
@@ -174,7 +176,39 @@ class ToolDiscovery:
                 logger.warning(f"Requested tools not found: {', '.join(missing)}")
         
         return list(self.discovered_tools.values())
-    
+
+    def _bootstrap_config(self, tool_dir: Path) -> None:
+        """Materialize config.json from config.example.json on fresh checkouts.
+
+        tools/*/config.json is runtime state (machine-written by the
+        management API) and gitignored since 2026-10-17 because it carries the
+        real auth.api_key. A checkout that has never booted the launcher only
+        has the committed config.example.json — copy it once so the tool starts
+        with a deterministic placeholder key instead of a random generated one
+        (see _resolve_api_key in tools/shared/server_factory.py). Never
+        overwrites an existing config.json.
+        """
+        config_path = tool_dir / "config.json"
+        if config_path.exists():
+            return
+        example_path = tool_dir / "config.example.json"
+        if not example_path.exists():
+            return
+        try:
+            shutil.copyfile(example_path, config_path)
+        except OSError as e:
+            logger.error(
+                f"[{tool_dir.name}] could not bootstrap config.json from "
+                f"config.example.json: {e}"
+            )
+            return
+        logger.warning(
+            f"[{tool_dir.name}] bootstrapped config.json from "
+            "config.example.json — it carries the PLACEHOLDER "
+            "CHANGE-ME-... api_key; set a real key in config.json or a "
+            "<NAME>_API_KEY env var before serving clients"
+        )
+
     def _discover_tool(self, file_path: Path) -> ToolMetadata:
         """
         Discover a single MCP tool from a Python file.

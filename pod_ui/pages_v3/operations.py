@@ -1,45 +1,18 @@
-"""Operations (`/v3/operations`): the FULL verb set per cluster, ported from
-v1 onto the v3 chrome. Cluster cards stay lean (Start/Stop all/Boot/Rebuild);
-this page carries everything incl. the destructive Clean (typed 'wipe').
+"""Lifecycle (`/v3/operations`): the per-cluster lifecycle verbs —
+Rebuild (topology-aware for TEST), Start, Stop, Clean (typed 'wipe').
+Data verbs live on Backups & data; scrape/boot live on Bundles.
 All ops fire through ops.fire() -> shared runner -> the global console
-auto-opens and streams; no output pane here. Guided migration lives here."""
+auto-opens and streams; no output pane here."""
 
 from __future__ import annotations
 
 from nicegui import ui
 
-from .. import ops
-from .chrome import frame_v3
+from .. import ops, state
 from ..ops import fire
+from .chrome import frame_v3
 
 WIPE_WORD = "wipe"
-
-ACTIONS = {
-    "work": [
-        ("up (rebuild)", "up", "light"),
-        ("start", "start", "light"),
-        ("stop", "stop", "light"),
-        ("clean", "clean", "danger"),
-        ("backup", "backup", "light"),
-        ("scrape → bundle", "scrape", "light"),
-        ("export-data", "export-data", "light"),
-    ],
-    "test": [
-        ("up pg (rebuild)", "pg", "light"),
-        ("start", "start", "light"),
-        ("stop", "stop", "light"),
-        ("clean", "clean", "danger"),
-        ("backup", "backup", "light"),
-        ("scrape → bundle", "scrape", "light"),
-        ("export-data", "export-data", "light"),
-    ],
-}
-
-MIGRATION_STEPS = [
-    ("scrape the OLD cluster into the bundle", "scrape"),
-    ("backup the OLD cluster state plane", "backup"),
-    ("export the OLD cluster-owned data", "export-data"),
-]
 
 
 def _launch(env_key: str, action: str, *extra) -> None:
@@ -69,40 +42,60 @@ def _confirm_clean(env_key: str) -> None:
     dialog.open()
 
 
+def _topo_select() -> ui.select:
+    """TEST topology select (per the unified plan §2.2): bundle mode offers
+    all four (node.env regenerates per topology); host mode pins to the
+    node.env-matching topology — the others would boot a broken cluster."""
+    choices = state.topology_choices()
+    topo_val = state.UI_PREFS.get("test_topology", choices["current"])
+    if topo_val not in choices["options"]:
+        topo_val = choices["current"]
+    sel = ui.select(choices["options"], value=topo_val, label="topology",
+                    on_change=lambda e: state.UI_PREFS.update({"test_topology": e.value}),
+                    ).classes("w-56").props("dense outlined") \
+        .tooltip("Rebuild/Boot topology"
+                 + ("" if choices["mode"] == "bundle"
+                    else " — host mode: fixed by node.env (boot from a bundle to switch)"))
+    return sel
+
+
 def page() -> None:
-    if (body := frame_v3("Operations")) is None:
+    if (body := frame_v3("Lifecycle")) is None:
         return
 
-    def action_button(env_key: str, label: str, verb: str, tier: str) -> None:
-        if tier == "danger":
-            ui.button(label, on_click=lambda: _confirm_clean(env_key)) \
-                .classes("w-full").props("color=negative")
-        else:
-            ui.button(label, on_click=lambda: _launch(env_key, verb)) \
-                .classes("w-full")
+    def _rebuild(env_key: str) -> None:
+        topo = state.UI_PREFS.get("test_topology", "pg") if env_key == "test" else "up"
+        with ui.dialog() as dialog, ui.card().classes("gap-2"):
+            ui.label(f"Rebuild cluster {env_key} ({topo} topology)?")
+            ui.label("Stops the cluster, rebuilds the node image, restarts it. "
+                     "Takes minutes — the console shows progress.")
+            with ui.row():
+                ui.button("Rebuild", color="primary",
+                          on_click=lambda: (dialog.close(), _launch(env_key, topo)))
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+        dialog.open()
 
     with body:
-        with ui.row().classes("w-full flex-wrap gap-3 items-start"):
-            for env_key, actions in ACTIONS.items():
-                with ui.card().classes("gap-1 min-w-xs"):
-                    ui.label(env_key).classes("text-h6")
-                    for label, verb, tier in actions:
-                        action_button(env_key, label, verb, tier)
+        for env_key, title in (("work", "BASIC"), ("test", "TEST")):
+            with ui.card().classes("gap-1 min-w-xs"):
+                ui.label(title).classes("text-h6")
+                ui.button("Rebuild", icon="refresh",
+                          on_click=lambda e=env_key: _rebuild(e)) \
+                    .classes("w-full") \
+                    .tooltip("stop + rebuild the image + start (startcluster up)")
+                ui.button("Start", icon="play_arrow",
+                          on_click=lambda e=env_key: _launch(e, "start")) \
+                    .classes("w-full")
+                ui.button("Stop", icon="stop",
+                          on_click=lambda e=env_key: _launch(e, "stop")) \
+                    .classes("w-full")
+                ui.button("Clean", icon="delete_forever",
+                          on_click=lambda e=env_key: _confirm_clean(e)) \
+                    .classes("w-full").props("color=negative") \
+                    .tooltip("removes containers"
+                             + (" AND the state volume (users/masks)" if e == "work"
+                                else " (volumes kept)"))
 
         ui.separator()
         ui.label("Every action streams into the console (bottom / terminal pill) — "
                  "it opens automatically when one starts.").classes("text-caption opacity-60")
-
-        with ui.card().classes("w-full"):
-            with ui.expansion("guided migration (old cluster → bundle → new cluster)") \
-                    .classes("w-full"):
-                ui.label("one step at a time; after the exports: Stop all the old "
-                         "cluster (Clusters page), boot the new one from the refreshed "
-                         "bundle (Bundles page), then Restore + Import data (Backups "
-                         "page).").classes("text-caption opacity-70")
-                src = ui.select({e: e for e in ("work", "test")}, value="work",
-                                label="source cluster").classes("w-40").props("dense outlined")
-                for i, (label, verb) in enumerate(MIGRATION_STEPS, 1):
-                    ui.button(f"{i}. {label}",
-                              on_click=lambda v=verb, s=src: _launch(s.value, v)) \
-                        .classes("w-full").props("flat align=left")

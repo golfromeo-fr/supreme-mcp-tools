@@ -21,7 +21,7 @@
   ],
   "environment_variables": {},
   "auth": {
-    "api_key": "convertermcp-test-key-ijkl"
+    "api_key": "CHANGE-ME-convertermcp-api-key"
   },
   "allowed_roots": [
     "/home/gr/supreme-mcp-tools",

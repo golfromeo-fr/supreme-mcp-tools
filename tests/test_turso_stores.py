@@ -130,6 +130,63 @@ class TestTursoVectorStoreContract:
         assert info.points_count == 1
         assert info.dim == self.DIM
 
+    def test_get_collection_detects_dim_past_metadata_point(self, turso_vector_store):
+        """The indexer writes __collection_metadata__ with an empty vector.
+
+        Dimension detection must skip that row instead of reporting an
+        unknown dimension, which made search reject dimension-matching
+        queries on a freshly indexed collection.
+        """
+        from shared.store_models import PointStruct
+        turso_vector_store.ensure_collection("test", dense_dim=self.DIM)
+        turso_vector_store.upsert("test", [
+            # inserted first, as the indexer does at collection creation
+            PointStruct(id="__collection_metadata__", vector=[], payload={"_is_metadata": True}),
+            PointStruct(id="p1", vector=[0.1] * self.DIM, payload={}),
+        ])
+        info = turso_vector_store.get_collection("test")
+        assert info.dim == self.DIM
+
+    def test_get_collection_missing_raises(self, turso_vector_store):
+        """Contract parity with the qdrant impl: a missing collection RAISES.
+
+        The old lenient empty-info behavior was live-proven harmful
+        (2026-10-05, first g1-pg ground boot): memory_core's ensure-at-init
+        RELIES on the raise to create the collection — with the error
+        swallowed, init believed the collection existed and upsert failed
+        'no such table' on every fresh turso file.
+        """
+        with pytest.raises(ValueError, match="doesn't exist"):
+            turso_vector_store.get_collection("nope")
+
+    def test_query_dense_skips_rows_without_vectors(self, turso_vector_store):
+        """The indexer's __collection_metadata__ point has an empty vector.
+
+        vector_distance_cos raises "vectors must have the same length" on such a
+        row, which failed the whole query. Rows with no vector are unmatchable,
+        so they must be skipped rather than aborting the search.
+        """
+        from shared.store_models import PointStruct
+        turso_vector_store.ensure_collection("test", dense_dim=self.DIM)
+        turso_vector_store.upsert("test", [
+            PointStruct(id="__collection_metadata__", vector=[], payload={"_is_metadata": True}),
+            PointStruct(id="p1", vector=[1.0, 0.0, 0.0, 0.0], payload={"text": "hello"}),
+        ])
+        results = turso_vector_store.query_dense("test", [1.0, 0.0, 0.0, 0.0], limit=10)
+        assert len(results) == 1
+        assert results[0].id == "p1"
+
+    def test_query_dense_with_filter_and_metadata_point(self, turso_vector_store):
+        """A payload filter must still apply when empty-vector rows are skipped."""
+        from shared.store_models import PointStruct
+        turso_vector_store.ensure_collection("test", dense_dim=self.DIM)
+        turso_vector_store.upsert("test", [
+            PointStruct(id="__collection_metadata__", vector=[], payload={"_is_metadata": True}),
+            PointStruct(id="p1", vector=[1.0, 0.0, 0.0, 0.0], payload={"text": "hello"}),
+        ])
+        results = turso_vector_store.query_dense("test", [1.0, 0.0, 0.0, 0.0], limit=10)
+        assert {r.id for r in results} == {"p1"}
+
     def test_query_dense_returns_similarity(self, turso_vector_store):
         """S5 contract: score is similarity (higher = better), not distance."""
         from shared.store_models import PointStruct

@@ -13,13 +13,25 @@ The streamable-HTTP transport returns Server-Sent Events, so we parse the
 import json
 import os
 import socket
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
 import requests
 
 BASE_URL = os.environ.get("SIMPLEMCP_URL", "http://127.0.0.1:8002/mcp")
-API_KEY = os.environ.get("SIMPLEMCP_API_KEY", "simplemcp-test-key-5678")
+
+
+def _default_api_key() -> str:
+    """config.json is gitignored runtime state — read the real key from it."""
+    cfg_path = Path(__file__).resolve().parent / "config.json"
+    try:
+        return json.loads(cfg_path.read_text())["auth"]["api_key"]
+    except (OSError, ValueError, KeyError):
+        return "CHANGE-ME-simplemcp-api-key"
+
+
+API_KEY = os.environ.get("SIMPLEMCP_API_KEY") or _default_api_key()
 
 REQUEST_HEADERS = {
     "Content-Type": "application/json",

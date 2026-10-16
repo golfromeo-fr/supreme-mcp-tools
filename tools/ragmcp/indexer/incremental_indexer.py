@@ -22,7 +22,12 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import asyncio
 import httpx
-import tiktoken
+
+try:
+    import tiktoken
+except ImportError:  # the character-based fallback at estimate_tokens() is
+    tiktoken = None  # the documented behavior — a bare import killed the
+                     # whole indexer in the pod image (found live, g1-pg)
 
 # Handle both direct execution and module import
 if __name__ == "__main__":
@@ -40,6 +45,12 @@ else:
     from .smart_chunkers import get_smart_chunker
     from .sparse_vector_gen import generate_sparse_vector
     from .local_embeddings import generate_local_embeddings
+
+# `shared` lives at tools/shared — a script run only puts tools/ragmcp on
+# sys.path (tools/ has no __init__.py), so add tools/ explicitly.
+_tools_dir = str(Path(__file__).resolve().parents[2])
+if _tools_dir not in sys.path:
+    sys.path.insert(0, _tools_dir)
 
 from shared.store_models import PointStruct as NeutralPointStruct, SparseVector as NeutralSparseVector, Filter, FieldCondition, MatchText
 from shared.vector_store import get_vector_store
@@ -786,61 +797,64 @@ def main():
         sys.exit(1)
     logger.info(f"   ✓ Vector store ready")
 
-    # Check/create collection with correct vector configuration
+    # Check/create collection with correct vector configuration.
+    # Existence is detected via list_collections(), not get_collection():
+    # Turso's get_collection() never raises for a missing collection (it
+    # returns an empty CollectionInfo), so the create branch would never run.
     logger.info("📊 Checking collection...")
     try:
-        vector_store.get_collection(args.collection)
-        logger.info(f"   ✓ Collection '{args.collection}' exists")
+        existing_collections = set(vector_store.list_collections())
     except Exception as e:
-        if "Not found" in str(e) or "doesn't exist" in str(e):
-            # Determine vector configuration based on mode
-            if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
-                logger.info(f"   Creating SPARSE-ONLY collection '{args.collection}'...")
-                vector_store.ensure_collection(
-                    args.collection,
-                    dense_dim=None,
-                    sparse=True,
-                )
-            elif USE_SPARSE_VECTORS:
-                logger.info(f"   Creating HYBRID collection '{args.collection}' (dense + sparse)...")
-                logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings with {EMBEDDING_DIMENSIONS} dimensions")
-                vector_store.ensure_collection(
-                    args.collection,
-                    dense_dim=EMBEDDING_DIMENSIONS,
-                    sparse=True,
-                )
-            else:
-                logger.info(f"   Creating DENSE-ONLY collection '{args.collection}' with {EMBEDDING_DIMENSIONS} dimensions...")
-                logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings")
-                vector_store.ensure_collection(
-                    args.collection,
-                    dense_dim=EMBEDDING_DIMENSIONS,
-                    sparse=False,
-                )
-            logger.info(f"   ✓ Collection '{args.collection}' created successfully")
-
-            # Store collection metadata for search-time validation
-            collection_meta = {
-                "embedding_provider": EMBEDDING_PROVIDER,
-                "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
-                "embedding_dimensions": EMBEDDING_DIMENSIONS,
-                "indexed_at": datetime.now(timezone.utc).isoformat(),
-                "indexer_version": "2.0"
-            }
-            logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
-
-            meta_point = NeutralPointStruct(
-                id="__collection_metadata__",
-                vector=[],  # No vectors for metadata point
-                payload={**collection_meta, "_is_metadata": True}
+        logger.error(f"   ✗ Error listing collections: {e}")
+        raise
+    if args.collection in existing_collections:
+        logger.info(f"   ✓ Collection '{args.collection}' exists")
+    else:
+        # Determine vector configuration based on mode
+        if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
+            logger.info(f"   Creating SPARSE-ONLY collection '{args.collection}'...")
+            vector_store.ensure_collection(
+                args.collection,
+                dense_dim=None,
+                sparse=True,
             )
-            try:
-                vector_store.upsert(args.collection, [meta_point])
-            except Exception as meta_e:
-                logger.warning(f"   Could not store collection metadata: {meta_e}")
+        elif USE_SPARSE_VECTORS:
+            logger.info(f"   Creating HYBRID collection '{args.collection}' (dense + sparse)...")
+            logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings with {EMBEDDING_DIMENSIONS} dimensions")
+            vector_store.ensure_collection(
+                args.collection,
+                dense_dim=EMBEDDING_DIMENSIONS,
+                sparse=True,
+            )
         else:
-            logger.error(f"   ✗ Error checking collection: {e}")
-            raise
+            logger.info(f"   Creating DENSE-ONLY collection '{args.collection}' with {EMBEDDING_DIMENSIONS} dimensions...")
+            logger.info(f"   Using {EMBEDDING_PROVIDER} embeddings")
+            vector_store.ensure_collection(
+                args.collection,
+                dense_dim=EMBEDDING_DIMENSIONS,
+                sparse=False,
+            )
+        logger.info(f"   ✓ Collection '{args.collection}' created successfully")
+
+        # Store collection metadata for search-time validation
+        collection_meta = {
+            "embedding_provider": EMBEDDING_PROVIDER,
+            "embedding_model": LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL,
+            "embedding_dimensions": EMBEDDING_DIMENSIONS,
+            "indexed_at": datetime.now(timezone.utc).isoformat(),
+            "indexer_version": "2.0"
+        }
+        logger.info(f"   Metadata: provider={EMBEDDING_PROVIDER}, model={LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL}, dims={EMBEDDING_DIMENSIONS}")
+
+        meta_point = NeutralPointStruct(
+            id="__collection_metadata__",
+            vector=[],  # No vectors for metadata point
+            payload={**collection_meta, "_is_metadata": True}
+        )
+        try:
+            vector_store.upsert(args.collection, [meta_point])
+        except Exception as meta_e:
+            logger.warning(f"   Could not store collection metadata: {meta_e}")
 
     # Get already-indexed files
     qdrant_files = get_indexed_files(args.collection, workspace_path, vector_store)
@@ -880,8 +894,11 @@ def main():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        # Concurrency limit: don't overwhelm Qdrant or file handles
-        MAX_CONCURRENT = min(20, total_files)
+        # Concurrency limit: don't overwhelm Qdrant or file handles.
+        # Each worker can load its own embedding model during the startup
+        # stampede — 20 workers × ~2.5 GB thrashes a CPU-only host, so the
+        # default stays small (RAGMCP_INDEX_CONCURRENCY overrides).
+        MAX_CONCURRENT = max(1, min(int(os.getenv('RAGMCP_INDEX_CONCURRENCY', '2')), total_files))
 
         async def index_file_with_tracking(file_path: Path, idx: int) -> tuple[int, float, Path]:
             """Index a single file and return (chunks, duration, path)."""
