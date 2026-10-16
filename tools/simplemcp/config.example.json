@@ -27,7 +27,7 @@
     },
     {
       "name": "get_secret",
-      "description": "Returns the current value of SIMPLEMCP_SECRET env var for hot-reload testing. SECURITY NOTE (H-7 \u2014 by design): This tool intentionally exposes the value of SIMPLEMCP_SECRET to authenticated callers. It exists solely as a development/test fixture for verifying that the management UI can hot-reload environment variables without restarting the server. Do NOT place real production secrets in SIMPLEMCP_SECRET. The .env file is git-ignored and scoped to the local developer machine."
+      "description": "Returns the current value of SIMPLEMCP_SECRET env var for hot-reload testing. SECURITY NOTE (H-7 — by design): This tool intentionally exposes the value of SIMPLEMCP_SECRET to authenticated callers. It exists solely as a development/test fixture for verifying that the management UI can hot-reload environment variables without restarting the server. Do NOT place real production secrets in SIMPLEMCP_SECRET. The .env file is git-ignored and scoped to the local developer machine."
     }
   ],
   "environment_variables": {
@@ -82,6 +82,6 @@
     }
   },
   "auth": {
-    "api_key": "simplemcp-test-key-5678"
+    "api_key": "CHANGE-ME-simplemcp-api-key"
   }
 }

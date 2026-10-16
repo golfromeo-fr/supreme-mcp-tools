@@ -245,6 +245,6 @@
     }
   },
   "auth": {
-    "api_key": "ragmcp-test-key-abcd"
+    "api_key": "CHANGE-ME-ragmcp-api-key"
   }
 }

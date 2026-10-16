@@ -15,7 +15,7 @@
   "tools": [
     {
       "name": "list_presets",
-      "description": "List connection presets defined in .env (dialect, description, autoconnect \u2014 passwords never shown)"
+      "description": "List connection presets defined in .env (dialect, description, autoconnect — passwords never shown)"
     },
     {
       "name": "connect_preset",
@@ -193,7 +193,7 @@
     }
   },
   "auth": {
-    "api_key": "oraclemcp-test-key-efgh"
+    "api_key": "CHANGE-ME-databasemcp-api-key"
   },
   "files": {
     "optimization": "examples/optimization.json (copy to ~/.config/supreme-mcp-tools/databasemcp/)",

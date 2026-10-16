@@ -174,6 +174,8 @@ The `api_key` MUST be nested under `"auth"` — `load_auth_config()` reads `conf
 
 A bare top-level `"api_key"` is invisible to the auth system. `tools/<name>/config.json` is machine-written by the management server API — preserve its JSON structure when editing.
 
+`tools/*/config.json` is **gitignored runtime state** (untracked 2026-10-17 — it carries the real key; the six historical values are public in git history, rotation declined by user decision). The committed template is `tools/<name>/config.example.json` (placeholder `CHANGE-ME-<name>-api-key`); the launcher bootstraps `config.json` from it on first boot (`tool_discovery._bootstrap_config`, loud warning, never overwrites), and `<NAME>_API_KEY` / `MCP_API_KEY` env vars still beat the file. Never `git add -f` a real `config.json`; guard test: `tests/test_tool_config_examples.py`.
+
 ### FastMCP tool registration
 
 Tools register via `@mcp.tool()` decorators at import time. Submodules register their tools as a side effect of being imported. The entry point (`<name>_fastmcp.py`) imports submodules, then calls `get_transport_app(mcp)`.

@@ -11,11 +11,14 @@
 # --- credential-sanitize stage (THROWAWAY — never part of the final image) ---
 # tools/*/config.json carry the working tree's REAL auth.api_key values plus
 # non-secret settings the node needs (ragmcp embedding block, convertermcp
-# allowed_roots, ...). Excluding the files would break those, so this stage
-# blanks every auth.api_key to the "image-sanitized" placeholder and the
-# FINAL stage copies only the sanitized tree: no real key exists in any
-# layer of the built image (publish-image.sh can push it). A running node
-# gets its real per-tool key from OUTSIDE the image: the bundle's
+# allowed_roots, ...). Since 2026-10-17 the files are UNTRACKED (gitignored
+# runtime state; the committed template is config.example.json), so a working
+# tree build still has them (blanked below) while a fresh-checkout build has
+# none — the second block materializes placeholder configs from the examples.
+# Either way this stage blanks every auth.api_key to the "image-sanitized"
+# placeholder and the FINAL stage copies only the sanitized tree: no real key
+# exists in any layer of the built image (publish-image.sh can push it). A
+# running node gets its real per-tool key from OUTSIDE the image: the bundle's
 # tools/<name>/config.json mounted over /app/tools/<name>/config.json
 # (bundle mode), or a <NAME>_API_KEY / MCP_API_KEY line in the mounted .env
 # (env beats config.json — _resolve_api_key in tools/shared/server_factory.py).
@@ -32,6 +35,11 @@ RUN printf '%s\n' \
       '        with open(p, "w") as f:' \
       '            json.dump(d, f, indent=2)' \
       '            f.write("\n")' \
+      'import glob, os, shutil' \
+      'for e in sorted(glob.glob("tools/*/config.example.json")):' \
+      '    p = e[:-len(".example.json")] + ".json"' \
+      '    if not os.path.exists(p):' \
+      '        shutil.copyfile(e, p)' \
       | python3 -
 
 FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285

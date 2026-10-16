@@ -108,6 +108,6 @@
     }
   },
   "auth": {
-    "api_key": "webmcp-test-key-1234"
+    "api_key": "CHANGE-ME-webmcp-api-key"
   }
 }
