@@ -313,7 +313,24 @@ class ManagementServer:
             description="Central management API for all MCP tools",
             version="1.0.0"
         )
-        
+
+        # Audit P2-2: fail closed for MUTATIONS when no key is configured.
+        # Reads stay open (matching the historical keyless behavior and the
+        # loud init warning); with a key configured — the documented and
+        # deployed state — every route behaves exactly as before.
+        if self.api_key is None:
+            _MUTATIONS = {"POST", "PUT", "DELETE", "PATCH"}
+
+            @self.app.middleware("http")
+            async def _refuse_mutations_without_key(request: Request, call_next):
+                if request.method in _MUTATIONS:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(status_code=403, content={
+                        "error": "MCP_MANAGEMENT_API_KEY is not configured — "
+                                 "mutation routes are disabled. Set the key to "
+                                 "enable them."})
+                return await call_next(request)
+
         # Add CORS middleware
         _mgmt_port = _get_default_management_port() or 8400
         _allowed_origins = [

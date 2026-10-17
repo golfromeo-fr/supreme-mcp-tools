@@ -602,6 +602,17 @@ def load_auth_config(tool_name: str) -> dict[str, Any]:
     return config.get("auth", {})
 
 
+def resolve_tool_api_key(tool_name: str, config_key: str | None) -> str | None:
+    """Env-first tool key resolution (audit 2026-10-01 P2-1).
+
+    Same precedence as tools/shared/server_factory._resolve_api_key (which
+    builds the MCP port's verifier): <NAME>_API_KEY > MCP_API_KEY >
+    config.json value. Lets the 81xx management server accept the same key
+    the MCP port accepts. Returns None when nothing is configured."""
+    env_key = f"{tool_name.upper().replace('-', '_')}_API_KEY"
+    return os.environ.get(env_key) or os.environ.get("MCP_API_KEY") or config_key
+
+
 # ============================================================================
 # M4/H2b — cluster snapshot (MIRROR-ONLY)
 # ============================================================================

@@ -117,7 +117,12 @@ class ServerManager:
 
         try:
             auth_config = load_auth_config(tool_name)
-            api_key = auth_config.get("api_key")
+            # Audit P2-1: resolve with the env-first precedence the MCP port's
+            # verifier used, so the 81xx management server accepts the SAME
+            # key. Config-only setups are unchanged; with an env key set, both
+            # ports now agree instead of 81xx staying config-only.
+            from .env_manager import resolve_tool_api_key
+            api_key = resolve_tool_api_key(tool_name, auth_config.get("api_key"))
 
             # Auth is handled by FastMCP 3's built-in DualHeaderVerifier
             # (configured in tools/shared/server_factory.py at server creation).
