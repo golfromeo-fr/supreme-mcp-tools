@@ -214,6 +214,9 @@ def test_delete_env_value_reports_mirror_outcome(db_backend, monkeypatch,
     assert env_manager.delete_env_value("REPORT_VAR", persist=False) is True
 
 
+_AUTH = {"Authorization": "Bearer cluster-test-key"}
+
+
 def test_env_put_response_carries_shared_state_field(monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -227,10 +230,10 @@ def test_env_put_response_carries_shared_state_field(monkeypatch):
     monkeypatch.setattr(ms, "get_env_values", lambda name: {})
 
     server = ManagementServer(service_registry=ServiceRegistry(), port=8297,
-                              host="127.0.0.1", api_key=None)
+                              host="127.0.0.1", api_key="cluster-test-key")
     client = TestClient(server.app)
     resp = client.put("/api/tools/simplemcp/env",
-                      json={"variables": {"MY_VAR": "x"}})
+                      headers=_AUTH, json={"variables": {"MY_VAR": "x"}})
     assert resp.status_code == 200
     assert resp.json()["shared_state_updated"] is False
 
@@ -247,9 +250,9 @@ def test_env_delete_response_carries_shared_state_field(monkeypatch):
     monkeypatch.setattr(ms, "delete_env_value", lambda *a, **k: False)
 
     server = ManagementServer(service_registry=ServiceRegistry(), port=8296,
-                              host="127.0.0.1", api_key=None)
+                              host="127.0.0.1", api_key="cluster-test-key")
     client = TestClient(server.app)
-    resp = client.delete("/api/tools/simplemcp/env/MY_VAR")
+    resp = client.delete("/api/tools/simplemcp/env/MY_VAR", headers=_AUTH)
     assert resp.status_code == 200
     assert resp.json()["shared_state_updated"] is False
 
@@ -273,10 +276,10 @@ def test_auth_put_response_carries_shared_state_field(monkeypatch):
     monkeypatch.setattr(cluster_mod, "mirror_auth", lambda t, k: False)
 
     server = ManagementServer(service_registry=ServiceRegistry(), port=8295,
-                              host="127.0.0.1", api_key=None)
+                              host="127.0.0.1", api_key="cluster-test-key")
     client = TestClient(server.app)
     resp = client.put("/api/tools/simplemcp/auth",
-                      json={"api_key": "test-mirrored-key"})
+                      headers=_AUTH, json={"api_key": "test-mirrored-key"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
