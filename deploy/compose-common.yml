@@ -38,9 +38,9 @@ services:
       # didn't). startcluster exports HOST_HF_CACHE on the boot path.
       - ${HOST_HF_CACHE}:/root/.cache/huggingface
     ports:
-      - "18200:8200"
-      - "18002:8002"
-      - "18003:8003"
+      - "127.0.0.1:18200:8200"
+      - "127.0.0.1:18002:8002"
+      - "127.0.0.1:18003:8003"
     healthcheck:
       test: ["CMD", "python3", "/app/healthcheck.py"]
       interval: 15s
@@ -65,9 +65,9 @@ services:
       # same as node1 — local embedding cache (plan F4)
       - ${HOST_HF_CACHE}:/root/.cache/huggingface
     ports:
-      - "19200:8200"
-      - "19002:8002"
-      - "19003:8003"
+      - "127.0.0.1:19200:8200"
+      - "127.0.0.1:19002:8002"
+      - "127.0.0.1:19003:8003"
     healthcheck:
       test: ["CMD", "python3", "/app/healthcheck.py"]
       interval: 15s
@@ -94,7 +94,7 @@ services:
     volumes:
       - ./node.env:/app/.env:ro
     ports:
-      - "18400:8400"
+      - "127.0.0.1:18400:8400"
     depends_on:
       node1:
         condition: service_started

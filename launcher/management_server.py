@@ -564,14 +564,17 @@ class ManagementServer:
         ):
             """WebSocket endpoint for real-time event streaming."""
             if self.api_key is not None:
+                # Header-only auth (audit P2-6): a query-string token used to
+                # be accepted as a fallback, and uvicorn's access log then
+                # wrote `?token=<key>` to disk where /api/logs serves it.
                 auth = websocket.headers.get("authorization", "")
                 if auth.lower().startswith("bearer "):
                     auth = auth[7:]
                 elif auth.startswith("X-API-Key: "):
                     auth = auth[10:]
                 else:
-                    auth = websocket.query_params.get("token", "")
-                if not hmac.compare_digest(auth, self.api_key):
+                    auth = ""
+                if not auth or not hmac.compare_digest(auth, self.api_key):
                     await websocket.close(code=4001, reason="Unauthorized")
                     return
             

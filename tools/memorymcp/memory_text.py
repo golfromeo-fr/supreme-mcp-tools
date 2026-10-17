@@ -490,8 +490,6 @@ async def textToGraph(
 async def textToSmartGraph(
     text: str,
     title: str | None = None,
-    api_key: str | None = None,
-    base_url: str | None = None,
     model: str | None = None,
     max_tokens: int = 32000,
 ) -> str:
@@ -514,13 +512,16 @@ async def textToSmartGraph(
     Args:
         text: The text content to convert
         title: Optional title for the output
-        api_key: API key for the LLM provider (defaults to SMARTGRAPH_API_KEY env var)
-        base_url: Base URL for the API (defaults to SMARTGRAPH_BASE_URL env var)
         model: Model name (defaults to SMARTGRAPH_MODEL env var)
         max_tokens: Maximum output tokens
 
     Returns:
         Compressed knowledge graph optimized for LLM context
+
+    Security note (2026-10-01 audit P1-3): this tool POSTs the full `text` to
+    the configured LLM endpoint, so the endpoint MUST stay operator-controlled
+    — the API base URL and key are read from the environment only. Callers
+    could previously pass an arbitrary `base_url` and exfiltrate the text.
     """
     try:
         import httpx
@@ -530,13 +531,14 @@ async def textToSmartGraph(
         if graph_text.startswith("Error:"):
             return graph_text
 
-        # Step 2: Resolve API config
-        resolved_key = api_key or os.environ.get("SMARTGRAPH_API_KEY", "")
-        resolved_url = base_url or os.environ.get("SMARTGRAPH_BASE_URL", "https://api.openai.com/v1")
+        # Step 2: Resolve API config (env only — audit P1-3: a caller-supplied
+        # base_url turned this tool into an arbitrary-endpoint exfiltration path)
+        resolved_key = os.environ.get("SMARTGRAPH_API_KEY", "")
+        resolved_url = os.environ.get("SMARTGRAPH_BASE_URL", "https://api.openai.com/v1")
         resolved_model = model or os.environ.get("SMARTGRAPH_MODEL", "gpt-4o-mini")
 
         if not resolved_key:
-            return "Error: No API key configured. Set SMARTGRAPH_API_KEY env var or pass api_key parameter."
+            return "Error: No API key configured. Set the SMARTGRAPH_API_KEY env var."
 
         # Ensure base_url ends correctly
         base = resolved_url.rstrip("/")
