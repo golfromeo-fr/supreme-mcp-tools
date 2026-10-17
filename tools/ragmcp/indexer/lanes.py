@@ -58,7 +58,15 @@ def lane_slug(provider: str, model: str, dim: int | None) -> str:
     hash suffix replaces the tail instead of truncating — truncated prefixes
     collide.
     """
-    raw = sanitize_slug(f"{provider or 'unknown'}-{model or 'unknown'}-{dim if dim else 'x'}")
+    # Normalize the org prefix ('BAAI/bge-m3' -> 'bge-m3') HERE, not only at
+    # the indexer's call sites: the indexer passes the bare name while the
+    # tool side passes the raw env/preset id (and fingerprints carry either
+    # form), so the slug must not depend on the caller. Without this the
+    # search-side active-lane resolution derived <base>-local-baai-bge-m3-1024
+    # and missed lanes the indexer had built as <base>-local-bge-m3-1024
+    # (found live 2026-10-17, flat-workspace end-to-end probe).
+    model = (model or 'unknown').split('/')[-1].strip() or 'unknown'
+    raw = sanitize_slug(f"{provider or 'unknown'}-{model}-{dim if dim else 'x'}")
     if len(raw) <= _SLUG_MAX:
         return raw
     suffix = hashlib.sha256(lane_fingerprint(provider, model, dim).encode()).hexdigest()[:8]

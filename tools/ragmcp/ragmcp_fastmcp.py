@@ -515,6 +515,17 @@ async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
 
         cmd = ["python3", str(indexer_script), workspace_root, "--collection", collection_name]
 
+        # The indexer's --dirs default is the Oracle-era layout (pc/pkg/ddl/...
+        # relative to the workspace) — without an explicit list it scans
+        # nothing on a modern repo and silently completes with 0 files,
+        # leaving a metadata-point-only lane (found live 2026-10-17: lane
+        # created, search then failed on unresolvable dimensions). Default to
+        # the whole workspace; an explicit directories list is passed through.
+        if directories:
+            cmd += ["--dirs", *directories]
+        else:
+            cmd += ["--dirs", str(workspace_root)]
+
         env = os.environ.copy()
         env['EMBEDDING_PROVIDER'] = preset['provider']
         if preset['provider'] == 'local':
@@ -1572,6 +1583,13 @@ Why this changed: To prevent accidental data loss, the indexer now requires expl
         auto_dirs = [d.name for d in Path(workspace_root).iterdir() if d.is_dir() and not d.name.startswith('.')]
         if auto_dirs:
             cmd.extend(["--dirs"] + auto_dirs)
+        else:
+            # Flat workspace (files at the root, no subdirs): scan the root
+            # itself — otherwise no --dirs lands and the indexer's Oracle-era
+            # default (pc/pkg/ddl/...) silently indexes nothing (found live
+            # 2026-10-17: lane created with only its metadata point, then
+            # search failed on unresolvable dimensions).
+            cmd.extend(["--dirs", str(workspace_root)])
 
     # Create logs/ directory if it doesn't exist
     logs_dir = SCRIPT_DIR / "logs"
