@@ -234,5 +234,9 @@
   },
   "auth": {
     "api_key": "CHANGE-ME-ragmcp-api-key"
-  }
+  },
+  "allowed_roots": [
+    "/home/gr/supreme-mcp-tools",
+    "/tmp"
+  ]
 }

@@ -8,6 +8,7 @@ FEF V3 Integration preserved from original implementation.
 import sys
 import os
 import logging
+import re
 import time
 import asyncio
 import functools
@@ -358,6 +359,21 @@ def _record_metrics(tool_name: str, elapsed_ms: float, success: bool = True) -> 
         )
 
 # Collection configuration (reads from env vars for hot-reload)
+
+# Audit 2026-10-01 P2-4/P2-5: the guards live in the dependency-free
+# path_guards module (importable by tests without backend init).
+from indexer.path_guards import allowed_roots_for, validate_collection_name  # noqa: E402
+
+
+def _rag_allowed_roots() -> list[str]:
+    return allowed_roots_for(SCRIPT_DIR / "config.json")
+
+
+def _workspace_allowed(workspace_root: str) -> str | None:
+    from indexer.path_guards import workspace_allowed
+    return workspace_allowed(workspace_root, _rag_allowed_roots())
+
+
 def get_collection_config() -> dict:
     """Get collection config from env vars (hot-reload)."""
     return {
@@ -519,9 +535,17 @@ async def start_indexing_handler(params: dict[str, Any]) -> dict[str, Any]:
     workspace_root = params.get('workspace_root', '')
     collection_name = params.get('collection_name', 'code-index')
     embedding_model = params.get('embedding_model', 'auto')
+    directories = params.get('directories')
 
     if not workspace_root:
         return {"success": False, "error": "workspace_root is required"}
+
+    _err = validate_collection_name(collection_name)
+    if _err:
+        return {"success": False, "error": _err}
+    _err = _workspace_allowed(workspace_root)
+    if _err:
+        return {"success": False, "error": _err}
 
     if not vector_store:
         return {"success": False, "error": "Qdrant not initialized"}
@@ -1540,6 +1564,12 @@ async def index_code(
     _client_id, _allowed = _caller_rag_access()
     if not _collection_allowed(collection_name, _allowed):
         return f"Error: Collection '{collection_name}' is not granted to your account."
+    _err = validate_collection_name(collection_name)
+    if _err:
+        return _err
+    _err = _workspace_allowed(workspace_root)
+    if _err:
+        return _err
     logger.debug(f"Processing index_code tool: workspace_root={workspace_root}, embedding_model={embedding_model}")
 
     if not vector_store:
@@ -2047,6 +2077,9 @@ async def clear_index(
     _client_id, _allowed = _caller_rag_access()
     if not _collection_allowed(collection_name, _allowed):
         return f"Error: Collection '{collection_name}' is not granted to your account."
+    _err = validate_collection_name(collection_name)
+    if _err:
+        return _err
     try:
         if not vector_store:
             return "Error: Qdrant client not initialized. Check QDRANT_HOST and QDRANT_PORT."
