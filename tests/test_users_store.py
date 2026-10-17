@@ -366,3 +366,44 @@ def test_db_backend_unavailable_falls_back_to_json(tmp_path, monkeypatch):
     users_store.create_user("fallback", "fallback-pass-9")
     assert users_store.get_user_record("fallback") is not None
     assert (tmp_path / "users.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Audit 2026-10-01 P1-1: no default admin/admin seeding on non-loopback binds
+# ---------------------------------------------------------------------------
+
+def _seed_env(monkeypatch, tmp_store, *, ui_host, ui_password=None):
+    from tools.shared import users_store
+    monkeypatch.setattr(users_store, "USERS_PATH", tmp_store)
+    monkeypatch.setattr(users_store, "_store_cache", {"mtime": None, "store": None})
+    monkeypatch.setenv("MCP_USERS_STORE", str(tmp_store))
+    monkeypatch.setenv("MCP_UI_USERNAME", "admin")
+    if ui_password:
+        monkeypatch.setenv("MCP_UI_PASSWORD", ui_password)
+    else:
+        monkeypatch.delenv("MCP_UI_PASSWORD", raising=False)
+    monkeypatch.setenv("MCP_UI_HOST", ui_host)
+    monkeypatch.delenv("MCP_USER_TESTER_PASSWORD", raising=False)
+    return users_store
+
+
+def test_seed_refuses_default_password_on_open_bind(monkeypatch, tmp_path):
+    from tools.shared import users_store
+    store = _seed_env(monkeypatch, tmp_path / "users.json", ui_host="0.0.0.0")
+    with pytest.raises(RuntimeError, match="refusing to seed the default admin password"):
+        users_store.seed_from_env()
+    assert not (tmp_path / "users.json").exists() or "admin" not in users_store.load_users().get("users", {})
+
+
+def test_seed_with_explicit_password_on_open_bind_ok(monkeypatch, tmp_path):
+    from tools.shared import users_store
+    store = _seed_env(monkeypatch, tmp_path / "users.json", ui_host="0.0.0.0",
+                      ui_password="s3cret")
+    assert users_store.seed_from_env() >= 1
+    assert "admin" in users_store.load_users()["users"]
+
+
+def test_seed_default_password_on_loopback_still_ok(monkeypatch, tmp_path):
+    from tools.shared import users_store
+    store = _seed_env(monkeypatch, tmp_path / "users.json", ui_host="127.0.0.1")
+    assert users_store.seed_from_env() >= 1

@@ -519,6 +519,15 @@ def revoke_system_key(tool_name: str) -> None:
 _seed_ran = False
 
 
+def _ui_bind_non_loopback() -> bool:
+    """True when the management UI is (configurably) bound beyond loopback.
+
+    Only consults the documented MCP_UI_HOST override; the default is the
+    loopback bind the UI ships with."""
+    host = (os.environ.get("MCP_UI_HOST") or "127.0.0.1").strip()
+    return host not in ("127.0.0.1", "localhost", "::1", "")
+
+
 def seed_from_env() -> int:
     """Seed users from MCP_USER_<NAME>_* env lines + the admin pair.
 
@@ -536,6 +545,16 @@ def seed_from_env() -> int:
     admin_name = (os.environ.get("MCP_UI_USERNAME") or "admin").strip().lower()
     admin_password = os.environ.get("MCP_UI_PASSWORD") or "admin"
     if admin_name not in users:
+        # Audit 2026-10-01 P1-1: never materialize the default admin password
+        # on a non-loopback bind — an open LAN bind plus a publicly-known
+        # default is the one combination this store refuses to create. Fresh
+        # stores on loopback (the documented default) seed as before, and any
+        # deployment that already has a users.json never reaches this branch.
+        if admin_password == "admin" and _ui_bind_non_loopback():
+            raise RuntimeError(
+                "refusing to seed the default admin password on a non-loopback "
+                f"bind (MCP_UI_HOST={os.environ.get('MCP_UI_HOST', '127.0.0.1')!r}) — "
+                "set MCP_UI_PASSWORD (and MCP_UI_USERNAME if wanted) first")
         users[admin_name] = {
             "username": admin_name,
             "password_hash": hash_password(admin_password),
