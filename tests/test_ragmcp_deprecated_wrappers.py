@@ -269,8 +269,12 @@ class TestLOW15FileSizeReduction(unittest.TestCase):
         """File should have significantly fewer lines after cleanup (~350 lines removed)."""
         source = (PROJECT_ROOT / "tools/ragmcp/ragmcp_fastmcp.py").read_text()
         line_count = len(source.split("\n"))
-        self.assertLess(line_count, 2200,
-                       f"Expected ~2070 lines after cleanup, found {line_count}")
+        # LOW-15 baseline was ~2070; P2 embedding lanes (plans/
+        # odysseus-reuse-2026-10-06.md) legitimately added ~160 lines of
+        # feature code — ceiling raised so the guard still trips on
+        # re-grown DEAD code, not features.
+        self.assertLess(line_count, 2500,
+                       f"Expected <2500 lines after cleanup + P2 lanes, found {line_count}")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,22 @@ from memory_core import (
     redact_sensitive_text, check_sensitivity,
 )
 from shared.store_models import Filter, FieldCondition, MatchValue, MatchContains, PointStruct
-from text_utils import similarity_with_fallback
+from shared.relevance_scorer import (
+    blend_hybrid, cosine_similarity, normalize_keyword_rows, type_boost,
+)
+from shared.tidy_state import (
+    clear_state, current_fingerprint, load_state, max_drop,
+    params_fingerprint, save_state, shrink_suspicious,
+)
+from text_utils import mergeable_owners, similarity_with_fallback, word_jaccard_similarity
+
+# P3/P4 instrumentation (surfaced via getMemoryMetrics): keyword-lane usage,
+# vector-only degradations, and tidy passes skipped by the state fingerprint.
+_recall_stats = {
+    "kw_lane_candidates": 0,
+    "vector_only_fallback_count": 0,
+    "tidy_skip_count": 0,
+}
 
 # Artifact store for large-text offloading. Import is side-effect-free:
 # ArtifactStore.__init__ only reads env vars — the S3 client is created
@@ -241,7 +256,13 @@ async def upsertMemory(
 
     payload = memory_item_to_payload(item)
     payload["sensitivity"] = sensitivity
-    # E3.5 owner attribution: the memory belongs to the caller
+    # E3.5/E3.6 owner attribution: the memory belongs to the caller, and the
+    # caller id keys the SQL dedup hash namespace (owner-mixed text_hash).
+    # Admin may pass an explicit owner to create shared memories — not yet a
+    # tool parameter (verified 2026-10-07); if added, the hash must switch to
+    # the effective owner. Legacy records (no owner) are treated as
+    # admin-owned. This block was previously duplicated back-to-back.
+    _owner_client_id = None
     try:
         from fastmcp.server.dependencies import get_http_request
         from tools.shared.identity import resolve_identity
@@ -252,22 +273,7 @@ async def upsertMemory(
                 get_http_request(), lambda: auth_verifier.tokens()
             )
             if ident is not None:
-                payload["owner"] = ident[0]
-    except Exception:
-        pass  # mono mode / non-HTTP scope: no owner concept
-    # E3.5: attribute the memory to the caller (admin may pass an explicit
-    # owner to create shared memories). Legacy records (no owner) are
-    # treated as admin-owned.
-    try:
-        from fastmcp.server.dependencies import get_http_request
-        from tools.shared.identity import resolve_identity
-
-        auth_verifier = getattr(mcp, "auth", None)
-        if auth_verifier is not None and hasattr(auth_verifier, "tokens"):
-            ident = resolve_identity(
-                get_http_request(), lambda: auth_verifier.tokens()
-            )
-            if ident is not None:
+                _owner_client_id = ident[0]
                 payload["owner"] = ident[0]
     except Exception:
         pass  # mono mode / non-HTTP scope: no owner concept
@@ -296,7 +302,9 @@ async def upsertMemory(
         )
         logger.info(f"{'Updated' if is_update else 'Stored'} memory {memory_id}")
 
-        # Also store in SQL backend for metadata/dedup (if available)
+        # Also store in SQL backend for metadata/dedup (if available).
+        # owner keys the dedup hash namespace (E3/P1) so two users' identical
+        # memories never collapse onto one SQL row.
         if sql_store.is_available:
             actual_id = sql_store.upsert_memory(
                 memory_id=memory_id,
@@ -309,6 +317,7 @@ async def upsertMemory(
                 agent_id=agent_id,
                 sensitivity=sensitivity,
                 retention_policy=retention_policy,
+                owner=_owner_client_id,
             )
             if actual_id != memory_id:
                 logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
@@ -321,6 +330,28 @@ async def upsertMemory(
         return f"Error: {str(e)}"
 
 
+async def _keyword_lane_scores(query: str, k: int,
+                               memory_type: str | None,
+                               agent_id: str | None) -> dict[str, float]:
+    """
+    P3 keyword lane: SqlStore.search_text (PG pg_trgm / Turso FTS5)
+    normalized to [0,1]. Returns {} when no SQL backend is configured or the
+    lane fails — the caller degrades to a vector-only query and counts it in
+    _recall_stats. Rows arrive best-first from both impls (OQ5).
+    """
+    if not sql_store.is_available:
+        _recall_stats["vector_only_fallback_count"] += 1
+        return {}
+    try:
+        rows = sql_store.search_text(query, limit=max(k * 3, k),
+                                     memory_type=memory_type, agent_id=agent_id)
+        return normalize_keyword_rows(rows)
+    except Exception as e:
+        logger.warning(f"Keyword lane failed ({e}); vector-only query")
+        _recall_stats["vector_only_fallback_count"] += 1
+        return {}
+
+
 @mcp.tool()
 async def queryMemory(
     query: str,
@@ -329,9 +360,10 @@ async def queryMemory(
     tags: list[str] | None = None,
     agent_id: str | None = None,
     recency_weight: float = 0.5,
+    kw_weight: float | None = None,
 ) -> str:
     """
-    Query memories with recency and usage weighting.
+    Query memories with recency and usage weighting (plus a keyword lane).
 
     💡 Tip: Before starting a new task, query memory for relevant past learnings.
     When stuck, search for similar problems others have solved.
@@ -343,6 +375,13 @@ async def queryMemory(
         tags: Filter by tags (optional)
         agent_id: Filter by agent ID (optional)
         recency_weight: Weight for recency vs semantic similarity (0-1, higher = more recency)
+        kw_weight: Keyword-lane weight for hybrid recall (0-1). None →
+            MEMORY_KW_WEIGHT (default 0.35). 0 disables the lane and
+            reproduces the pre-P3 vector-only query. Final score =
+            (1-kw_weight)·(semantic/recency blend) + kw_weight·(keyword score
+            + type boost). With a SQL backend the lane is pg_trgm/FTS5;
+            without one, a cheap Jaccard keyword signal over the vector hits
+            is used instead.
 
     Returns:
         Formatted list of memory hits with scores
@@ -375,6 +414,15 @@ async def queryMemory(
 
     search_filter = Filter(must=conditions) if conditions else None
 
+    # P3 keyword-lane weight: call-time param wins; MEMORY_KW_WEIGHT sets the
+    # default (0.35). 0 disables the lane and reproduces the pre-P3 query.
+    if kw_weight is None:
+        try:
+            kw_weight = float(os.getenv("MEMORY_KW_WEIGHT", "0.35"))
+        except ValueError:
+            kw_weight = 0.35
+    kw_weight = min(1.0, max(0.0, kw_weight))
+
     # Perform search
     try:
         results = vector_store.query_dense(
@@ -384,7 +432,6 @@ async def queryMemory(
             filter=search_filter,
         )
 
-        hits = []
         weights = ScoringWeights()
         weights.alpha = 1.0 - recency_weight
         weights.beta = recency_weight
@@ -393,6 +440,8 @@ async def queryMemory(
         now_iso = get_now_iso()
         usage_updates: dict[int, list[str]] = {}
 
+        # --- vector lane candidates --------------------------------------
+        candidates: dict[str, dict] = {}
         for result in results:
             payload = result.payload
             payload["id"] = str(result.id)
@@ -402,14 +451,70 @@ async def queryMemory(
             text, _warning = await _rehydrate_payload_text(payload)
             payload["text"] = text
 
-            relevance = score_relevance(payload, query_embedding, weights, semantic_score=result.score)
+            candidates[str(result.id)] = {"payload": payload, "semantic_score": result.score}
 
-            hit = payload_to_memory_hit(payload, result.score)
-            hit.score = relevance
+        # --- keyword lane (P3 hybrid recall) ------------------------------
+        kw_scores: dict[str, float] = {}
+        if kw_weight > 0:
+            kw_scores = await _keyword_lane_scores(query, k, memory_type, agent_id)
+            if not kw_scores:
+                # No SQL lane: cheap Jaccard keyword signal over the vector
+                # candidates (zero new dependencies).
+                for cid, cand in candidates.items():
+                    j = word_jaccard_similarity(query, cand["payload"].get("text", ""))
+                    if j:
+                        kw_scores[cid] = j
+            if kw_scores:
+                _recall_stats["kw_lane_candidates"] += len(kw_scores)
+
+            # kw-only candidates: fetch payload + stored vector so the blend
+            # uses a true semantic score (one retrieve for ≤3k ids).
+            kw_only_ids = [pid for pid in kw_scores if pid not in candidates]
+            if kw_only_ids:
+                for point in vector_store.retrieve(COLLECTION_NAME, kw_only_ids,
+                                                   with_payload=True, with_vectors=True):
+                    payload = point.payload or {}
+                    payload["id"] = str(point.id)
+                    text, _warning = await _rehydrate_payload_text(payload)
+                    payload["text"] = text
+                    sem = cosine_similarity(query_embedding, point.vector) if point.vector else 0.0
+                    candidates[str(point.id)] = {"payload": payload, "semantic_score": sem}
+
+            # Owner post-filter: SQL rows carry no owner column (P1 kept the
+            # dedup hash owner-mixed instead), so drop kw-only hits the
+            # caller must not see. Vector-lane hits were already scoped by
+            # the Qdrant owner filter.
+            if _scoped and not _is_admin:
+                for pid in [p for p in kw_scores if p in candidates]:
+                    if (candidates[pid]["payload"] or {}).get("owner") != _caller:
+                        candidates.pop(pid, None)
+                        kw_scores.pop(pid, None)
+
+        # --- blend, rank, trim ---------------------------------------------
+        hits = []
+        for cid, cand in candidates.items():
+            payload = cand["payload"]
+            current_blend = score_relevance(
+                payload, query_embedding, weights,
+                semantic_score=cand["semantic_score"] if cand["semantic_score"] is not None else 0.0,
+            )
+            if kw_weight > 0:
+                boost = type_boost(payload.get("memory_type"), query)
+                final = blend_hybrid(current_blend, kw_scores.get(cid, 0.0) + boost, kw_weight)
+            else:
+                final = current_blend
+
+            hit = payload_to_memory_hit(payload, cand["semantic_score"] or 0.0)
+            hit.score = final
             hits.append(hit)
 
+        hits.sort(key=lambda h: h.score, reverse=True)
+        hits = hits[:k]
+
+        for hit in hits:
+            payload = candidates[hit.id]["payload"]
             new_usage = payload.get("usage_count", 0) + 1
-            usage_updates.setdefault(new_usage, []).append(str(result.id))
+            usage_updates.setdefault(new_usage, []).append(hit.id)
 
         for new_usage, point_ids in usage_updates.items():
             vector_store.set_payload(
@@ -675,6 +780,9 @@ async def deleteMemory(memory_id: str) -> str:
             ids=[memory_id],
         )
         await _delete_artifact_key(artifact_key)
+        # P4 row-count invariant: a single delete invalidates the tidy
+        # fingerprint so the next maintenance pass recomputes honestly.
+        clear_state()
         logger.info(f"Deleted memory {memory_id}")
         return f"Deleted memory: {memory_id}"
 
@@ -718,6 +826,7 @@ async def decayOrExpire(
     ttl_days: int = 30,
     min_usage_count: int = 0,
     dry_run: bool = True,
+    force: bool = False,
 ) -> str:
     """
     Clean up expired memories based on TTL and usage.
@@ -725,10 +834,16 @@ async def decayOrExpire(
     💡 Tip: Call periodically to clean up temporary memories and enforce
     retention policies. Use dry_run=true first to see what would be deleted.
 
+    P4 guards: a fingerprint skip short-circuits unchanged stores (same
+    parameters only), a shrunken store read requires force=true (suspected
+    degraded scroll), and a destructive pass deleting more than
+    max(MEMORY_TIDY_MAX_DROP_ABS, MEMORY_TIDY_MAX_DROP_FRAC·N) is refused.
+
     Args:
         ttl_days: Delete memories not accessed in this many days (default: 30)
         min_usage_count: Delete memories with fewer accesses than this
         dry_run: If True, only report what would be deleted (default: True)
+        force: Run even when the fingerprint/shrink guards would skip or block
 
     Returns:
         Summary of cleanup operation
@@ -742,6 +857,21 @@ async def decayOrExpire(
 
         # Get all points
         all_points = scroll_all(COLLECTION_NAME)
+
+        # --- P4 guards ----------------------------------------------------
+        params_fp = params_fingerprint(ttl_days=ttl_days, min_usage_count=min_usage_count)
+        pre_fp = current_fingerprint(all_points)
+        state = load_state()
+        if not force and state.get("fp") == pre_fp and state.get("params_fp") == params_fp:
+            _recall_stats["tidy_skip_count"] += 1
+            return ("Nothing changed since the last decay pass (fingerprint match) — "
+                    "nothing to do. Use force=true to run anyway.")
+        suspicious = shrink_suspicious(int(state.get("count") or 0), len(all_points))
+        if not force and suspicious:
+            return (f"Refusing to run: store holds {len(all_points)} memories but the last "
+                    f"pass recorded {state.get('count')} — a shrunken read is suspected "
+                    f"(degraded scroll or a wipe outside this tool). Verify and retry with "
+                    f"force=true. (Tunable via MEMORY_TIDY_MAX_DROP_ABS / _FRAC.)")
 
         to_delete = []
         for point in all_points:
@@ -786,8 +916,17 @@ async def decayOrExpire(
                 to_delete.append(str(point.id))
 
         if dry_run:
-            return f"Would delete {len(to_delete)} memories (ttl={ttl_days}d, min_usage={min_usage_count})\nIDs: {to_delete[:10]}{'...' if len(to_delete) > 10 else ''}"
+            note = (f"\n⚠ Store shrank vs the last pass ({state.get('count')} → {len(all_points)}) — "
+                    f"this view may be degraded; the destructive pass will require force=true."
+                    ) if suspicious else ""
+            return f"Would delete {len(to_delete)} memories (ttl={ttl_days}d, min_usage={min_usage_count})\nIDs: {to_delete[:10]}{'...' if len(to_delete) > 10 else ''}{note}"
         else:
+            allowed = max_drop(len(all_points))
+            if len(to_delete) > allowed:
+                return (f"Refusing to delete {len(to_delete)} of {len(all_points)} memories — "
+                        f"that exceeds the over-deletion floor ({allowed}). Tighten "
+                        f"ttl_days/min_usage_count, or raise MEMORY_TIDY_MAX_DROP_ABS/_FRAC "
+                        f"if this is expected. Nothing was deleted.")
             if to_delete:
                 # Remove artifact sidecars of the doomed memories first
                 # (no orphaned blobs).
@@ -799,6 +938,8 @@ async def decayOrExpire(
                     ids=to_delete,
                 )
             pg_deleted = sql_store.decay_memories(ttl_days, min_usage_count) if sql_store.is_available else 0
+            survivors = [p for p in all_points if str(p.id) not in set(to_delete)]
+            save_state(current_fingerprint(survivors), len(survivors), params_fp)
             return f"Deleted {len(to_delete)} expired from Qdrant, {pg_deleted} from SQL backend"
 
     except Exception as e:
@@ -959,6 +1100,13 @@ By Type:
 
         output += f"\nTotal Retrieval Count: {total_usage}\n"
         output += f"Avg Usage per Memory: {total_usage / total if total > 0 else 0:.2f}\n"
+
+        output += (
+            f"\nRecall instrumentation (process lifetime):\n"
+            f"  kw-lane candidates fused: {_recall_stats['kw_lane_candidates']}\n"
+            f"  vector-only fallbacks (no SQL / lane failure): {_recall_stats['vector_only_fallback_count']}\n"
+            f"  tidy passes skipped (unchanged fingerprint): {_recall_stats['tidy_skip_count']}\n"
+        )
 
         return output
 
@@ -1216,6 +1364,7 @@ Sensitivity: {payload.get('sensitivity', 'unknown')}
 async def mergeDuplicates(
     threshold: float = 0.95,
     dry_run: bool = True,
+    force: bool = False,
 ) -> str:
     """
     Find and merge duplicate memories based on similarity threshold.
@@ -1229,9 +1378,14 @@ async def mergeDuplicates(
     is missing fall back to word-level Jaccard overlap. No new embeddings
     are computed.
 
+    P4 guards: fingerprint skip for unchanged stores (same threshold only),
+    shrunken-store reads require force=true, and a destructive pass merging
+    away more than max(MEMORY_TIDY_MAX_DROP_ABS, _FRAC·N) memories is refused.
+
     Args:
         threshold: Similarity threshold for duplicates (0-1, default: 0.95)
         dry_run: If True, only report what would be merged
+        force: Run even when the fingerprint/shrink guards would skip or block
 
     Returns:
         Summary of merge operation
@@ -1246,6 +1400,21 @@ async def mergeDuplicates(
         # use cosine similarity (LOW-4); points without vectors degrade to the
         # word-Jaccard fallback per pair.
         all_points = list(vector_store.iter_all(COLLECTION_NAME, with_vectors=True))
+
+        # --- P4 guards ----------------------------------------------------
+        params_fp = params_fingerprint(threshold=threshold)
+        pre_fp = current_fingerprint(all_points)
+        state = load_state()
+        if not force and state.get("fp") == pre_fp and state.get("params_fp") == params_fp:
+            _recall_stats["tidy_skip_count"] += 1
+            return ("No memories changed since the last merge pass (fingerprint match) — "
+                    "nothing to do. Use force=true to run anyway.")
+        suspicious = shrink_suspicious(int(state.get("count") or 0), len(all_points))
+        if not force and suspicious:
+            return (f"Refusing to run: store holds {len(all_points)} memories but the last "
+                    f"pass recorded {state.get('count')} — a shrunken read is suspected "
+                    f"(degraded scroll or a wipe outside this tool). Verify and retry with "
+                    f"force=true. (Tunable via MEMORY_TIDY_MAX_DROP_ABS / _FRAC.)")
 
         # Rehydrate texts up front so artifact-backed memories compare on
         # their full text (falls back to text_preview on fetch failure).
@@ -1267,6 +1436,7 @@ async def mergeDuplicates(
         to_delete = []
         already_marked = set()
         method_counts = defaultdict(int)  # similarity method -> scored pairs
+        skipped_cross_owner = 0
 
         for mtype, points in groups.items():
             for i, p1 in enumerate(points):
@@ -1274,6 +1444,11 @@ async def mergeDuplicates(
                     continue
                 for p2 in points[i+1:]:
                     if str(p2.id) in already_marked:
+                        continue
+                    # E3/P1 owner scoping: never merge across owners — identical
+                    # text from two users is two memories, not a duplicate.
+                    if not mergeable_owners(p1.payload, p2.payload):
+                        skipped_cross_owner += 1
                         continue
                     # Compare similarity (LOW-4): cosine over stored embedding
                     # vectors when both are available, word-level Jaccard
@@ -1306,13 +1481,23 @@ async def mergeDuplicates(
             f"{method_counts[m]} {m}" for m in ("cosine", "jaccard") if method_counts[m]
         )
         method_line = f"\nSimilarity methods: {breakdown}" if breakdown else ""
+        owner_line = f"\nCross-owner pairs skipped: {skipped_cross_owner}" if skipped_cross_owner else ""
 
         if dry_run:
+            note = (f"\n⚠ Store shrank vs the last pass ({state.get('count')} → {len(all_points)}) — "
+                    f"this view may be degraded; the destructive pass will require force=true."
+                    ) if suspicious else ""
             return (
                 f"Would merge {merged_count} duplicate pairs\n"
-                f"Would delete {len(to_delete)} memories{method_line}"
+                f"Would delete {len(to_delete)} memories{method_line}{owner_line}{note}"
             )
         else:
+            allowed = max_drop(len(all_points))
+            if len(to_delete) > allowed:
+                return (f"Refusing to merge away {len(to_delete)} of {len(all_points)} memories — "
+                        f"that exceeds the over-deletion floor ({allowed}). Raise the "
+                        f"threshold, or adjust MEMORY_TIDY_MAX_DROP_ABS/_FRAC if this is "
+                        f"expected. Nothing was deleted.")
             if to_delete:
                 delete_ids = list(set(to_delete))
                 # Remove artifact sidecars of the merged-away losers first
@@ -1323,7 +1508,9 @@ async def mergeDuplicates(
                     COLLECTION_NAME,
                     ids=delete_ids,
                 )
-            return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories{method_line}"
+            survivors = [p for p in all_points if str(p.id) not in set(to_delete)]
+            save_state(current_fingerprint(survivors), len(survivors), params_fp)
+            return f"Merged {merged_count} duplicate pairs, deleted {len(to_delete)} memories{method_line}{owner_line}"
 
     except Exception as e:
         logger.error(f"Merge duplicates failed: {e}")

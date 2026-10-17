@@ -38,6 +38,8 @@ if __name__ == "__main__":
     from indexer.smart_chunkers import get_smart_chunker
     from indexer.sparse_vector_gen import generate_sparse_vector
     from indexer.local_embeddings import generate_local_embeddings
+    from indexer.lanes import lane_slug, check_lane_compatibility
+    from indexer import embedding_gate
 else:
     # When imported as module, use relative imports
     from .file_filters import should_keep_file
@@ -45,6 +47,18 @@ else:
     from .smart_chunkers import get_smart_chunker
     from .sparse_vector_gen import generate_sparse_vector
     from .local_embeddings import generate_local_embeddings
+    from .lanes import lane_slug, check_lane_compatibility
+    from . import embedding_gate
+
+# `shared` lives in tools/, which has no __init__.py — script execution puts
+# only the script's own directory on sys.path, so the SPAWNED subprocess dies
+# at import with "No module named 'shared'" unless tools/ is added explicitly
+# (found live on the g1-pg ground: indexer died silently, index_code still
+# reported success).
+if __name__ == "__main__":
+    _tools_dir = str(Path(__file__).parent.parent.parent)
+    if _tools_dir not in sys.path:
+        sys.path.insert(0, _tools_dir)
 
 # `shared` lives at tools/shared — a script run only puts tools/ragmcp on
 # sys.path (tools/ has no __init__.py), so add tools/ explicitly.
@@ -83,12 +97,17 @@ AZURE_EMBEDDING_DIMENSIONS = int(os.getenv('AZURE_EMBEDDING_DIMENSIONS', '3072')
 AZURE_API_KEY = os.getenv('AI_API_KEY', '')
 
 # Determine embedding dimensions based on provider
+# Normalize the org prefix ('BAAI/bge-m3' -> 'bge-m3'): the env var carries
+# the full HF id while the dim table and the tool-side lane slug use the bare
+# name — without this the indexer derived 768d for bge-m3 and built lane
+# collections with mismatched dims (found live on the g1-pg ground).
+LOCAL_EMBEDDING_MODEL_NORM = (LOCAL_EMBEDDING_MODEL or '').split('/')[-1].strip().lower()
 if EMBEDDING_PROVIDER == 'local':
-    if LOCAL_EMBEDDING_MODEL == 'bge-m3':
+    if LOCAL_EMBEDDING_MODEL_NORM == 'bge-m3':
         EMBEDDING_DIMENSIONS = 1024
     else:
         EMBEDDING_DIMENSIONS = 768
-    logger.info(f"Using local embeddings: {LOCAL_EMBEDDING_MODEL} model ({EMBEDDING_DIMENSIONS} dims)")
+    logger.info(f"Using local embeddings: {LOCAL_EMBEDDING_MODEL_NORM} model ({EMBEDDING_DIMENSIONS} dims)")
 else:
     EMBEDDING_DIMENSIONS = AZURE_EMBEDDING_DIMENSIONS
     logger.info(f"Using Azure embeddings: {AZURE_EMBEDDING_MODEL} ({EMBEDDING_DIMENSIONS} dims)")
@@ -439,6 +458,7 @@ async def generate_embeddings_azure(texts: list[str]) -> list[list[float]]:
     if not AZURE_API_KEY:
         raise ValueError("AI_API_KEY environment variable not set")
 
+    embedding_gate.check(AZURE_EMBEDDING_API_URL)
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.post(
@@ -457,12 +477,15 @@ async def generate_embeddings_azure(texts: list[str]) -> list[list[float]]:
 
             # Extract embeddings from response
             embeddings = [item['embedding'] for item in data['data']]
+            embedding_gate.record_success()
             return embeddings
 
         except httpx.HTTPStatusError as e:
+            embedding_gate.record_failure(AZURE_EMBEDDING_API_URL)
             logger.error(f"Azure API error: {e.response.status_code} - {e.response.text}")
             raise
         except Exception as e:
+            embedding_gate.record_failure(AZURE_EMBEDDING_API_URL)
             logger.error(f"Error generating embeddings: {e}")
             raise
 
@@ -772,8 +795,16 @@ def main():
             logger.info(f"🎯 Mode override: HYBRID (from --mode argument)")
 
     workspace_path = Path(args.workspace_root).resolve()
+
+    # P2 lanes: per-embedding-config metadata sidecar. Sparse-only indexing
+    # is model-independent → legacy sidecar filename.
+    lane = None
+    if not SPARSE_ONLY_MODE:
+        _lane_model = LOCAL_EMBEDDING_MODEL_NORM if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL
+        lane = lane_slug(EMBEDDING_PROVIDER, _lane_model, EMBEDDING_DIMENSIONS)
+
     # Use centralized metadata path unless explicitly overridden
-    metadata_file = Path(args.metadata_file) if args.metadata_file else get_metadata_path(args.workspace_root)
+    metadata_file = Path(args.metadata_file) if args.metadata_file else get_metadata_path(args.workspace_root, lane)
 
     logger.info("=" * 80)
     logger.info("🚀 INCREMENTAL CODE INDEXER")
@@ -802,14 +833,33 @@ def main():
     # Turso's get_collection() never raises for a missing collection (it
     # returns an empty CollectionInfo), so the create branch would never run.
     logger.info("📊 Checking collection...")
+    collection_exists = False
     try:
+        # Existence via list_collections() (impl-agnostic): get_collection()
+        # contracts differ per impl/version (some raise on missing, some
+        # return an empty CollectionInfo), so a get_collection()-based check
+        # would not take the create branch everywhere.
         existing_collections = set(vector_store.list_collections())
+        collection_exists = args.collection in existing_collections
     except Exception as e:
         logger.error(f"   ✗ Error listing collections: {e}")
         raise
-    if args.collection in existing_collections:
+    if collection_exists:
         logger.info(f"   ✓ Collection '{args.collection}' exists")
-    else:
+
+    if collection_exists and not SPARSE_ONLY_MODE:
+        # Pre-flight dim check (P2): abort BEFORE embedding work instead of
+        # failing mid-run at the first upsert (ensure_collection never
+        # re-validates an existing collection's vector size).
+        _preflight_model = LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == 'local' else AZURE_EMBEDDING_MODEL
+        _mismatch = check_lane_compatibility(
+            vector_store, args.collection, EMBEDDING_PROVIDER, _preflight_model, EMBEDDING_DIMENSIONS
+        )
+        if _mismatch:
+            logger.error(f"   ✗ {_mismatch}")
+            sys.exit(2)
+
+    if not collection_exists:
         # Determine vector configuration based on mode
         if USE_SPARSE_VECTORS and SPARSE_ONLY_MODE:
             logger.info(f"   Creating SPARSE-ONLY collection '{args.collection}'...")

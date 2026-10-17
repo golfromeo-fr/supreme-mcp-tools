@@ -7,6 +7,7 @@ Treat memorymcp as a reflex, not a lookup DB.
 - Before any non-trivial task → `queryMemory` for prior art.
 - After file_open / file_edit / test_run / commit / discovery → `onAgentAction` (one-liner).
 - End of task → `upsertMemory` for any pattern, decision, trick, or lesson.
+- Keep each memory ≤2 short sentences; split compound learnings instead of one dump.
 - Related to existing memory → `createMemoryEdge` (relation: refines / depends_on / follows / contradicts / example_of).
 
 **End-of-turn checklist:** `query ✓   store ✓   link ✓   self-check done ✓`

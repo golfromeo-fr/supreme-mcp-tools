@@ -195,6 +195,16 @@ def word_jaccard_similarity(text1: str, text2: str) -> float | None:
     return len(set1 & set2) / len(set1 | set2)
 
 
+def mergeable_owners(payload1: dict | None, payload2: dict | None) -> bool:
+    """
+    True when two memories may merge: same owner, or both ownerless (the
+    pre-E3 legacy corpus). Identical text from two E3 users is two memories,
+    never a duplicate (P1, plans/odysseus-reuse-2026-10-06.md — the
+    owner-equality check odysseus added to its dedup path, re-derived).
+    """
+    return (payload1 or {}).get("owner") == (payload2 or {}).get("owner")
+
+
 def similarity_with_fallback(vec1, vec2, text1: str, text2: str) -> tuple[float, str] | None:
     """
     Pairwise similarity for duplicate detection.

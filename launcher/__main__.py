@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 # Load .env at startup so env vars are available to all tools
 _root_env = Path(__file__).resolve().parent.parent / ".env"
 if _root_env.exists():
-    load_dotenv(_root_env)
+    load_dotenv(_root_env, encoding="utf-8-sig")
 
 # M4: adopt cluster env/auth overrides BEFORE any launcher/tool import — in
 # db mode the shared state is authoritative for centrally-mutated values
