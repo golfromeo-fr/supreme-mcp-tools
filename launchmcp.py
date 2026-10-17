@@ -567,9 +567,12 @@ async def start_metrics_server(shutdown_event: asyncio.Event) -> None:
         logging.info(f"Starting metrics server on port {port}")
         
         # Configure uvicorn
+        # Audit P2-7: the metrics endpoint is unauthenticated (tool names,
+        # request counts, latencies) — loopback-only, unlike the tool ports.
+        # Remote scraping can front it with the TLS'd nginx if ever needed.
         config = uvicorn.Config(
             app,
-            host=DEFAULT_HOST,
+            host="127.0.0.1",
             port=port,
             log_level="info",
             access_log=False
