@@ -154,6 +154,60 @@ def _get_storage_secret() -> str:
     return _storage_secret
 
 
+# ---------------------------------------------------------------------------
+# Session credential sealing (audit 2026-10-01 P1-2): the per-user mcp_key
+# used to sit PLAINTEXT in .nicegui/storage-user-*.json (mode 664 at the
+# time of the audit). It is now stored Fernet-encrypted under the same
+# secret that signs the session cookies. Rotation invalidates the stored
+# value naturally: the stale key decrypts fine but fails central auth,
+# forcing a re-login. With an ephemeral secret the sealing is per-process
+# only — same lifetime as the sessions themselves.
+# ---------------------------------------------------------------------------
+
+_fernet = None
+
+
+def _session_cipher():
+    global _fernet
+    if _fernet is None:
+        import base64
+        import hashlib
+
+        from cryptography.fernet import Fernet
+        digest = hashlib.sha256(_get_storage_secret().encode()).digest()
+        _fernet = Fernet(base64.urlsafe_b64encode(digest))
+    return _fernet
+
+
+_SEALED_FIELDS = ("mcp_key", "fresh_mcp_key", "bootstrapped_key")
+
+
+def _seal_session(payload: dict) -> dict:
+    """Session payload for storage.user: credential fields sealed, rest as-is."""
+    stored = dict(payload)
+    cipher = _session_cipher()
+    for name in _SEALED_FIELDS:
+        value = stored.pop(name, None)
+        if value:
+            stored[f"{name}_enc"] = cipher.encrypt(value.encode()).decode()
+    return stored
+
+
+def _seal_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    return _session_cipher().encrypt(value.encode()).decode()
+
+
+def _unseal_value(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        return _session_cipher().decrypt(token.encode()).decode()
+    except Exception:
+        return None  # stale/foreign secret — treat as absent (re-login)
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -219,7 +273,7 @@ def _session_central_key() -> str | None:
     try:
         if nicegui_app.storage.user.get("authenticated") and \
                 nicegui_app.storage.user.get("role") == "admin":
-            return nicegui_app.storage.user.get("mcp_key")
+            return _unseal_value(nicegui_app.storage.user.get("mcp_key_enc"))
     except Exception:
         pass
     return None
@@ -452,7 +506,7 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
         except ValueError as e:
             show_error(str(e))
             return
-        nicegui_app.storage.user.update(dict(session))
+        nicegui_app.storage.user.update(_seal_session(dict(session)))
         show_success("Login successful!")
         if session.get("bootstrapped_key"):
             ui.notify(
@@ -460,7 +514,8 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
                 "it will not be shown again.",
                 type="warning", duration=0, close_button="Got it",
             )
-            nicegui_app.storage.user.update({"fresh_mcp_key": session["bootstrapped_key"]})
+            nicegui_app.storage.user.update(
+                {"fresh_mcp_key": _seal_value(session["bootstrapped_key"])})
         ui.navigate.to(_safe_redirect_target(redirect_to))
 
     # If already authenticated, redirect to main page
@@ -942,7 +997,7 @@ async def _render_content_area(state, handlers: dict) -> None:
                 _memory_panel = ui.column().classes("w-full")
                 render_memory_tab(
                     _memory_panel,
-                    api_key=nicegui_app.storage.user.get("mcp_key"),
+                    api_key=_unseal_value(nicegui_app.storage.user.get("mcp_key_enc")),
                 )
         with ui.tab_panel("functions"):
             _render_functions_tab(state, detail, handlers)

@@ -129,6 +129,11 @@ class UserStoreVerifier(DualHeaderVerifier):
     map read PER VERIFY = the per-request snapshot rule (failure playbook):
     store edits (rotate/disable/create) apply to the next request."""
 
+    # Structural marker for grant/anomaly resolution (audit P2-3): both
+    # verifier shapes expose callable .tokens(), so the class — not the
+    # attribute shape — tells the fail-closed logic which gate is installed.
+    is_user_store = True
+
     def __init__(self, tool_name: str, system_key: str) -> None:
         super().__init__({})  # base map unused — tokens() builds fresh
         self._tool_name = tool_name

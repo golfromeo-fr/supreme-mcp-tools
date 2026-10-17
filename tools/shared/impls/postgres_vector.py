@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Iterator, Iterable, Any
 
 from shared.store_models import (
@@ -20,6 +21,24 @@ from shared.store_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_IDENTIFIER_SAFE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _s(name: str) -> str:
+    """Sanitize a collection name for use as an SQL identifier.
+
+    Port of the turso_vector sanitizer (audit 2026-10-01 P1-4): identifiers
+    cannot be parameterized, so anything that would not be a bareword after
+    separator normalization raises instead of reaching the SQL text.
+    """
+    cleaned = name.replace("-", "_").replace(".", "_").replace("/", "_")
+    if not cleaned or not _IDENTIFIER_SAFE.match(cleaned):
+        raise ValueError(
+            f"invalid collection name {name!r}: after -/._ normalization "
+            "identifiers may contain only letters, digits, underscores")
+    return cleaned
+
 
 
 class PostgresVectorStore:
@@ -71,6 +90,7 @@ class PostgresVectorStore:
         sparse: bool = False,
         distance: str = "Cosine",
     ) -> None:
+        name = _s(name)
         if dense_dim is None:
             # Sparse-only: use tsvector for full-text, no dense vector.
             # Coalesce text/codeChunk/content so both memorymcp and ragmcp index.
@@ -97,6 +117,7 @@ class PostgresVectorStore:
     # ------------------------------------------------------------------
 
     def upsert(self, collection: str, points: list[PointStruct]) -> None:
+        collection = _s(collection)
         with self._pool.connection() as conn:
             for p in points:
                 vec_str = _serialize_vector(p.vector)
@@ -110,6 +131,7 @@ class PostgresVectorStore:
                 """, (str(p.id), vec_str, payload_json))
 
     def set_payload(self, collection: str, payload: dict, *, ids: list[str]) -> None:
+        collection = _s(collection)
         """Merge new payload keys into existing payloads (matches Qdrant semantics).
 
         jsonb `||` merges top-level keys: keys in `payload` overwrite/add to the
@@ -127,6 +149,7 @@ class PostgresVectorStore:
     def delete(self, collection: str, *,
                ids: list[str] | None = None,
                filter: Filter | None = None) -> None:
+        collection = _s(collection)
         with self._pool.connection() as conn:
             if ids:
                 conn.execute(
@@ -139,6 +162,7 @@ class PostgresVectorStore:
                     conn.execute(f"DELETE FROM vec_{collection} WHERE {where}", tuple(params))
 
     def delete_collection(self, name: str) -> None:
+        name = _s(name)
         with self._pool.connection() as conn:
             conn.execute(f"DROP TABLE IF EXISTS vec_{name}")
 
@@ -149,6 +173,7 @@ class PostgresVectorStore:
     def query_dense(self, collection: str, vec: list[float], *,
                     limit: int = 10, filter: Filter | None = None,
                     using: str | None = None) -> list[ScoredPoint]:
+        collection = _s(collection)
         vec_str = _serialize_vector(vec)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
@@ -175,6 +200,7 @@ class PostgresVectorStore:
     def query_sparse(self, collection: str, sparse: SparseVector, *,
                      limit: int = 10, filter: Filter | None = None,
                      query_text: str | None = None) -> list[ScoredPoint]:
+        collection = _s(collection)
         """Lexical search via the tsvector index.
 
         Prefers ``query_text`` (run through ``websearch_to_tsquery`` so callers
@@ -205,6 +231,7 @@ class PostgresVectorStore:
                      sparse: SparseVector, *, limit: int = 10,
                      filter: Filter | None = None,
                      query_text: str | None = None) -> list[ScoredPoint]:
+        collection = _s(collection)
         vec_str = _serialize_vector(dense)
         tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
@@ -229,6 +256,7 @@ class PostgresVectorStore:
 
     def retrieve(self, collection: str, ids: list[str], *,
                  with_payload: bool = True, with_vectors: bool = False) -> list[PointStruct]:
+        collection = _s(collection)
         with self._pool.connection() as conn:
             cols = "id, payload" + (", embedding" if with_vectors else "")
             rows = conn.execute(
@@ -254,6 +282,7 @@ class PostgresVectorStore:
                with_payload: bool = True,
                filter: Filter | None = None,
     ) -> tuple[list[PointStruct], Any]:
+        collection = _s(collection)
         where, params = _filter_to_sql(filter)
         where_clause = f"WHERE {where}" if where else ""
         offset_clause = f"OFFSET {int(offset)}" if offset is not None else ""
@@ -272,6 +301,7 @@ class PostgresVectorStore:
         return results, next_offset
 
     def get_collection(self, name: str) -> CollectionInfo:
+        name = _s(name)
         with self._pool.connection() as conn:
             count_row = conn.execute(f"SELECT COUNT(*) AS c FROM vec_{name}").fetchone()
             dim_row = conn.execute(
@@ -302,6 +332,13 @@ class PostgresVectorStore:
     # ------------------------------------------------------------------
 
     def iter_all(self, collection: str, *, with_vectors: bool = False) -> Iterator[PointStruct]:
+        # Eager sanitize: this method is a generator, so a guard inside the
+        # body would only run on first iteration — after the caller may have
+        # already chained it into other work.
+        collection = _s(collection)
+        return self._iter_all(collection, with_vectors=with_vectors)
+
+    def _iter_all(self, collection: str, *, with_vectors: bool = False) -> Iterator[PointStruct]:
         cols = "id, payload" + (", embedding" if with_vectors else "")
         with self._pool.connection() as conn:
             cursor = conn.execute(
@@ -325,6 +362,7 @@ class PostgresVectorStore:
                     )
 
     def bulk_upsert(self, collection: str, points: Iterable[PointStruct]) -> int:
+        collection = _s(collection)
         batch = list(points)
         if batch:
             self.upsert(collection, batch)

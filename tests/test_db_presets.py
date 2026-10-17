@@ -5,6 +5,16 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _identified_admin(monkeypatch):
+    """Audit P2-3 (2026-10-17): unresolved identities fail closed in multi
+    mode. These tests exercise registry/tx/bypass mechanics as an IDENTIFIED
+    admin; per-test overrides of _current_caller_grants still win."""
+    import connections
+    monkeypatch.setattr(connections, "_current_caller_grants",
+                        lambda: ("admin", "admin", []))
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))

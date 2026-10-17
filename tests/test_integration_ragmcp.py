@@ -18,6 +18,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 sys.path.insert(0, str(PROJECT_ROOT / "tools/ragmcp"))
 
+
+@pytest.fixture(autouse=True)
+def _identified_admin(monkeypatch):
+    """The suite has no HTTP context, and audit P2-3 (2026-10-17) now denies
+    unresolvable identities when the multi-mode user-store verifier is
+    installed (the repo .env sets MCP_AUTH_MODE=multi, which the module
+    import loads). These integration flows exercise search/indexing
+    mechanics as an IDENTIFIED admin, not as an anonymous caller."""
+    import ragmcp_fastmcp
+    monkeypatch.setattr(ragmcp_fastmcp, "_caller_rag_access",
+                        lambda: ("admin", None))
+
 try:
     import libsql_experimental  # noqa: F401
     HAS_LIBSQL = True

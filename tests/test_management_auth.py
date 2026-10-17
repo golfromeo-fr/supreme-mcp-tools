@@ -1,8 +1,9 @@
 """E3-P0 — central management API authentication.
 
 MCP_MANAGEMENT_API_KEY set → the Bearer key is required on every route;
-unset → the API stays open with a startup warning (pre-E3 behavior, kept
-for zero-config local use). The verifier uses hmac.compare_digest on the
+unset → reads stay open with a startup warning, but MUTATION routes fail
+closed (audit P2-2, 2026-10-17) — zero-config local use keeps working for
+reads; mutations need the key. The verifier uses hmac.compare_digest on the
 Bearer scheme only (HTTPBearer — X-API-Key headers are NOT accepted here).
 """
 
@@ -117,3 +118,56 @@ def test_non_admin_user_key_still_rejected(management_server, _admin_central_key
         headers={"Authorization": "Bearer some-random-user-key"},
     )
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Audit 2026-10-01 P2-1/P2-2
+# ---------------------------------------------------------------------------
+
+def test_open_server_refuses_mutations_but_serves_reads(open_server):
+    """P2-2: with NO key configured, mutation routes fail closed (403) while
+    reads keep the historical keyless behavior. Deployments with a key —
+    the documented state — are untouched (every other test in this file)."""
+    client = TestClient(open_server.app)
+    resp = client.post("/api/users", json={"username": "x", "password": "y"})
+    assert resp.status_code == 403
+    assert "MCP_MANAGEMENT_API_KEY" in resp.json()["error"]
+
+    resp = client.put("/api/disabled-tools/simplemcp")
+    assert resp.status_code == 403
+
+    assert client.get("/health").status_code == 200
+
+
+def test_keyed_server_mutations_still_work(management_server, _admin_central_key):
+    """Iso-check: with a key configured, the mutation middleware is absent."""
+    client = TestClient(management_server.app)
+    resp = client.post(
+        "/api/users",
+        headers={"Authorization": f"Bearer {_admin_central_key}"},
+        json={"username": " someone ", "password": "pw"},
+    )
+    assert resp.status_code != 403  # the P2-2 middleware is not installed
+
+
+def test_resolve_tool_api_key_env_precedence(monkeypatch):
+    """P2-1: the 81xx server resolves its key with the MCP port's env-first
+    precedence (tools/shared/server_factory._resolve_api_key)."""
+    from launcher.env_manager import resolve_tool_api_key
+
+    monkeypatch.delenv("SIMPLEMCP_API_KEY", raising=False)
+    monkeypatch.delenv("MCP_API_KEY", raising=False)
+    assert resolve_tool_api_key("simplemcp", "cfg-key") == "cfg-key"
+
+    monkeypatch.setenv("MCP_API_KEY", "mcp-key")
+    assert resolve_tool_api_key("simplemcp", "cfg-key") == "mcp-key"
+
+    monkeypatch.setenv("SIMPLEMCP_API_KEY", "tool-key")
+    assert resolve_tool_api_key("simplemcp", "cfg-key") == "tool-key"
+
+    # dash-bearing tool names normalize to underscores in the env var
+    monkeypatch.delenv("SIMPLEMCP_API_KEY")
+    monkeypatch.delenv("MCP_API_KEY")
+    assert resolve_tool_api_key("my-tool", None) is None
+    monkeypatch.setenv("MY_TOOL_API_KEY", "dash-key")
+    assert resolve_tool_api_key("my-tool", None) == "dash-key"
