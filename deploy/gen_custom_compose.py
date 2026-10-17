@@ -57,7 +57,7 @@ def node_service(name: str, node: str, central_host: int, tools: list,
         # host HF-cache mount the node cannot load BGE-M3. The compose
         # ${HOST_HF_CACHE} interpolation resolves at `up` time (custom_up
         # exports it); podman-compose appends override -f volumes (F17).
-        "volumes": ["${HOST_HF_CACHE}:/root/.cache/huggingface"],
+        "volumes": ["${HOST_HF_CACHE}:/home/mcp/.cache/huggingface"],
         # port_offset: node2 = node1 + 1000 (mirrors central2) — without it
         # both nodes publish the SAME tool ports and cannot coexist (found
         # live planning the g2 grounds; never hit while nodes=2 was unused)
@@ -128,8 +128,8 @@ def node_service_work(name: str, tools: list) -> dict:
             "MCP_NODE_CENTRAL_URL": "http://127.0.0.1:8200",
         },
         "volumes": [
-            "${HOST_HF_CACHE}:/root/.cache/huggingface",
-            f"{name}_artifacts:/root/.memorymcp/artifacts",
+            "${HOST_HF_CACHE}:/home/mcp/.cache/huggingface",
+            f"{name}_artifacts:/home/mcp/.memorymcp/artifacts",
             f"{name}_logs:/app/logs",
         ],
         "healthcheck": {

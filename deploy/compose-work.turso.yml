@@ -49,14 +49,14 @@ services:
     volumes:
       - ./work.env:/app/.env:ro
       # one-time identity adoption: same accounts/keys as the host stack
-      - ${HOST_CONFIG_DIR}/users.json:/root/.config/supreme-mcp-tools/users.json:ro
-      - ${HOST_CONFIG_DIR}/tools_config.json:/root/.config/supreme-mcp-tools/tools_config.json:ro
+      - ${HOST_CONFIG_DIR}/users.json:/home/mcp/.config/supreme-mcp-tools/users.json:ro
+      - ${HOST_CONFIG_DIR}/tools_config.json:/home/mcp/.config/supreme-mcp-tools/tools_config.json:ro
       # real memory data plane at the SAME path the host .env references
       - ${HOST_TURSO_DIR}:${HOST_TURSO_DIR}
       # local embedding model cache — no re-download in the container
-      - ${HOST_HF_CACHE}:/root/.cache/huggingface
+      - ${HOST_HF_CACHE}:/home/mcp/.cache/huggingface
       # H3: memory artifacts survive container rebuilds (declared volume)
-      - work_artifacts:/root/.memorymcp/artifacts
+      - work_artifacts:/home/mcp/.memorymcp/artifacts
       # launcher log persists across container recreation
       - work_logs:/app/logs
     healthcheck:
