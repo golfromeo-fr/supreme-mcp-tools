@@ -382,19 +382,19 @@ REGISTRY = ConnectionRegistry()
 # resolved by the tools layer (identity.resolve_identity).
 # ---------------------------------------------------------------------------
 
-def _multi_mode_active() -> bool:
-    """True when the E3 user-store identity gate is installed."""
-    return (os.environ.get("MCP_AUTH_MODE", "").strip().lower() == "multi"
-            and os.environ.get("MCP_USERS_STORE_DISABLE", "").strip() != "1")
+def _unresolved_grants(user_store: bool) -> tuple[str, str, list[str]]:
+    """Grants for an UNRESOLVABLE identity (audit 2026-10-01 P2-3): a
+    user-store verifier (the E3 multi-mode gate) must not inherit admin on
+    anomaly paths — fail closed to a grant-less user (data grants default-
+    closed anyway, so legit multi-mode users are unaffected). A mono
+    DualHeaderVerifier keeps its historical fail-open.
 
-
-def _unresolved_grants() -> tuple[str, str, list[str]]:
-    """Grants for an UNRESOLVABLE identity (audit 2026-10-01 P2-3): multi
-    mode with an installed user-store must not inherit admin on anomaly
-    paths — fail closed to a grant-less user (data grants default-closed
-    anyway, so legit multi-mode users are unaffected). Mono keeps its
-    historical fail-open."""
-    if _multi_mode_active():
+    The discriminator is the verifier's is_user_store marker (both shapes
+    expose callable .tokens(), so the attribute shape cannot tell them
+    apart; and MCP_AUTH_MODE in the env cannot either — the tool modules
+    load the root .env at import, so a test or tool process can run with
+    multi in the env while the verifier under test is the mono one)."""
+    if user_store:
         return "unknown", "user", []
     return "system", "admin", []
 
@@ -403,24 +403,27 @@ def _current_caller_grants() -> tuple[str, str, list[str]]:
     """(client_id, role, db_presets) of the in-flight caller, from the
     verifier's token map. Tolerant: mono mode / non-HTTP scope /
     unknown token -> ("system", "admin", []) — fail-open, matching the
-    E3 gate's mono behavior. In MULTI mode an unresolvable identity fails
-    CLOSED instead (P2-3)."""
+    E3 gate's mono behavior. With the user-store verifier an unresolvable
+    identity fails CLOSED instead (P2-3)."""
+    user_store = False
     try:
         from core import mcp
         from fastmcp.server.dependencies import get_http_request
         from tools.shared.identity import resolve_identity
 
         verifier = getattr(mcp, "auth", None)
-        if verifier is None or not hasattr(verifier, "tokens"):
-            return _unresolved_grants()
-        ident = resolve_identity(get_http_request(), verifier.tokens)
+        tokens = getattr(verifier, "tokens", None)
+        if tokens is None:
+            return "system", "admin", []
+        user_store = bool(getattr(verifier, "is_user_store", False))
+        ident = resolve_identity(get_http_request(), tokens)
         if ident is None:
-            return _unresolved_grants()
+            return _unresolved_grants(user_store)
         client_id, entry = ident
         return client_id, entry.get("role", "user"), list(entry.get("db_presets") or [])
     except Exception as e:
         logger.warning(f"caller-grant resolution failed: {type(e).__name__}: {e}")
-        return _unresolved_grants()
+        return _unresolved_grants(user_store)
 
 
 def preset_grant_error(preset_number: str, preset_name: str | None,

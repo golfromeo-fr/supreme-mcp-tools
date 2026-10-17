@@ -85,25 +85,26 @@ logger = logging.getLogger("ragmcp")
 # E3.5 — per-user collection access (identity from the request's auth key)
 # ============================================================================
 
-def _multi_mode_active() -> bool:
-    """True when the E3 user-store identity gate is installed."""
-    return (os.environ.get("MCP_AUTH_MODE", "").strip().lower() == "multi"
-            and os.environ.get("MCP_USERS_STORE_DISABLE", "").strip() != "1")
-
-
 def _caller_rag_access() -> tuple[str | None, set[str] | None]:
     """(client_id, allowed_collections) for the in-flight caller.
 
     allowed_collections=None means UNRESTRICTED (admin role, or identity not
-    applicable: mono mode / in-memory). Anomaly returns are fail-open in mono
-    (matching the E3 gate's mono behavior) and fail CLOSED in multi mode —
-    an installed user-store with an unresolvable identity must not grant the
-    whole collection space (audit 2026-10-01 P2-3)."""
+    applicable: mono mode / in-memory). Anomaly returns are fail-open for the
+    mono DualHeaderVerifier (matching the E3 gate's mono behavior) and fail
+    CLOSED for the user-store verifier — an installed user-store with an
+    unresolvable identity must not grant the whole collection space
+    (audit 2026-10-01 P2-3).
+
+    The discriminator is the verifier's is_user_store marker (both shapes
+    expose callable .tokens(), so the attribute shape cannot tell them
+    apart; and MCP_AUTH_MODE in the env cannot either — the tool modules
+    load the root .env at import, so a test or tool process can run with
+    multi in the env while the verifier under test is the mono one)."""
     verifier = getattr(mcp, "auth", None)
     get_tokens = getattr(verifier, "tokens", None)
-    multi = _multi_mode_active()
+    user_store = bool(getattr(verifier, "is_user_store", False))
     if get_tokens is None:
-        return ("unknown", set()) if multi else (None, None)
+        return None, None
     try:
         from fastmcp.server.dependencies import get_http_request
         request = get_http_request()
@@ -111,12 +112,12 @@ def _caller_rag_access() -> tuple[str | None, set[str] | None]:
         token = auth[7:] if auth.lower().startswith("bearer ") else \
             request.headers.get("x-api-key")
     except Exception:
-        return ("unknown", set()) if multi else (None, None)
+        return ("unknown", set()) if user_store else (None, None)
     if not token:
-        return ("unknown", set()) if multi else (None, None)
+        return ("unknown", set()) if user_store else (None, None)
     entry = get_tokens().get(token)
     if entry is None:
-        return ("unknown", set()) if multi else (None, None)
+        return ("unknown", set()) if user_store else (None, None)
     if entry.get("role") == "admin":
         return entry.get("client_id"), None
     return entry.get("client_id"), set(entry.get("rag_collections") or [])

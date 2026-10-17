@@ -14,6 +14,16 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _identified_admin(monkeypatch):
+    """Audit P2-3 (2026-10-17): unresolved identities fail closed in multi
+    mode. These tests exercise registry/tx/bypass mechanics as an IDENTIFIED
+    admin; per-test overrides of _current_caller_grants still win."""
+    import connections
+    monkeypatch.setattr(connections, "_current_caller_grants",
+                        lambda: ("admin", "admin", []))
+
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..", "tools", "databasemcp")))
 
 from dialects._base import DbDialect  # noqa: E402
