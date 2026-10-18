@@ -91,3 +91,34 @@
 2. Quick wins, one-liners: `127.0.0.1:` prefixes in `compose-common.yml` (P1-5); chmod 600 on the 664 secret/session/backup files (P1-2 partial, P2-9, P2-10); drop `base_url`/`api_key` params from `textToSmartGraph` (P1-3); header-only WS auth or access_log off (P2-6).
 3. Small code fixes: `_s()` port to postgres_vector (P1-4); 81xx key resolution + fail-closed (P2-1, P2-2); E3.5 grant fail-closed (P2-3); ragmcp `allowed_roots` + collection-name validation (P2-4, P2-5); default-password seeding guard (P1-1); storage.user de-clerk (P1-2 remainder).
 4. Decide-and-document: metrics auth (P2-7), UI bind (P2-8), container USER (P2-11), preset-vs-memory-store segmentation (P3), rate limiting (P3).
+
+---
+
+## Resolution log
+
+### P2-11 — container USER: NOT APPLICABLE AS SPECIFIED (2026-10-18)
+This deployment runs **rootless podman**: container root already maps to the
+host user (`gr`), so the isolation the finding asks for exists at the host
+boundary — and the audit's own coverage record notes host launcher/UIs never
+run as root. An in-container non-root user (`mcp`, UID 1000) was implemented
+and ground-tested (`3d44102`): under rootless podman that UID maps to a
+subordinate host UID which cannot read the `gr`-owned 600 bundle/identity
+binds, and the pinned podman-compose silently drops `userns: keep-id` (the
+mapping that would have fixed it). The identity flow cannot function that
+way; reverted in `4ca3f2c`. Revisit only if the deployment moves to rootful
+podman — in that case the original fix applies as built: user + chown + the
+compose `/home/mcp` retargets.
+
+### P0-1 — key rotation: DECLINED (2026-10-17)
+User decision: the machine is LAN-only; the six public historical keys are
+accepted risk. Compensating control shipped the same day: per-tool
+`config.json` files are untracked runtime state (gitignored +
+`config.example.json` templates + launcher bootstrap), so no FUTURE key
+reaches the public repo.
+
+### Status of the rest (2026-10-18)
+P1-1, P1-2, P1-3, P1-4, P1-5, P2-1, P2-2, P2-3, P2-4, P2-5, P2-6, P2-7,
+P2-9, P2-10: fixed (see the per-fix commits on main and
+`TODO.md`). P2-8: accepted as-is (LAN-only stance, documented). The
+remaining items are P2-11 (above) and the deferred pod-UI config-write
+redesign (spec: `plans/pod-ui-central-persistence-design-2026-10-18.md`).
