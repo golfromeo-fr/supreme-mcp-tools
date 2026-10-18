@@ -94,20 +94,6 @@ ENV MCP_AUTH_MODE=multi \
 # the placeholder — the node still boots multi-user, but set an override to
 # keep that system key secret.
 
-# P2-11 (audit 2026-10-01): run as a dedicated non-root user. UID/GID 1000
-# matches the host user so the :ro identity mounts and the 600 harvest env
-# files stay readable, and container-written files on bind mounts are owned
-# by the host user. /app is chowned for the launcher's runtime writes
-# (logs/, tools/ragmcp/logs, the config.json bootstrap). The HF-cache,
-# identity and artifacts mounts in the compose files target /home/mcp/...
-# (was /root/...) to match this HOME.
-RUN groupadd -g 1000 mcp \
- && useradd -m -u 1000 -g 1000 -s /usr/sbin/nologin mcp \
- && mkdir -p /home/mcp/.config/supreme-mcp-tools /home/mcp/.cache/huggingface /home/mcp/.memorymcp \
- && chown -R mcp:mcp /app /home/mcp
-ENV HOME=/home/mcp
-USER mcp
-
 # launchmcp.py loads the root .env BEFORE any tool import (auth-order fix,
 # 2026-09-09): the mounted /app/.env is what makes this node multi-user.
 # ${TOOLS_LIST:-...} guard: an empty/override TOOLS_LIST must not fall back
