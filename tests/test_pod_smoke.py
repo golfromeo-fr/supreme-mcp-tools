@@ -119,15 +119,25 @@ def _result_payload(d):
 # ── probe 1: every ground container Up and healthy ───────────────────────
 
 def test_probe_01_all_containers_healthy(pod_ground):
-    ps = subprocess.run(
-        ["podman", "ps", "--filter", f"name={pod_ground.name}_",
-         "--format", "{{.Names}}|{{.Status}}"],
-        capture_output=True, text=True)
-    rows = dict(l.split("|", 1) for l in ps.stdout.splitlines() if "|" in l)
-    assert rows, "no containers running for the ground"
+    # The node's healthcheck needs a moment after `up` (the first cron run
+    # raced it at 27s and failed on "(starting)") — poll briefly before
+    # judging; a container that never turns healthy still fails the probe.
+    deadline = time.time() + 90
+    rows = {}
+    while True:
+        ps = subprocess.run(
+            ["podman", "ps", "--filter", f"name={pod_ground.name}_",
+             "--format", "{{.Names}}|{{.Status}}"],
+            capture_output=True, text=True)
+        rows = dict(l.split("|", 1) for l in ps.stdout.splitlines() if "|" in l)
+        assert rows, "no containers running for the ground"
+        if all("healthy" in status for status in rows.values()) \
+                or time.time() >= deadline:
+            break
+        time.sleep(5)
     for name, status in rows.items():
         assert status.startswith("Up"), f"{name}: {status}"
-        assert "healthy" in status, f"{name}: {status} (healthcheck pending?)"
+        assert "healthy" in status, f"{name}: {status} (healthcheck pending after 90s?)"
 
 
 # ── probe 2: auth posture — unauth rejected, keyed accepted ─────────────
