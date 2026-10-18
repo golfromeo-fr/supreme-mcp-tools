@@ -282,3 +282,30 @@ class TestVerifyCommand:
             assert e.code == 1, f"Verify should exit 1 on mismatch, got {e.code}"
         finally:
             ms._resolve_backend = original_resolve
+
+
+class TestLaneAwareExport:
+    """P2 lanes: list_collections() returns the ORIGINAL (un-sanitized) name
+    for both base and lane-named collections, so the migration CLI
+    transparently covers them. The lane's own ensure_collection is what
+    creates the sanitized table; the mapping is reverse-resolved here.
+    Without this, a base + <base>-<provider-model-dim> setup would
+    silently miss the lane on export/import — pinning it so the next
+    indexer change can't regress the migration contract."""
+
+    def test_lane_collections_are_listed_by_original_name(self):
+        from shared.impls.turso_vector import TursoVectorStore
+        from shared.store_models import PointStruct
+        store = TursoVectorStore(url="file::memory:")
+        # base + a lane-named collection (dash and dot, both must round-trip)
+        store.ensure_collection("memory-store", dense_dim=4)
+        store.ensure_collection("memory-store-local-bge-m3-1024", dense_dim=4)
+        store.upsert("memory-store", [PointStruct(id="1", vector=[0.1]*4, payload={"text": "a"})])
+        store.upsert("memory-store-local-bge-m3-1024",
+                     [PointStruct(id="1", vector=[0.1]*4, payload={"text": "b"})])
+        listed = store.list_collections()
+        assert "memory-store" in listed
+        assert "memory-store-local-bge-m3-1024" in listed
+        # and the sanitized aliases are NOT what callers see
+        assert "memory_store" not in listed
+        assert "memory_store_local_bge_m3_1024" not in listed

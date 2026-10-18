@@ -6,6 +6,7 @@ MCP tools from configured directories.
 """
 
 import importlib.util
+import json
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -16,6 +17,34 @@ from .errors import DiscoveryError, ValidationError
 
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_placeholder_key(config_path: Path, tool_name: str, copied: bool) -> None:
+    """Loudly warn when a tool's config.json carries the example placeholder.
+
+    After a fresh checkout the bootstrap copies the example — caller passes
+    `copied=True`. The bundle-mount footgun (a `git checkout` clobbering a
+    file at a tracked-but-ignored path) leaves the bootstrap un-touched and
+    the tool boots anyway — caller passes `copied=False`. Either way the
+    tool is about to serve a guessable system key, so the warning text is
+    identical and prominent.
+    """
+    try:
+        cfg = json.loads(config_path.read_text())
+    except (OSError, ValueError):
+        return
+    key = (cfg.get("auth") or {}).get("api_key") or ""
+    if not key.startswith("CHANGE-ME-"):
+        return
+    if copied:
+        prefix = "bootstrapped config.json from config.example.json —"
+    else:
+        prefix = "config.json already exists with —"
+    logger.warning(
+        f"[{tool_name}] {prefix} PLACEHOLDER api_key "
+        f"({key!r}); the tool WILL boot, but every client that tries the "
+        f"placeholder will 401. Set a real key in {config_path} (or via "
+        f"<NAME>_API_KEY / MCP_API_KEY env vars) before serving clients.")
 
 
 @dataclass
@@ -187,9 +216,16 @@ class ToolDiscovery:
         with a deterministic placeholder key instead of a random generated one
         (see _resolve_api_key in tools/shared/server_factory.py). Never
         overwrites an existing config.json.
+
+        Also: warn loudly when an EXISTING config.json carries the placeholder
+        key. That is the shape after a bundle-mode file was clobbered by a
+        git-checkout over an ignored path, or after a fresh harvest that
+        failed to carry the real key. Either way the tool is about to come
+        up with CHANGE-ME-... and serve a guessable system key.
         """
         config_path = tool_dir / "config.json"
         if config_path.exists():
+            _warn_placeholder_key(config_path, tool_dir.name, copied=False)
             return
         example_path = tool_dir / "config.example.json"
         if not example_path.exists():
@@ -202,12 +238,7 @@ class ToolDiscovery:
                 f"config.example.json: {e}"
             )
             return
-        logger.warning(
-            f"[{tool_dir.name}] bootstrapped config.json from "
-            "config.example.json — it carries the PLACEHOLDER "
-            "CHANGE-ME-... api_key; set a real key in config.json or a "
-            "<NAME>_API_KEY env var before serving clients"
-        )
+        _warn_placeholder_key(config_path, tool_dir.name, copied=True)
 
     def _discover_tool(self, file_path: Path) -> ToolMetadata:
         """
