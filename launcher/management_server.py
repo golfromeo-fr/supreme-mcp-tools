@@ -919,6 +919,90 @@ class ManagementServer:
 
         # === Per-Tool Auth Management ===
 
+        @self.app.put("/api/tools/{tool_name}/config")
+        async def put_tool_config(
+            tool_name: str,
+            request: Request,
+            _: bool = Depends(self._verify_api_key)
+        ):
+            """Full config write for a tool — the ONLY sanctioned writer of
+            tools/<name>/config.json (pod-UI central persistence, audit (d)
+            design P1). Validates, writes atomically, refuses read-only
+            mounts with a actionable 409, mirrors a redacted copy to the
+            shared state in db mode, and logs which top-level keys changed
+            (never values)."""
+            import json as json_mod
+            from pathlib import Path
+
+            if ".." in tool_name or "/" in tool_name or "\\" in tool_name:
+                raise HTTPException(status_code=400, detail="Invalid tool name")
+            config_path = Path(__file__).parent.parent / "tools" / tool_name / "config.json"
+            if not config_path.resolve().parent.parent.name == "tools":
+                raise HTTPException(status_code=400, detail="Invalid tool name")
+            if not config_path.exists():
+                raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+            try:
+                new_config = await request.json()
+            except Exception:
+                raise HTTPException(status_code=400, detail="Body must be a JSON object")
+            if not isinstance(new_config, dict):
+                raise HTTPException(status_code=400, detail="Body must be a JSON object")
+            # lock-out guard: a config without a usable system key would lock
+            # every client out of the tool on next boot
+            auth_block = new_config.get("auth")
+            if not isinstance(auth_block, dict) or not isinstance(auth_block.get("api_key"), str) \
+                    or not auth_block["api_key"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="config.auth.api_key must be a non-empty string")
+
+            try:
+                with config_path.open() as f:
+                    old_config = json_mod.load(f)
+            except Exception:
+                old_config = {}
+
+            from tools.shared.atomic_io import atomic_write_json
+            try:
+                atomic_write_json(config_path, new_config)
+            except OSError as e:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"config path is not writable ({e.strerror}) — edit the "
+                            "bundle and re-run startcluster, or remount the "
+                            "config read-write"))
+
+            # M4: mirror a redacted copy to the shared state (db mode) so a
+            # second node adopts the shape at boot; the raw file is the truth.
+            shared_state_updated = False
+            if cluster.is_db_mode():
+                try:
+                    import copy
+
+                    from tools.shared import state_docs
+                    redacted = copy.deepcopy(new_config)
+                    if isinstance(redacted.get("auth"), dict) and redacted["auth"].get("api_key"):
+                        redacted["auth"]["api_key"] = "***"
+                    shared_state_updated = state_docs.save_doc(
+                        f"tools_config_{tool_name}", redacted)
+                except Exception as e:
+                    logger.warning(f"tools_config_{tool_name} state mirror failed: {e}")
+
+            changed = sorted(
+                {k for k in set(old_config) | set(new_config)
+                 if old_config.get(k) != new_config.get(k)})
+            logger.info(
+                f"[central.access] PUT /api/tools/{tool_name}/config — "
+                f"keys changed: {changed or 'none'}")
+
+            return {
+                "success": True,
+                "tool": tool_name,
+                "changed_keys": changed,
+                "shared_state_updated": shared_state_updated,
+            }
+
         @self.app.get("/api/tools/{tool_name}/auth")
         async def get_tool_auth(
             tool_name: str,

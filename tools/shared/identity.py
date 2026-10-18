@@ -92,6 +92,12 @@ class IdentityGateMiddleware(Middleware):
 
     on_list_tools / on_discover: drop masked tools from the result.
     on_call_tool: reject masked tools with "Unknown tool" (no existence leak).
+
+    H-series parity note (2026-10-18): as of today NO tool registers MCP
+    prompts or resources (verified repo-wide), so tool-call gating is the
+    whole surface. The first `@mcp.prompt` / `@mcp.resource` registration
+    MUST extend this middleware (on_list_prompts / on_read_resource hooks,
+    same masked/role logic) or that surface ships ungated.
     """
 
     def __init__(

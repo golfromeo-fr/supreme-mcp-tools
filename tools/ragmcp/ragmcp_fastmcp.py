@@ -182,6 +182,17 @@ EMBEDDING_MODEL_PRESETS = {
     "auto": {"provider": "local", "model": "bge-m3", "dimensions": 1024},
     "fast": {"provider": "local", "model": "base", "dimensions": 768},
     "high-quality": {"provider": "azure", "model": "text-embedding-3-large", "dimensions": 3072},
+    # OPTIONAL availability-dependent provider (2026-10-18): free NVIDIA
+    # embeddings via OpenRouter. Nobody guarantees the model's availability —
+    # the embedding_gate latch treats outages as expected, and the P2 lane
+    # machinery gives this fingerprint its OWN collection, so trying it never
+    # touches existing indexes.
+    "nvidia-free": {
+        "provider": "openrouter",
+        "model": os.getenv("OPENROUTER_EMBEDDING_MODEL",
+                           "nvidia/nemotron-nemotron-nano-9b-v2"),
+        "dimensions": 2048,
+    },
 }
 
 # Global model cache
@@ -1046,6 +1057,39 @@ async def _embed_query(query: str, preset: dict | None = None) -> list[float]:
             return query_vector
         except Exception:
             embedding_gate.record_failure(azure_api_url)
+            raise
+
+    if provider == 'openrouter':
+        # OPTIONAL provider (free NVIDIA embeddings via OpenRouter) — same
+        # OpenAI-compatible body as the azure path, availability-gated by
+        # embedding_gate; errors name the local presets as the offline route.
+        import httpx
+        url = os.getenv('OPENROUTER_BASE', 'https://openrouter.ai/api/v1/embeddings')
+        model = (preset or {}).get('model') or os.getenv(
+            'OPENROUTER_EMBEDDING_MODEL', 'nvidia/nemotron-nemotron-nano-9b-v2')
+        api_key = os.getenv('OPENROUTER_KEY', '')
+
+        if not api_key:
+            raise ValueError(
+                "OPENROUTER_KEY not set — the 'nvidia-free' preset needs it. "
+                "Availability is not guaranteed; use the 'auto' (local bge-m3) "
+                "or 'fast' (local bge-base) presets for offline work.")
+
+        embedding_gate.check(url)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    headers={"Content-Type": "application/json",
+                             "Authorization": f"Bearer {api_key}"},
+                    json={"input": [query], "model": model}
+                )
+                response.raise_for_status()
+                query_vector = response.json()['data'][0]['embedding']
+            embedding_gate.record_success()
+            return query_vector
+        except Exception:
+            embedding_gate.record_failure(url)
             raise
     else:
         if not LOCAL_EMBEDDINGS_AVAILABLE:

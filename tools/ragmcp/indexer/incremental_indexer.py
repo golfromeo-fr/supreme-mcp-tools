@@ -86,7 +86,7 @@ QDRANT_HOST = os.getenv('QDRANT_HOST', 'qdrant')
 QDRANT_PORT = int(os.getenv('QDRANT_PORT', '6333'))
 
 # Embedding provider configuration
-EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'local').lower()  # 'azure' or 'local'
+EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'local').lower()  # 'azure' | 'local' | 'openrouter'
 LOCAL_EMBEDDING_MODEL = os.getenv('LOCAL_EMBEDDING_MODEL', 'bge-m3')
 
 # Azure OpenAI configuration (only used when EMBEDDING_PROVIDER=azure)
@@ -95,6 +95,14 @@ AZURE_EMBEDDING_API_URL = os.getenv('AZURE_EMBEDDING_API_URL',
 AZURE_EMBEDDING_MODEL = os.getenv('AZURE_EMBEDDING_MODEL', 'text-embedding-3-large')
 AZURE_EMBEDDING_DIMENSIONS = int(os.getenv('AZURE_EMBEDDING_DIMENSIONS', '3072'))
 AZURE_API_KEY = os.getenv('AI_API_KEY', '')
+
+# OpenRouter (OPTIONAL availability-dependent provider — free NVIDIA
+# embeddings via an OpenAI-compatible endpoint; nobody guarantees model
+# availability, and the embedding_gate latch treats outages as expected).
+OPENROUTER_BASE = os.getenv('OPENROUTER_BASE', 'https://openrouter.ai/api/v1/embeddings')
+OPENROUTER_EMBEDDING_MODEL = os.getenv('OPENROUTER_EMBEDDING_MODEL',
+                                       'nvidia/nemotron-nemotron-nano-9b-v2')
+OPENROUTER_KEY = os.getenv('OPENROUTER_KEY', '')
 
 # Determine embedding dimensions based on provider
 # Normalize the org prefix ('BAAI/bge-m3' -> 'bge-m3'): the env var carries
@@ -108,6 +116,9 @@ if EMBEDDING_PROVIDER == 'local':
     else:
         EMBEDDING_DIMENSIONS = 768
     logger.info(f"Using local embeddings: {LOCAL_EMBEDDING_MODEL_NORM} model ({EMBEDDING_DIMENSIONS} dims)")
+elif EMBEDDING_PROVIDER == 'openrouter':
+    EMBEDDING_DIMENSIONS = 2048
+    logger.info(f"Using OpenRouter embeddings: {OPENROUTER_EMBEDDING_MODEL} (2048 dims) — availability NOT guaranteed")
 else:
     EMBEDDING_DIMENSIONS = AZURE_EMBEDDING_DIMENSIONS
     logger.info(f"Using Azure embeddings: {AZURE_EMBEDDING_MODEL} ({EMBEDDING_DIMENSIONS} dims)")
@@ -507,12 +518,45 @@ def generate_embeddings_local_sync(texts: list[str]) -> list[list[float]]:
         raise
 
 
+async def generate_embeddings_openrouter(texts: list[str]) -> list[list[float]]:
+    """Generate embeddings via OpenRouter's OpenAI-compatible endpoint
+    (OPTIONAL provider — availability not guaranteed; failures latch the
+    endpoint through embedding_gate)."""
+    if not OPENROUTER_KEY:
+        raise ValueError("OPENROUTER_KEY environment variable not set")
+
+    embedding_gate.check(OPENROUTER_BASE)
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(
+                OPENROUTER_BASE,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": OPENROUTER_EMBEDDING_MODEL,
+                    "input": texts
+                }
+            )
+            response.raise_for_status()
+            embeddings = [item['embedding'] for item in response.json()['data']]
+            embedding_gate.record_success()
+            return embeddings
+        except Exception as e:
+            embedding_gate.record_failure(OPENROUTER_BASE)
+            logger.error(f"OpenRouter embedding error: {e}")
+            raise
+
+
 async def get_embeddings(texts: list[str]) -> list[list[float]]:
     """Get embeddings using configured provider."""
     if EMBEDDING_PROVIDER == 'local':
         # Run local embeddings in executor to avoid blocking
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, generate_embeddings_local_sync, texts)
+    elif EMBEDDING_PROVIDER == 'openrouter':
+        return await generate_embeddings_openrouter(texts)
     else:
         return await generate_embeddings_azure(texts)
 
@@ -606,6 +650,8 @@ async def index_file(file_path: Path, workspace_root: Path, collection_name: str
                 logger.error(f"Failed to generate dense embeddings: {e}")
                 if EMBEDDING_PROVIDER == 'azure' and not AZURE_API_KEY:
                     logger.error("Azure provider selected but AI_API_KEY not set")
+                if EMBEDDING_PROVIDER == 'openrouter' and not OPENROUTER_KEY:
+                    logger.error("OpenRouter provider selected but OPENROUTER_KEY not set")
                 return 0
 
         # Generate sparse vectors (if enabled)

@@ -271,10 +271,12 @@ class TestLOW15FileSizeReduction(unittest.TestCase):
         line_count = len(source.split("\n"))
         # LOW-15 baseline was ~2070; P2 embedding lanes (plans/
         # odysseus-reuse-2026-10-06.md) legitimately added ~160 lines of
-        # feature code — ceiling raised so the guard still trips on
+        # feature code; the 2026-10-18 batch (openrouter branch, path-guard
+        # wrappers, grant resolution) added ~90 more — ceiling raised so the
+        # guard still trips on
         # re-grown DEAD code, not features.
-        self.assertLess(line_count, 2500,
-                       f"Expected <2500 lines after cleanup + P2 lanes, found {line_count}")
+        self.assertLess(line_count, 2600,
+                       f"Expected <2600 lines after cleanup + P2 lanes + guards, found {line_count}")
 
 
 if __name__ == "__main__":
