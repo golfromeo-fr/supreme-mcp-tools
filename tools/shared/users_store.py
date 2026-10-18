@@ -402,7 +402,14 @@ def set_enabled(username: str, enabled: bool) -> None:
 
 
 def set_role(username: str, role: str) -> None:
-    """Change a user's role (user|admin). Refuses to demote the last admin."""
+    """Change a user's role (user|admin). Refuses to demote the last admin.
+
+    Demotion to `user` merges the role=user default-mask profile
+    (DEFAULT_USER_MASKS — destructive functions) into the record's existing
+    masks: an ex-admin starts from creation-time-empty masks and would
+    otherwise reach the destructive surface the user profile deliberately
+    pre-masks (E3.5 force-mask TODO closure, 2026-10-18). Admin-set masks
+    are never removed."""
     if role not in ("admin", "user"):
         raise ValueError("role must be 'admin' or 'user'")
     record = _require(get_user_record(username), username)
@@ -411,6 +418,14 @@ def set_role(username: str, role: str) -> None:
     if record["role"] == "admin" and role != "admin":
         _refuse_last_admin(store, username)
     record["role"] = role
+    if role == "user":
+        current = dict(record.get("masked_functions") or {})
+        defaults = _default_masks_for("user", sorted(set(current) | set(record.get("servers") or [])))
+        for server, fns in defaults.items():
+            merged = set(current.get(server, [])) | set(fns)
+            if merged:
+                current[server] = sorted(merged)
+        record["masked_functions"] = current
     _touch(record)
     save_users(store)
     logger.info(f"user '{username}' role -> {role}")
