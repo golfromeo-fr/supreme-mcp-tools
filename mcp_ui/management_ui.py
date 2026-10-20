@@ -318,6 +318,18 @@ def try_login_user(username: str, password: str) -> dict:
     """
     if not _multi_user_mode():
         if verify_credentials(username, password):
+            # P1-1 mono twin (review 2026-10-18): the store-seeding path
+            # refuses the default password on a non-loopback bind — the
+            # mono env-pair login must not open it either. Only the literal
+            # DEFAULT password is refused; an operator-set MCP_UI_PASSWORD
+            # is fine on any bind.
+            stored_password = os.environ.get(ENV_PASSWORD) or "admin"
+            from tools.shared.users_store import _ui_bind_non_loopback
+            if stored_password == "admin" and _ui_bind_non_loopback():
+                raise ValueError(
+                    "default admin/admin login refused on a non-loopback "
+                    "bind — set MCP_UI_PASSWORD (and MCP_UI_USERNAME if "
+                    "wanted) first")
             # servers=None → sidebar unrestricted (mono sees every tool)
             return {"username": username or "admin", "role": "admin",
                     "mcp_key": None, "authenticated": True, "servers": None}

@@ -554,43 +554,73 @@ def _assert_preset_grant(connection: str | None) -> None:
     """E3.5: check preset grants ON THE EVENT LOOP (before to_thread).
     Non-admin callers may only use presets granted via db_presets.
     Runs on the event loop because get_http_request() needs the HTTP
-    request context. Fail-open for mono mode / non-HTTP scope."""
-    if not connection:
-        return
+    request context.
+
+    connection=None resolves to the registry's ACTIVE entry — under the
+    user-store verifier a non-admin caller must have that entry grant-backed
+    (a granted preset), never the legacy env default and never another
+    caller's connection (review 2026-10-18: the None path used to skip the
+    check entirely). Anomaly paths fail CLOSED under the user-store verifier
+    and fail open in mono (same discriminator as
+    connections._current_caller_grants)."""
     verifier = getattr(mcp, "auth", None)
     get_tokens = getattr(verifier, "tokens", None)
     if get_tokens is None:
         logger.warning("preset-grant check skipped: no verifier/tokens (verifier=%r)", verifier)
         return
+    user_store = bool(getattr(verifier, "is_user_store", False))
     try:
         from fastmcp.server.dependencies import get_http_request
         request = get_http_request()
     except Exception as e:
+        if user_store:
+            raise PermissionError(
+                "identity could not be resolved for the preset-grant check")
         logger.warning("preset-grant check skipped: no HTTP context (%s: %s)", type(e).__name__, e)
         return
     auth = (request.headers.get("authorization", "") or "")
     token = auth[7:] if auth.lower().startswith("bearer ") else \
         request.headers.get("x-api-key")
     if not token:
+        if user_store:
+            raise PermissionError("no credentials on the request — preset use requires them")
         logger.warning("preset-grant check skipped: no token in request headers")
         return
     entry = get_tokens().get(token)
     if entry is None:
+        if user_store:
+            raise PermissionError(
+                f"caller token not in the user store (map size={len(get_tokens())})")
         logger.warning("preset-grant check skipped: caller token not in map (map size=%d)", len(get_tokens()))
         return
     role = entry.get("role", "admin")  # legacy mono map = admin
     if role == "admin":
         return
     granted = set(entry.get("db_presets") or [])
+
+    # Resolve the TARGET connection: the explicit name, or the active entry
+    # the call would ride (without triggering the legacy-default lazy connect).
+    target = connection or REGISTRY.active_name()
+    if not target:
+        raise PermissionError(
+            "no active database connection — non-admin callers must use a "
+            "granted preset (connect_preset('NN') or query(sql, connection='NN'))"
+        )
     try:
-        preset = presets.get_preset(connection)
+        preset = presets.get_preset(target)
     except LookupError as e:
-        logger.warning("preset-grant check skipped: preset lookup failed: %s", e)
-        return
+        if connection:
+            # unknown explicit name: registry.get raises its own error later
+            logger.warning("preset-grant check skipped: preset lookup failed: %s", e)
+            return
+        raise PermissionError(
+            f"the active connection '{target}' is not a granted preset — "
+            "non-admin callers may only use granted presets"
+        )
     if preset.number not in granted and preset.name not in granted \
             and preset.connection_name not in granted:
         raise PermissionError(
-            f"Preset '{connection}' is not granted to your account "
+            f"Preset '{connection or target}' is not granted to your account "
             f"({entry.get('client_id', 'unknown')})."
         )
 

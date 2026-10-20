@@ -17,12 +17,17 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _identified_admin(monkeypatch):
-    """Audit P2-3 (2026-10-17): unresolved identities fail closed in multi
-    mode. These tests exercise registry/tx/bypass mechanics as an IDENTIFIED
-    admin; per-test overrides of _current_caller_grants still win."""
+    """Audit P2-3 (2026-10-17) + review fix (2026-10-18): unresolved
+    identities fail closed in multi mode — both at _current_caller_grants
+    and at _assert_preset_grant (the connection=None active-entry check).
+    These tests exercise registry/tx/bypass mechanics as an IDENTIFIED
+    admin; per-test overrides still win."""
     import connections
+    import db_tools
     monkeypatch.setattr(connections, "_current_caller_grants",
                         lambda: ("admin", "admin", []))
+    monkeypatch.setattr(db_tools, "_assert_preset_grant",
+                        lambda connection: None)
 
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..", "tools", "databasemcp")))
 
