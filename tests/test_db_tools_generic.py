@@ -9,6 +9,15 @@ from pathlib import Path
 
 import pytest
 
+
+# Review fix 2026-10-18: preset-grant checks fail closed for unresolvable
+# identities under the user-store verifier. These tests exercise generic
+# query/execute/schema mechanics in-process (no HTTP identity).
+@pytest.fixture(autouse=True)
+def _skip_grant_check(monkeypatch):
+    import db_tools
+    monkeypatch.setattr(db_tools, "_assert_preset_grant", lambda connection: None)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))

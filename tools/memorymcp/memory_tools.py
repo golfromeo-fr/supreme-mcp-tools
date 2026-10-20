@@ -69,11 +69,19 @@ def _memory_caller() -> tuple[str | None, bool, bool]:
 
     scoped=False when identity is not applicable: mono mode (legacy single
     verifier without role entries), in-memory tests, or no auth header —
-    the pre-E3 unrestricted behavior. role=admin sees/is allowed everything."""
+    the pre-E3 unrestricted behavior. role=admin sees/is allowed everything.
+
+    With the user-store verifier installed (multi mode), an UNRESOLVABLE
+    identity fails CLOSED (review 2026-10-18): the caller gets a distinct
+    "unknown" owner namespace instead of the legacy/unscoped one, so an
+    anonymous or broken request can never read or dedup-collide with
+    admin-owned memories. Same discriminator as
+    databasemcp.connections._current_caller_grants."""
     verifier = getattr(mcp, "auth", None)
     get_tokens = getattr(verifier, "tokens", None)
+    user_store = bool(getattr(verifier, "is_user_store", False))
     if get_tokens is None:
-        return None, False, False
+        return ("unknown", False, True) if user_store else (None, False, False)
     try:
         from fastmcp.server.dependencies import get_http_request
         request = get_http_request()
@@ -81,12 +89,12 @@ def _memory_caller() -> tuple[str | None, bool, bool]:
         token = auth[7:] if auth.lower().startswith("bearer ") else \
             request.headers.get("x-api-key")
     except Exception:
-        return None, False, False
+        return ("unknown", False, True) if user_store else (None, False, False)
     if not token:
-        return None, False, False
+        return ("unknown", False, True) if user_store else (None, False, False)
     entry = get_tokens().get(token)
     if entry is None:
-        return None, False, False
+        return ("unknown", False, True) if user_store else (None, False, False)
     return entry.get("client_id"), entry.get("role") == "admin", True
 
 # For FEF V3 extensions

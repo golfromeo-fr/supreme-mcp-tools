@@ -196,6 +196,15 @@ class ConnectionRegistry:
             "— db_type: oracle | postgres | libsql"
         )
 
+    def active_name(self) -> str | None:
+        """Name of the active entry WITHOUT creating the legacy default.
+
+        get(None) lazily connects the env-default Oracle on first use; callers
+        that only need the active NAME (the E3.5 grant check) must not
+        trigger that side effect."""
+        with self._map_lock:
+            return self._active
+
     def set_active(self, name: str) -> ConnectionEntry:
         with self._map_lock:
             entry = self._entries.get(name)

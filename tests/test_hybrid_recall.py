@@ -25,6 +25,15 @@ for p in (str(REPO), str(REPO / "tools"), str(REPO / "tools" / "memorymcp")):
 from shared.relevance_scorer import blend_hybrid, normalize_keyword_rows, type_boost
 
 
+# Review fix 2026-10-18: _memory_caller fails closed (scoped "unknown" owner)
+# for unresolvable identities under the user-store verifier. These integration
+# tests exercise recall mechanics as an IDENTIFIED admin.
+@pytest.fixture(autouse=True)
+def _identified_admin(monkeypatch):
+    import memory_tools as mt
+    monkeypatch.setattr(mt, "_memory_caller", lambda: ("admin", True, True))
+
+
 # ---------------------------------------------------------------------------
 # pure helpers
 # ---------------------------------------------------------------------------
