@@ -93,7 +93,7 @@ def page() -> None:
                           on_click=lambda e=env_key: _confirm_clean(e)) \
                     .classes("w-full").props("color=negative") \
                     .tooltip("removes containers"
-                             + (" AND the state volume (users/masks)" if e == "work"
+                             + (" AND the state volume (users/masks)" if env_key == "work"
                                 else " (volumes kept)"))
 
         ui.separator()
