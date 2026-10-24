@@ -13,10 +13,13 @@ import pytest
 # Review fix 2026-10-18: preset-grant checks fail closed for unresolvable
 # identities under the user-store verifier. These tests exercise generic
 # query/execute/schema mechanics in-process (no HTTP identity).
+# Review fix 2026-10-24 (F1): raw connect_database gained the same admin-only
+# gate — bypassed here for the same reason (mechanics, not identity).
 @pytest.fixture(autouse=True)
 def _skip_grant_check(monkeypatch):
     import db_tools
     monkeypatch.setattr(db_tools, "_assert_preset_grant", lambda connection: None)
+    monkeypatch.setattr(db_tools, "_refuse_non_admin", lambda action: None)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:

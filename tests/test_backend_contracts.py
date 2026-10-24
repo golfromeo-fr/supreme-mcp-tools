@@ -352,3 +352,76 @@ def test_escape_fts5_query():
     assert escape_fts5_query("a OR b") == '"a" OR "OR" OR "b"'
     assert escape_fts5_query("") == '""'
     assert escape_fts5_query("   ") == '""'
+
+
+# ---------------------------------------------------------------------------
+# S2 (review 2026-10-24): PostgresVectorStore query methods must bind params
+# in the SQL's textual placeholder order, WITH filters. query_dense shipped
+# with 4 placeholders vs 3 params (every call raised ProgrammingError);
+# sparse/hybrid shifted filter params past LIMIT. These cases run only when
+# PG is reachable — they are the coverage whose absence hid S2.
+# ---------------------------------------------------------------------------
+
+def _s2_seed(store, name):
+    # 'common' is the shared token — websearch_to_tsquery is AND semantics,
+    # so multi-term queries only match docs holding EVERY term.
+    store.ensure_collection(name, dense_dim=DIM, sparse=True)
+    store.upsert(name, [
+        PointStruct(id="a", vector=[1.0, 0.0, 0.0, 0.0], payload={"owner": "alice", "codeChunk": "common alpha widget parser"}),
+        PointStruct(id="b", vector=[0.0, 1.0, 0.0, 0.0], payload={"owner": "bob", "codeChunk": "common beta gadget builder"}),
+    ])
+
+
+def _s2_filter(owner):
+    return Filter(must=[FieldCondition(key="owner", match=MatchValue(value=owner))])
+
+
+def test_query_dense_no_filter_pg(pg_vec):
+    store, created = pg_vec
+    created.append("s2dense")
+    _s2_seed(store, "s2dense")
+    hits = store.query_dense("s2dense", [1.0, 0.0, 0.0, 0.0], limit=5)
+    assert sorted(h.id for h in hits) == ["a", "b"]
+
+
+def test_query_dense_with_filter_pg(pg_vec):
+    store, created = pg_vec
+    created.append("s2densef")
+    _s2_seed(store, "s2densef")
+    hits = store.query_dense("s2densef", [1.0, 0.0, 0.0, 0.0], limit=5, filter=_s2_filter("alice"))
+    assert [h.id for h in hits] == ["a"]
+
+
+def test_query_sparse_with_filter_pg(pg_vec):
+    store, created = pg_vec
+    created.append("s2sparse")
+    _s2_seed(store, "s2sparse")
+    empty = SparseVector(indices=[], values=[])
+    # 'widget' lives only in alice's text; a bob filter must exclude it
+    hits = store.query_sparse("s2sparse", empty, limit=5, query_text="widget",
+                              filter=_s2_filter("bob"))
+    assert [h.id for h in hits] == []
+    hits_alice = store.query_sparse("s2sparse", empty, limit=5, query_text="widget",
+                                    filter=_s2_filter("alice"))
+    assert [h.id for h in hits_alice] == ["a"]
+
+
+def test_query_hybrid_no_filter_pg(pg_vec):
+    store, created = pg_vec
+    created.append("s2hybrid")
+    _s2_seed(store, "s2hybrid")
+    empty = SparseVector(indices=[], values=[])
+    hits = store.query_hybrid("s2hybrid", [1.0, 0.0, 0.0, 0.0], empty,
+                              limit=5, query_text="common")
+    assert sorted(h.id for h in hits) == ["a", "b"]
+
+
+def test_query_hybrid_with_filter_pg(pg_vec):
+    store, created = pg_vec
+    created.append("s2hybridf")
+    _s2_seed(store, "s2hybridf")
+    empty = SparseVector(indices=[], values=[])
+    hits = store.query_hybrid("s2hybridf", [1.0, 0.0, 0.0, 0.0], empty,
+                              limit=5, query_text="common",
+                              filter=_s2_filter("alice"))
+    assert [h.id for h in hits] == ["a"]

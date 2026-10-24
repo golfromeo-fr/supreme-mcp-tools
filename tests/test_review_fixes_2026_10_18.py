@@ -173,3 +173,90 @@ def test_mono_default_login_ok_on_loopback(ui_env, monkeypatch):
     monkeypatch.setenv("MCP_UI_HOST", "127.0.0.1")
     session = ui_env.try_login_user("admin", "admin")
     assert session["authenticated"] is True
+
+
+# ---------------------------------------------------------------------------
+# 4. F1 (review 2026-10-24): the grant gate covers EVERY entry point
+# ---------------------------------------------------------------------------
+
+import asyncio
+
+
+def _ungranted_active(grant_env):
+    """Active entry 'default' — an existing registry entry that is NOT a
+    granted preset (the worker is granted only preset '02')."""
+    from connections import ConnectionEntry
+    grant_env._entries["default"] = ConnectionEntry(
+        name="default", dialect="oracle", params={}, handle=object())
+    grant_env._active = "default"
+    return grant_env
+
+
+def test_explicit_existing_entry_refused(grant_env, monkeypatch):
+    """An explicit name that is a LIVE registry entry but not a granted
+    preset must be refused — the old code skipped the check entirely."""
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError, match="not a granted preset"):
+        db_tools._assert_preset_grant("default")
+
+
+def test_batch_statements_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.execute_sql(statements=["SELECT 1 FROM DUAL"]))
+
+
+def test_begin_transaction_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.begin_transaction())
+
+
+def test_metadata_tools_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.get_schemas("SOMETABLE", connection="default"))
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.list_tables(connection="default"))
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.explain_plan("SELECT 1", connection="default"))
+
+
+def test_use_database_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.use_database("default"))
+
+
+def test_connect_database_refused_for_non_admin(grant_env, monkeypatch):
+    import db_tools
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError, match="admin-only"):
+        asyncio.run(db_tools.connect_database(
+            "zz-raw", "postgres",
+            {"host": "h", "dbname": "d", "user": "u", "password": "p"}))
+    # refused BEFORE any connect attempt — nothing registered
+    assert "zz-raw" not in grant_env._entries
+
+
+def test_connect_database_ok_for_mono(grant_env, monkeypatch):
+    """Mono verifier: raw connects keep working (fail-open by design)."""
+    import core
+    import db_tools
+    monkeypatch.setattr(core.mcp, "auth", _MonoVerifier(
+        {"sys": {"client_id": "databasemcp"}}), raising=False)
+    _break_http(monkeypatch)
+    # A libsql file::memory: connect is cheap and side-effect free
+    result = asyncio.run(db_tools.connect_database(
+        "zz-mono", "libsql", {"url": "file::memory:"}))
+    assert "Connected 'zz-mono'" in result

@@ -176,18 +176,21 @@ class PostgresVectorStore:
         collection = _s(collection)
         vec_str = _serialize_vector(vec)
         where, params = _filter_to_sql(filter)
-        where_clause = f"AND {where}" if where else ""
-        params = [vec_str, vec_str, limit] + params
+        where_clause = f"WHERE {where}" if where else ""
+        # Placeholder order is textual: similarity-vec, [filter...], order-vec,
+        # limit. (Review 2026-10-24 S2: the old list dropped the filter params
+        # after LIMIT and carried a 4th placeholder the list never bound —
+        # psycopg ProgrammingError on every call.)
+        all_params = [vec_str] + params + [vec_str, limit]
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload,
                        1 - (embedding <=> %s::vector) AS similarity
                 FROM vec_{collection}
-                WHERE 1 - (embedding <=> %s::vector) > -1
                 {where_clause}
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
-            """, tuple(params)).fetchall()
+            """, tuple(all_params)).fetchall()
         results = []
         for row in rows:
             results.append(ScoredPoint(
@@ -211,7 +214,9 @@ class PostgresVectorStore:
         tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
-        params = [tsquery_term, tsquery_term, limit] + params
+        # Textual placeholder order: ts_rank q, @@ q, [filter...], limit
+        # (S2: filter params used to land after LIMIT).
+        all_params = [tsquery_term, tsquery_term] + params + [limit]
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload, ts_rank(search_vector, {tsquery_sql}) AS score
@@ -220,7 +225,7 @@ class PostgresVectorStore:
                 {where_clause}
                 ORDER BY score DESC
                 LIMIT %s
-            """, tuple(params)).fetchall()
+            """, tuple(all_params)).fetchall()
         return [ScoredPoint(
             id=str(row["id"]),
             score=float(row["score"]),
@@ -236,7 +241,10 @@ class PostgresVectorStore:
         tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
-        params = [vec_str, vec_str, tsquery_term, tsquery_term, limit] + params
+        # Textual placeholder order: similarity-vec, ts_rank q, @@ q,
+        # [filter...], limit (S2: the old list bound a phantom second vec and
+        # pushed filter params past LIMIT).
+        all_params = [vec_str, tsquery_term, tsquery_term] + params + [limit]
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload,
@@ -247,7 +255,7 @@ class PostgresVectorStore:
                 {where_clause}
                 ORDER BY combined DESC
                 LIMIT %s
-            """, tuple(params)).fetchall()
+            """, tuple(all_params)).fetchall()
         return [ScoredPoint(
             id=str(row["id"]),
             score=float(row["combined"]),
