@@ -177,3 +177,29 @@ class TestRagmcpSparseSearch:
             file_type="py",
         )
         assert "get_movement_type" not in result_empty
+
+
+# ---------------------------------------------------------------------------
+# R2 (review 2026-10-24): stale-file deletion must be an EXACT filePath match
+# ---------------------------------------------------------------------------
+
+def test_remove_stale_files_exact_match_only(tmp_path):
+    """Deleting stale 'b/utils.py' must NOT also delete 'a/b/utils.py' chunks
+    — the old MatchText filter was a substring/full-text match."""
+    from indexer.incremental_indexer import remove_stale_files, MetadataStore
+    from shared.impls.turso_vector import TursoVectorStore
+    from shared.store_models import PointStruct
+
+    store = TursoVectorStore(url="file::memory:")
+    store.ensure_collection("r2probe", dense_dim=2, sparse=True)
+    store.upsert("r2probe", [
+        PointStruct(id="p1", vector=[1.0, 0.0], payload={"filePath": "b/utils.py", "codeChunk": "stale file content"}),
+        PointStruct(id="p2", vector=[0.0, 1.0], payload={"filePath": "a/b/utils.py", "codeChunk": "live file content"}),
+    ])
+    meta = MetadataStore(tmp_path / "meta.json")
+
+    remove_stale_files(["b/utils.py"], "r2probe", store, meta)
+
+    survivors = {p.payload["filePath"]: str(p.id) for p in store.iter_all("r2probe")}
+    assert "a/b/utils.py" in survivors, "substring casualty: the live file's chunks were deleted"
+    assert "b/utils.py" not in survivors, "the stale file itself should be gone"

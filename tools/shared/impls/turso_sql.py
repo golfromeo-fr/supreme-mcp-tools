@@ -170,15 +170,13 @@ class TursoSqlStore:
         tags_json = json.dumps(tags)
 
         try:
-            # Check dedup
-            row = self._conn.execute(
-                "SELECT id, rowid, usage_count FROM memories WHERE text_hash = ? AND memory_type = ?",
-                (thash, memory_type),
-            ).fetchone()
-
-            if row:
-                existing_id = str(row[0])
-                existing_rowid = row[1]
+            def _update_existing(row) -> str:
+                """Dedup-update an existing row and re-sync FTS5. ``row`` is
+                (id, rowid, old_text) — external-content FTS5 deletes MUST
+                replay the text as it was INDEXED; deleting with the new text
+                left the old terms in the doclist forever (review 2026-10-24,
+                S3: hash-equal texts can differ in case/whitespace)."""
+                existing_id, existing_rowid, old_text = str(row[0]), row[1], row[2] or ""
                 self._conn.execute("""
                     UPDATE memories SET
                         text = ?, tags = ?, source = ?,
@@ -189,10 +187,9 @@ class TursoSqlStore:
                     WHERE id = ?
                 """, (text, tags_json, source, path, commit, agent_id,
                       sensitivity, retention_policy, now, existing_id))
-                # Update FTS5 entry (delete + insert, since content table sync)
                 self._conn.execute(
                     "INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', ?, ?)",
-                    (existing_rowid, text),
+                    (existing_rowid, old_text),
                 )
                 self._conn.execute(
                     "INSERT INTO memories_fts(rowid, text) VALUES (?, ?)",
@@ -201,25 +198,44 @@ class TursoSqlStore:
                 logger.info(f"Turso: dedup update for memory {existing_id}")
                 return existing_id
 
-            # Insert new (ON CONFLICT handles race)
+            # Check dedup (id, rowid, OLD text — the FTS delete needs it)
+            row = self._conn.execute(
+                "SELECT id, rowid, text FROM memories WHERE text_hash = ? AND memory_type = ?",
+                (thash, memory_type),
+            ).fetchone()
+
+            if row:
+                return _update_existing(row)
+
+            # Insert new. ON CONFLICT (a concurrent writer landed the same
+            # hash between the SELECT and this INSERT) does NOTHING here —
+            # the re-read below then routes through _update_existing with the
+            # WINNER's text as the old text, so FTS stays consistent (the old
+            # conflict-branch updated text with no FTS sync at all).
             self._conn.execute("""
                 INSERT INTO memories (id, text, text_hash, memory_type, source, tags,
                     path, "commit", agent_id, sensitivity, retention_policy, created_at, last_accessed)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(text_hash, memory_type) DO UPDATE SET
-                    text = excluded.text, tags = excluded.tags,
-                    usage_count = usage_count + 1, last_accessed = excluded.last_accessed
+                ON CONFLICT(text_hash, memory_type) DO NOTHING
             """, (memory_id, text, thash, memory_type, source, tags_json,
                   path, commit, agent_id, sensitivity, retention_policy, now, now))
-            # Add to FTS5 (get rowid from the just-inserted row)
-            fts_row = self._conn.execute(
+            # rowcount is unreliable on libsql — did OUR row land?
+            ours = self._conn.execute(
                 "SELECT rowid FROM memories WHERE id = ?", (memory_id,)
             ).fetchone()
-            if fts_row:
+            if ours:
                 self._conn.execute(
                     "INSERT INTO memories_fts(rowid, text) VALUES (?, ?)",
-                    (fts_row[0], text),
+                    (ours[0], text),
                 )
+                return memory_id
+            # Conflict: re-read the winner and dedup-update (FTS re-synced).
+            row = self._conn.execute(
+                "SELECT id, rowid, text FROM memories WHERE text_hash = ? AND memory_type = ?",
+                (thash, memory_type),
+            ).fetchone()
+            if row:
+                return _update_existing(row)
             return memory_id
 
         except Exception as e:

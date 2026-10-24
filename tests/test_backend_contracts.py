@@ -321,6 +321,35 @@ def test_delete_memory_removes_from_fts(turso_sql):
     assert turso_sql.get_memory(mid) is None
 
 
+@pytest.mark.skipif(not HAS_LIBSQL, reason="libsql_experimental not installed")
+def test_dedup_reupsert_fts_resync(turso_sql):
+    """S3 (review 2026-10-24): a dedup-update whose NEW text carries different
+    tokens than the indexed OLD text must replace the FTS entry — the old
+    'delete' replayed the NEW text, leaving the old terms in the doclist.
+    Natural upserts can't hit this (the hash normalizes case+edges, so tokens
+    match); the exposed path is text_hash_override — bulk import trusts the
+    exported hash, so two token-different texts can share one row."""
+    turso_sql.upsert_memory(
+        "uuid-s3", "hello world bar", "concept",
+        "agent", [], None, None, "a", "low", "auto-delete",
+        text_hash_override="fixed-import-hash",
+    )
+    assert any("bar" in h["text"] for h in turso_sql.search_text("bar"))
+
+    turso_sql.upsert_memory(
+        "uuid-s3b", "completely different foo tokens", "concept",
+        "agent", [], None, None, "a", "low", "auto-delete",
+        text_hash_override="fixed-import-hash",
+    )
+    # New terms searchable, single row, old terms gone from FTS AND table
+    assert any("foo" in h["text"] for h in turso_sql.search_text("foo"))
+    rows = list(turso_sql.iter_all())
+    texts = [r["text"] for r in rows]
+    assert texts.count("completely different foo tokens") == 1
+    assert "hello world bar" not in texts
+    assert not any("bar" in h["text"] for h in turso_sql.search_text("bar"))
+
+
 # ---------------------------------------------------------------------------
 # N4: the inline schema fallback stays in sync with the .sql file
 # ---------------------------------------------------------------------------
