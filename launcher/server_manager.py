@@ -305,9 +305,17 @@ class ServerManager:
         logger.info(f"Stopping server for {tool_name}")
         
         try:
-            # Stop management server first (FEF V3)
+            # Stop management server first (FEF V3) — bounded (C7 / review
+            # 2026-10-24 L1): a pinned-open 81xx websocket must not hang a
+            # single-tool stop.
             if instance.mgmt_server:
-                await instance.mgmt_server.stop()
+                try:
+                    await asyncio.wait_for(
+                        instance.mgmt_server.stop(), GRACEFUL_SHUTDOWN_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"mgmt server for {tool_name} did not stop within "
+                        f"{GRACEFUL_SHUTDOWN_TIMEOUT}s — abandoned")
             
             # Unregister from service registry
             if self.service_registry:

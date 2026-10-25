@@ -285,6 +285,38 @@ async def upsertMemory(
                 payload["owner"] = ident[0]
     except Exception:
         pass  # mono mode / non-HTTP scope: no owner concept
+    # M1 (review 2026-10-24): with a SQL store, run its dedup FIRST and use
+    # the resolved id everywhere (artifact key + vector point). The old order
+    # — vector write, then SQL dedup, then remap — left a fresh duplicate
+    # vector point under the new uuid on every hash-equal re-store.
+    actual_id = memory_id
+    if sql_store.is_available:
+        try:
+            actual_id = sql_store.upsert_memory(
+                memory_id=memory_id,
+                text=text,
+                memory_type=memory_type,
+                source=source,
+                tags=tags or [],
+                path=path,
+                commit=commit,
+                agent_id=agent_id,
+                sensitivity=sensitivity,
+                retention_policy=retention_policy,
+                owner=_owner_client_id,
+            )
+        except Exception as e:
+            # A SQL failure must not lose the memory — continue vector-only
+            # (the same posture as the no-SQL mode).
+            logger.error(f"SqlStore upsert failed (continuing vector-only): {e}")
+            actual_id = memory_id
+    if actual_id != memory_id:
+        logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
+        memory_id = actual_id
+        # The dedup target's vector point already exists — refresh it below
+        # and clean up its artifact sidecar if the text replaces it.
+        is_update = True
+
     # When updating, read the existing payload so a replaced artifact sidecar
     # can be cleaned up (no orphaned blobs).
     old_artifact_key = None
@@ -302,35 +334,13 @@ async def upsertMemory(
     if old_artifact_key and old_artifact_key != artifact_key:
         await _delete_artifact_key(old_artifact_key)
 
-    # Upsert to Qdrant
+    # Upsert to Qdrant (single point under the RESOLVED id — no duplicates)
     try:
         vector_store.upsert(
             COLLECTION_NAME,
             [PointStruct(id=memory_id, vector=embedding, payload=payload)]
         )
         logger.info(f"{'Updated' if is_update else 'Stored'} memory {memory_id}")
-
-        # Also store in SQL backend for metadata/dedup (if available).
-        # owner keys the dedup hash namespace (E3/P1) so two users' identical
-        # memories never collapse onto one SQL row.
-        if sql_store.is_available:
-            actual_id = sql_store.upsert_memory(
-                memory_id=memory_id,
-                text=text,
-                memory_type=memory_type,
-                source=source,
-                tags=tags or [],
-                path=path,
-                commit=commit,
-                agent_id=agent_id,
-                sensitivity=sensitivity,
-                retention_policy=retention_policy,
-                owner=_owner_client_id,
-            )
-            if actual_id != memory_id:
-                logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
-                return actual_id
-
         return memory_id
 
     except Exception as e:

@@ -222,3 +222,62 @@ def test_type_boost_applied_in_blend(mt, monkeypatch):
     boosted = run("decision")
     plain = run("concept")
     assert boosted == pytest.approx(plain + 0.05)
+
+
+# ---------------------------------------------------------------------------
+# M1 (review 2026-10-24): upsertMemory SQL-dedup must not leave a duplicate
+# vector point under the fresh uuid.
+# ---------------------------------------------------------------------------
+
+class _RecordingVectorStore(_FakeVectorStore):
+    def __init__(self):
+        super().__init__()
+        self.upserts = []
+
+    def upsert(self, collection, points):
+        for p in points:
+            self.upserts.append(str(p.id))
+            self.stored[str(p.id)] = p
+
+
+class _DedupSqlStore(_FakeSqlStore):
+    """upsert_memory always resolves to one fixed existing row (dedup hit)."""
+    def __init__(self, existing_id):
+        super().__init__()
+        self.existing_id = existing_id
+        self.calls = []
+
+    def upsert_memory(self, memory_id, **kw):
+        self.calls.append(memory_id)
+        return self.existing_id
+
+
+def test_upsert_dedup_no_duplicate_vector_point(mt, monkeypatch):
+    vec = _RecordingVectorStore()
+    sql = _DedupSqlStore(existing_id="existing-row-id")
+    monkeypatch.setattr(mt, "vector_store", vec)
+    monkeypatch.setattr(mt, "sql_store", sql)
+
+    r1 = asyncio.run(mt.upsertMemory("identical memory text", memory_type="concept"))
+    r2 = asyncio.run(mt.upsertMemory("identical memory text", memory_type="concept"))
+
+    assert r1 == "existing-row-id" and r2 == "existing-row-id"
+    # Every vector upsert lands on the RESOLVED id — the fresh uuids the old
+    # order leaked never reach the store.
+    assert set(vec.upserts) == {"existing-row-id"}
+    assert len(vec.upserts) == 2
+
+
+def test_upsert_vector_only_when_sql_fails(mt, monkeypatch):
+    class _BrokenSql(_FakeSqlStore):
+        def upsert_memory(self, memory_id, **kw):
+            raise RuntimeError("sql backend down")
+
+    vec = _RecordingVectorStore()
+    monkeypatch.setattr(mt, "vector_store", vec)
+    monkeypatch.setattr(mt, "sql_store", _BrokenSql())
+
+    result = asyncio.run(mt.upsertMemory("memory text", memory_type="concept"))
+    # Memory still stored vector-only (fail-open, no data loss) under its own id
+    assert result not in ("Error",) and not str(result).startswith("Error")
+    assert len(vec.upserts) == 1

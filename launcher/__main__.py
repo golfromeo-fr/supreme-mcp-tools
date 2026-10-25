@@ -368,24 +368,33 @@ class Launcher:
         self._print_summary()
     
     async def stop(self) -> None:
-        """Stop the launcher."""
+        """Stop the launcher. Every await is deadline-bounded (C7 / review
+        2026-10-24 L2) — a dying launcher must never hold tool ports past the
+        next launcher's 20s retry window. This mirrors launchmcp.py's
+        shutdown, which always had these bounds."""
         logger.info("Stopping MCP Launcher")
-        
+
         self.running = False
-        
-        # Stop all tool servers
-        await self.server_manager.stop_all_servers()
+
+        # Stop all tool servers (hard deadline like launchmcp.py:993-999)
+        try:
+            await asyncio.wait_for(self.server_manager.stop_all_servers(), timeout=15)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Graceful shutdown exceeded 15s — forcing exit so the OS "
+                "reclaims all tool ports immediately")
+            os._exit(1)
         logger.info("All tool servers stopped")
-        
+
         # Stop management server
         if self.management_server:
             await self.management_server.stop()
             logger.info("Management server stopped")
-        
+
         # Stop service registry
         await self.service_registry.stop()
         logger.info("Service registry stopped")
-        
+
         logger.info("Launcher stopped")
     
     async def run(self) -> None:
@@ -451,9 +460,26 @@ async def main(args: list[str] | None = None) -> None:
         sys.exit(1)
 
 
+def _arm_exit_guard(exit_code: int, delay: float = 5.0) -> None:
+    """C7 post-run exit guard (review 2026-10-24 L2): a lingering non-daemon
+    thread keeps the interpreter (and every tool port fd) alive after main()
+    finished — launchmcp.py has carried this watchdog since 2026-09-05; the
+    `python -m launcher` entry did not. sys.exit still wins the race when
+    nothing lingers."""
+    import threading
+
+    timer = threading.Timer(delay, lambda: os._exit(exit_code))
+    timer.daemon = True
+    timer.start()
+
+
 def cli_main() -> None:
     """CLI entry point."""
     asyncio.run(main())
+    # main() returns only after launcher.stop() — arm the guard AFTER, so a
+    # hung shutdown never gets a second exit path racing the os._exit(1) in
+    # stop()'s timeout branch.
+    _arm_exit_guard(0)
 
 
 if __name__ == "__main__":

@@ -1074,7 +1074,10 @@ class ManagementServer:
             host=self.host,
             port=self.port,
             log_level="info",
-            access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable"
+            access_log=os.environ.get("MCP_HEALTH_CHECK_LOGS", "enable") != "disable",
+            # C7 (review 2026-10-24 L1): central mgmt gets the same drain
+            # deadline the tool servers have.
+            timeout_graceful_shutdown=5,
         )
         self._server = uvicorn.Server(config)
         
@@ -1088,11 +1091,16 @@ class ManagementServer:
         logger.info(f"Management server started on port {self.port}")
     
     async def stop(self) -> None:
-        """Stop the management server."""
+        """Stop the management server (bounded — C7 / review 2026-10-24 L1)."""
         if self._server:
             self._server.should_exit = True
             if self._task:
-                await self._task
+                try:
+                    await asyncio.wait_for(self._task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Management server ignored stop for 5s — abandoned "
+                        "(port frees on process exit)")
             await self.registry.close()
             logger.info("Management server stopped")
     
