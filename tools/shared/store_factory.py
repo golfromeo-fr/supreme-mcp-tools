@@ -105,7 +105,13 @@ def resolve_vector_backend(tool_name: str = "memorymcp") -> dict | None:
 
 
 def pg_dsn_from_env() -> str:
-    """Build PostgreSQL DSN from environment variables."""
+    """Build PostgreSQL DSN from environment variables.
+
+    F8 (review 2026-10-24): the per-field defaults only apply when
+    POSTGRES_HOST is set but the other vars aren't — backend resolution
+    requires POSTGRES_HOST, so these never fire on a bare host. The live
+    deployment sets the full POSTGRES_* set (user `mcp`, db `mcp`); tests
+    assemble their own DSN in tests/conftest.py and intentionally differ."""
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5432")
     user = os.getenv("POSTGRES_USER", "gr")

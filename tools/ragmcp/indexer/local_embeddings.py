@@ -257,10 +257,12 @@ def test_local_embeddings():
     ]
 
     print(f"\nGenerating embeddings for {len(test_texts)} test texts...")
-    embeddings = generate_local_embeddings(test_texts, model_name="small")
+    # 'base' (the P0-cleanup fast preset) — the removed 'small' preset used
+    # to KeyError here (review 2026-10-24 R3).
+    embeddings = generate_local_embeddings(test_texts, model_name="base")
 
     print(f"✓ Success! Generated embeddings shape: {embeddings.shape}")
-    print(f"  Model: {MODELS['small']}")
+    print(f"  Model: {MODELS['base']}")
     print(f"  Dimensions: {embeddings.shape[1]}")
     print(f"  Example embedding (first 5 dims): {embeddings[0][:5]}")
 

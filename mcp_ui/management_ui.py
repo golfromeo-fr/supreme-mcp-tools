@@ -288,6 +288,13 @@ def get_api_client():
     return _api_client
 
 
+def stored_env_password() -> str:
+    """The configured ENV admin password (default 'admin') — ONE resolver so
+    the login check and the default-password refusal can never disagree
+    (F10, review 2026-10-24: try_login_user used to duplicate this read)."""
+    return os.environ.get(ENV_PASSWORD) or "admin"
+
+
 def verify_credentials(username: str, password: str) -> bool:
     """Check credentials against env config with per-credential defaults.
 
@@ -295,7 +302,7 @@ def verify_credentials(username: str, password: str) -> bool:
     unset values fall back to admin/admin. Comparison is constant-time.
     """
     stored_username = os.environ.get(ENV_USERNAME) or "admin"
-    stored_password = os.environ.get(ENV_PASSWORD) or "admin"
+    stored_password = stored_env_password()
     user_ok = hmac.compare_digest((username or "").encode(), stored_username.encode())
     pass_ok = hmac.compare_digest((password or "").encode(), stored_password.encode())
     return user_ok and pass_ok
@@ -323,9 +330,8 @@ def try_login_user(username: str, password: str) -> dict:
             # mono env-pair login must not open it either. Only the literal
             # DEFAULT password is refused; an operator-set MCP_UI_PASSWORD
             # is fine on any bind.
-            stored_password = os.environ.get(ENV_PASSWORD) or "admin"
             from tools.shared.users_store import _ui_bind_non_loopback
-            if stored_password == "admin" and _ui_bind_non_loopback():
+            if stored_env_password() == "admin" and _ui_bind_non_loopback():
                 raise ValueError(
                     "default admin/admin login refused on a non-loopback "
                     "bind — set MCP_UI_PASSWORD (and MCP_UI_USERNAME if "

@@ -824,7 +824,7 @@ def setup_fef_v3():
                     "properties": {
                         "workspace_root": {"type": "string", "description": "Path to workspace to index"},
                         "collection_name": {"type": "string", "description": "Target collection name"},
-                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality"], "description": "Embedding model preset"}
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality", "nvidia-free"], "description": "Embedding model preset"}
                     },
                     "required": ["workspace_root"]
                 },
@@ -2402,7 +2402,7 @@ def setup_extensions(registry=None) -> None:
                     "properties": {
                         "workspace_root": {"type": "string", "description": "Path to workspace to index"},
                         "collection_name": {"type": "string", "description": "Target collection name"},
-                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality"], "description": "Embedding model preset"}
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality", "nvidia-free"], "description": "Embedding model preset"}
                     },
                     "required": ["workspace_root"]
                 },

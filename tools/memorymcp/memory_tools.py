@@ -1251,12 +1251,13 @@ async def reindexMemory(
         return "Error: Qdrant client not initialized"
 
     try:
+        import asyncio
         from sentence_transformers import SentenceTransformer
 
         logger.info(f"Loading new model: {new_model}")
-        model = SentenceTransformer(new_model)
+        model = await asyncio.to_thread(SentenceTransformer, new_model)
 
-        test_embedding = model.encode(["test"])[0]
+        test_embedding = (await asyncio.to_thread(model.encode, ["test"]))[0]
         new_dim = len(test_embedding)
 
         collection_info = vector_store.get_collection(COLLECTION_NAME)
@@ -1287,7 +1288,10 @@ async def reindexMemory(
                     # (falls back to the preview on fetch failure).
                     text, _warning = await _rehydrate_payload_text(point.payload)
                 if text:
-                    new_embedding = model.encode([text])[0].tolist()
+                    # M3 (review 2026-10-24): encode off the event loop — a
+                    # large store used to stall every concurrent call.
+                    new_embedding = (await asyncio.to_thread(
+                        model.encode, [text]))[0].tolist()
                     # Merge metadata into existing payload to avoid data loss
                     updated_payload = dict(point.payload)
                     updated_payload["embedding_model"] = new_model

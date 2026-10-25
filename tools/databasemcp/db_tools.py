@@ -498,27 +498,11 @@ def _format_db_error(error_msg: dict) -> str:
         formatted = f"Error: {error_msg['message']}"
     return formatted
 
-
-@mcp.tool()
-async def get_schemas(table_name: str | None = None) -> str:
-    """Get schema information for a specified table."""
-    start_time = time.perf_counter()
-    if not table_name:
-        _timing_update(start_time, "get_schemas", False)
-        return "Error: table_name is required"
-
-    table_name = table_name.upper()
-    schema = connections.fetch_schema_from_cache(table_name)
-
-    if not schema or not isinstance(schema, dict):
-        _timing_update(start_time, "get_schemas", False)
-        return f"Invalid schema for table '{table_name}'."
-
-    _timing_update(start_time, "get_schemas", True)
-    return str({
-        "columns": schema["columns"],
-        "constraints": schema["constraints"]
-    })
+# (Review 2026-10-24 T1: a second @mcp.tool()-decorated get_schemas lived
+# here, calling connections.fetch_schema_from_cache — deleted in the P4
+# overhaul. The later registration at the "Generic Data Tools" section
+# last-wins, so live calls worked, but the dead shadow was one
+# re-registration-order change away from breaking every get_schemas call.)
 
 
 # ============================================================================
@@ -908,7 +892,9 @@ async def execute_sql(sql: str = "", connection: str | None = None,
                 elapsed_ms = (time.time() - start) * 1000
                 metrics["total_query_time_ms"] += elapsed_ms
 
-        _assert_preset_grant(connection)
+        # (Review 2026-10-24 F9: a second _assert_preset_grant call used to
+        # run here — the one at the head of the single-statement path already
+        # covers it.)
         rowcount = await asyncio.to_thread(_with_entry, connection, _run)
     except Exception as e:
         _timing_update(start_time, "execute_sql", False)
@@ -1012,11 +998,19 @@ async def explain_plan(sql: str, connection: str | None = None) -> str:
 
 
 def _render_error(e: Exception) -> str:
-    """Render a dialect error like the legacy tool strings; strip internals."""
+    """Render a dialect error like the legacy tool strings; strip internals.
+
+    Review 2026-10-24 (T2): resolves the dialect WITHOUT REGISTRY.get(None) —
+    that lazily created the legacy env-default Oracle connection as a side
+    effect of FORMATTING AN ERROR."""
     dialect = None
     try:
-        active_entry = REGISTRY.get(None)
-        dialect = DIALECTS[active_entry.dialect]
+        active_name = REGISTRY.active_name()
+        entry_dialect = next(
+            (c["dialect"] for c in REGISTRY.list() if c["name"] == active_name),
+            None)
+        if entry_dialect:
+            dialect = DIALECTS[entry_dialect]
     except Exception:
         dialect = None
     if dialect is not None:
