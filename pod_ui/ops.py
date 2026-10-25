@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import signal
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,8 +87,11 @@ class OpRunner:
 
     def _save_history(self) -> None:
         try:
-            self.history_path.write_text(
-                json.dumps(self.history[-200:], indent=1), encoding="utf-8")
+            # F7 (review 2026-10-24): atomic write — a crash mid-write used to
+            # corrupt .podui-history.json (plain write_text truncate).
+            sys.path.insert(0, str(REPO_ROOT))
+            from tools.shared.atomic_io import atomic_write_json
+            atomic_write_json(self.history_path, self.history[-200:])
         except OSError:
             pass
 
