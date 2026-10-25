@@ -454,3 +454,23 @@ def test_query_hybrid_with_filter_pg(pg_vec):
                               limit=5, query_text="common",
                               filter=_s2_filter("alice"))
     assert [h.id for h in hits] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# F3 (review 2026-10-24): list_collections must return ORIGINAL names on PG
+# ---------------------------------------------------------------------------
+
+def test_list_collections_returns_original_names_pg(pg_vec):
+    """Lane collections carry '-' which _s() sanitizes to '_' — the raw
+    table-name return broke lanes.is_lane_name() on this combo."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "ragmcp"))
+    from indexer.lanes import is_lane_name
+    store, created = pg_vec
+    created.extend(["f3base", "f3base-local-bge-m3-1024"])
+    store.ensure_collection("f3base", dense_dim=DIM)
+    store.ensure_collection("f3base-local-bge-m3-1024", dense_dim=DIM)
+
+    names = store.list_collections()
+    assert "f3base-local-bge-m3-1024" in names, \
+        f"sanitized table name leaked into list_collections: {names}"
+    assert all(is_lane_name("f3base", n) for n in names if n.startswith("f3base")), names

@@ -664,9 +664,21 @@ def _filter_to_sql(f: Filter | None, payload_col: str = "payload") -> tuple[str,
 
     Uses json_each for tag array containment (MatchContains).
     Uses json_extract for scalar field access.
+
+    S4 (review 2026-10-24): ``should`` conditions are NOT implemented on this
+    backend — a should-only Filter silently produces an unfiltered query.
+    No live caller passes should= today; this warning marks the day one does.
     """
     if f is None or (not f.must and not f.should and not f.must_not):
         return "", []
+    if f.should and not f.must and not f.must_not:
+        logger.warning(
+            "should-only Filter dropped by the turso backend — query ran "
+            "UNFILTERED. should= is Qdrant-only; use must= for narrowing.")
+    elif f.should:
+        logger.warning(
+            "should conditions dropped by the turso backend (must/must_not "
+            "still applied). should= is Qdrant-only.")
 
     parts = []
     params: list = []
