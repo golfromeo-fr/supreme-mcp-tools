@@ -107,6 +107,30 @@ def get_disabled_tools(server_name: str, config_path: Path | None = None) -> lis
     return config.get("disabled_tools", {}).get(server_name, [])
 
 
+def _default_config() -> dict:
+    return {"disabled_tools": {}, "tools": {}, "version": 1}
+
+
+def _mutate_config(mutate, config_path: Path | None = None):
+    """Read-modify-write the tools config under ONE lock (review 2026-10-24
+    F2). File mode: the whole cycle runs under atomic_mutate_json's sidecar
+    flock, so concurrent mask toggles / config PUTs compose instead of the
+    slower writer clobbering the faster one. Db mode: the doc's other half
+    (``tools`` vs ``disabled_tools``) is preserved by re-loading inside the
+    mutation — the CAS-on-shared-doc upgrade is the follow-up noted in the
+    fix plan. ``mutate(config)`` may mutate in place; its result is returned.
+    """
+    if _state_backend_active(config_path):
+        config = load_tools_config(config_path)
+        result = mutate(config)
+        save_tools_config(config, config_path)
+        return result
+    from tools.shared.atomic_io import atomic_mutate_json
+
+    path = Path(config_path or _DEFAULT_CONFIG_FILE)
+    return atomic_mutate_json(path, mutate, default_factory=_default_config)
+
+
 def set_disabled_tools(server_name: str, disabled_list: list[str], config_path: Path | None = None) -> None:
     """
     Set disabled tools for a specific MCP server.
@@ -116,11 +140,9 @@ def set_disabled_tools(server_name: str, disabled_list: list[str], config_path: 
         disabled_list: List of tool names to disable
         config_path: Optional path to config file
     """
-    config = load_tools_config(config_path)
-    if "disabled_tools" not in config:
-        config["disabled_tools"] = {}
-    config["disabled_tools"][server_name] = disabled_list
-    save_tools_config(config, config_path)
+    def _apply(config: dict):
+        config.setdefault("disabled_tools", {})[server_name] = disabled_list
+    _mutate_config(_apply, config_path)
 
 
 def enable_tool(tool_name: str, server_name: str, config_path: Path | None = None) -> None:
@@ -132,10 +154,11 @@ def enable_tool(tool_name: str, server_name: str, config_path: Path | None = Non
         server_name: Name of the MCP server
         config_path: Optional path to config file
     """
-    disabled = get_disabled_tools(server_name, config_path)
-    if tool_name in disabled:
-        disabled.remove(tool_name)
-        set_disabled_tools(server_name, disabled, config_path)
+    def _apply(config: dict):
+        disabled = config.setdefault("disabled_tools", {}).setdefault(server_name, [])
+        if tool_name in disabled:
+            disabled.remove(tool_name)
+    _mutate_config(_apply, config_path)
 
 
 def disable_tool(tool_name: str, server_name: str, config_path: Path | None = None) -> None:
@@ -147,10 +170,11 @@ def disable_tool(tool_name: str, server_name: str, config_path: Path | None = No
         server_name: Name of the MCP server
         config_path: Optional path to config file
     """
-    disabled = get_disabled_tools(server_name, config_path)
-    if tool_name not in disabled:
-        disabled.append(tool_name)
-        set_disabled_tools(server_name, disabled, config_path)
+    def _apply(config: dict):
+        disabled = config.setdefault("disabled_tools", {}).setdefault(server_name, [])
+        if tool_name not in disabled:
+            disabled.append(tool_name)
+    _mutate_config(_apply, config_path)
 
 
 def get_all_disabled_tools(config_path: Path | None = None) -> dict[str, list[str]]:
@@ -191,11 +215,9 @@ def set_server_tools(server_name: str, tools_list: list[str], config_path: Path 
         tools_list: List of tool names
         config_path: Optional path to config file
     """
-    config = load_tools_config(config_path)
-    if "tools" not in config:
-        config["tools"] = {}
-    config["tools"][server_name] = tools_list
-    save_tools_config(config, config_path)
+    def _apply(config: dict):
+        config.setdefault("tools", {})[server_name] = tools_list
+    _mutate_config(_apply, config_path)
 
 
 async def discover_tools_from_server(server_url: str, timeout: float = 5.0, api_key: str = None) -> list[str]:

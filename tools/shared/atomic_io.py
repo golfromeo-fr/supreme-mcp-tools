@@ -51,3 +51,43 @@ def atomic_write_text(path: Path | str, text: str) -> None:
 def atomic_write_json(path: Path | str, data: Any, indent: int = 2) -> None:
     """Write ``data`` as JSON to ``path`` atomically under an exclusive lock."""
     atomic_write_text(path, json.dumps(data, indent=indent))
+
+
+def atomic_mutate_json(path: Path | str, mutate, default_factory=None) -> Any:
+    """Read-modify-write ``path`` as JSON under ONE exclusive flock.
+
+    Review 2026-10-24 (F2/S1): atomic_write_json alone only serializes the
+    WRITE — two concurrent read→mutate→write cycles (central 8200 vs the UI,
+    two user edits) still lost one mutation's changes. The whole cycle runs
+    under the same stable sidecar lock here, so concurrent mutations compose.
+
+    ``mutate(data) -> result`` receives the loaded document (or
+    ``default_factory()`` when the file is missing/corrupt — the documented
+    tolerant fallbacks) and may mutate it in place; the document is written
+    back after it returns. Returns ``mutate``'s result.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(path.name + ".lock")
+    with lock.open("a+") as lock_fd:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("not a JSON object")
+            except (OSError, ValueError):
+                data = default_factory() if default_factory else {}
+            result = mutate(data)
+            tmp = path.with_name(path.name + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            return result
+        finally:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
