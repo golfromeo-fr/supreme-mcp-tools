@@ -466,7 +466,9 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
 
     try:
         import fcntl
-        fd = os.open(str(env_path), os.O_RDWR | os.O_CREAT, 0o644)
+        # L3 (review 2026-10-24): 0o640 not 0o644 — .env carries secrets and
+        # is written here; the create-perm is the only mode a fresh file gets.
+        fd = os.open(str(env_path), os.O_RDWR | os.O_CREAT, 0o640)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             content = os.read(fd, os.path.getsize(env_path) if env_path.exists() else 0).decode()
@@ -707,8 +709,10 @@ def restore_missing_env_vars(snapshot: dict, env_path: Path | None = None,
                 continue
         report["added"].append(var_name)
         if apply:
-            _update_env_file(var_name, value, path if path is not None
-                             else find_env_file() or Path(".env"))
+            # (find_env_file() always returns a Path — the `or Path(".env")`
+            # branch was dead; L3 review 2026-10-24.)
+            _update_env_file(var_name, value,
+                             path if path is not None else find_env_file())
 
     report["auth_note"] = (
         "Auth sections in the snapshot are per-tool config.json bootstrap "

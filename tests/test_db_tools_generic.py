@@ -15,9 +15,13 @@ import pytest
 # query/execute/schema mechanics in-process (no HTTP identity).
 # Review fix 2026-10-24 (F1): raw connect_database gained the same admin-only
 # gate — bypassed here for the same reason (mechanics, not identity).
+# The ORIGINAL gate is saved as _real_gate so TestGateActiveRoundTrip can
+# restore it and exercise the hot paths WITH enforcement.
 @pytest.fixture(autouse=True)
 def _skip_grant_check(monkeypatch):
     import db_tools
+    if not hasattr(db_tools, "_real_gate"):
+        db_tools._real_gate = db_tools._assert_preset_grant
     monkeypatch.setattr(db_tools, "_assert_preset_grant", lambda connection: None)
     monkeypatch.setattr(db_tools, "_refuse_non_admin", lambda action: None)
 
@@ -189,3 +193,72 @@ class TestGenericTools:
         second = _run(db.get_schemas("t"))
         assert "(cached)" not in second  # cleared by execute_sql
         assert "extra" in second
+
+
+# ---------------------------------------------------------------------------
+# Review 2026-10-24 test gap: every test above bypasses the grant gate via
+# the autouse fixture. This one runs WITH the real gate active (the caller
+# identified as admin through the fake token map), so the hot paths keep
+# gate coverage even here.
+# ---------------------------------------------------------------------------
+
+class TestGateActiveRoundTrip:
+    def test_query_round_trip_with_real_gate(self, two_conns, monkeypatch):
+        db_tools = two_conns
+        import core
+
+        # Real _assert_preset_grant + real connections. Identity comes from
+        # the VERIFIER's token map (the gate reads request headers → token →
+        # entry → role), so fake a mono-style verifier carrying an admin key.
+        class _MonoVerifier:
+            def tokens(self):
+                return {"admin-key": {"client_id": "admin",
+                                      "role": "admin", "scopes": ["mcp"]}}
+
+        class _Req:
+            headers = {"authorization": "Bearer admin-key"}
+
+        def _fake_get_http_request():  # sync — matches fastmcp's shape
+            return _Req()
+
+        monkeypatch.setattr(core.mcp, "auth", _MonoVerifier(), raising=False)
+        monkeypatch.setattr(db_tools, "_assert_preset_grant", db_tools._real_gate)
+        import fastmcp.server.dependencies as deps
+        monkeypatch.setattr(deps, "get_http_request", _fake_get_http_request)
+
+        async def flow():
+            await db_tools.execute_sql(
+                sql="CREATE TABLE gate_probe (v TEXT)", connection="one")
+            await db_tools.execute_sql(
+                sql="INSERT INTO gate_probe VALUES ('x')", connection="one")
+            return await db_tools.query(
+                sql="SELECT v FROM gate_probe", connection="one")
+
+        result = _run(flow())
+        assert "'x'" in result  # row came back through the REAL gate
+
+    def test_real_gate_refuses_user_key(self, two_conns, monkeypatch):
+        """Same setup with a role=user token: the REAL gate must refuse the
+        ungranted raw connection by name."""
+        db_tools = two_conns
+        import core
+
+        class _UserVerifier:
+            def tokens(self):
+                return {"user-key": {"client_id": "worker",
+                                     "role": "user", "scopes": ["mcp"]}}
+
+        class _Req:
+            headers = {"authorization": "Bearer user-key"}
+
+        def _fake_get_http_request():
+            return _Req()
+
+        monkeypatch.setattr(core.mcp, "auth", _UserVerifier(), raising=False)
+        monkeypatch.setattr(db_tools, "_assert_preset_grant", db_tools._real_gate)
+        import fastmcp.server.dependencies as deps
+        monkeypatch.setattr(deps, "get_http_request", _fake_get_http_request)
+
+        # query() catches the gate's PermissionError into its error string
+        result = _run(db_tools.query(sql="SELECT 1", connection="one"))
+        assert "not a granted preset" in result

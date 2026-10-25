@@ -327,15 +327,18 @@ class ServiceRegistry:
                     logger.warning(
                         f"Health check returned {response.status} for '{name}'"
                     )
-        except (asyncio.CancelledError, Exception) as e:
-            # Catch CancelledError and regular exceptions, but NOT KeyboardInterrupt/SystemExit
+        except asyncio.CancelledError:
+            # L3 (review 2026-10-24): re-raise — swallowing cancellation
+            # delayed task shutdown by a check cycle.
+            raise
+        except Exception as e:
             async with self._lock:
                 if name in self._services:
                     self._services[name].status = "unhealthy"
                     self._services[name].last_check = time.time()
-            
+
             # Check for timeout-related exceptions
-            if isinstance(e, (asyncio.CancelledError, asyncio.TimeoutError)) or \
+            if isinstance(e, asyncio.TimeoutError) or \
                (hasattr(e, '__cause__') and isinstance(e.__cause__, asyncio.CancelledError)):
                 logger.warning(f"Health check timed out for '{name}'")
             else:

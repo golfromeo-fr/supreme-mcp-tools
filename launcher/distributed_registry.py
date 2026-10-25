@@ -33,64 +33,8 @@ class CircuitBreakerOpenError(Exception):
     pass
 
 
-class RequestCoalescer:
-    """
-    Coalesces duplicate concurrent requests.
-    
-    When multiple identical requests are made concurrently, only one
-    actual request is executed and the result is shared with all callers.
-    """
-    
-    def __init__(self):
-        """Initialize the request coalescer."""
-        self._pending: dict[str, asyncio.Future] = {}
-        self._lock = asyncio.Lock()
-    
-    async def execute(self, key: str, func: Callable) -> Any:
-        """
-        Execute request with coalescing.
-        
-        Args:
-            key: Unique key for the request
-            func: Async function to execute
-            
-        Returns:
-            Result from the function
-        """
-        async with self._lock:
-            if key in self._pending:
-                future = self._pending[key]
-                if not future.done():
-                    # Wait for existing request
-                    pass
-                else:
-                    # Future completed, start new one
-                    future = asyncio.get_event_loop().create_future()
-                    self._pending[key] = future
-                    # Execute in background
-                    asyncio.create_task(self._execute_func(key, func, future))
-            else:
-                # Start new request
-                future = asyncio.get_event_loop().create_future()
-                self._pending[key] = future
-                # Execute in background
-                asyncio.create_task(self._execute_func(key, func, future))
-        
-        return await future
-    
-    async def _execute_func(self, key: str, func: Callable, future: asyncio.Future) -> None:
-        """Execute function and set future result."""
-        try:
-            result = await func()
-            if not future.done():
-                future.set_result(result)
-        except Exception as e:
-            if not future.done():
-                future.set_exception(e)
-        finally:
-            async with self._lock:
-                if key in self._pending and self._pending[key] is future:
-                    del self._pending[key]
+# (RequestCoalescer was deleted 2026-10-25, review 2026-10-24 L3 —
+# re-export-only dead code, never called.)
 
 
 class CircuitBreaker:
@@ -700,38 +644,12 @@ class DistributedExtensionRegistry:
         )
     
     # ==================== EVENTS ====================
-    
-    async def subscribe(
-        self,
-        tool_name: str,
-        extension_name: str
-    ) -> AsyncIterator[Any]:
-        """
-        Subscribe to events from a tool process.
-        
-        Args:
-            tool_name: Target tool name
-            extension_name: Event extension to subscribe to
-            
-        Yields:
-            Event data from the tool
-        """
-        endpoint = await self.service_registry.get_endpoint(tool_name)
-        if not endpoint:
-            raise ValueError(f"Tool '{tool_name}' not found")
-        
-        url = f"{endpoint.management_url}/extensions/{extension_name}/events"
-        
-        async with self.http_client._session.ws_connect(url) as ws:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    data = json.loads(msg.data)
-                    if data.get("type") != "ping":
-                        yield data
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"WebSocket error: {ws.exception()}")
-                    break
-    
+    # (DistributedExtensionRegistry.subscribe was deleted 2026-10-25, review
+    # 2026-10-24 L3: dead + latent-broken — used http_client._session directly
+    # (None until a GET/POST ran) and sent no auth headers the 81xx WS route
+    # requires. Live event streaming goes through ManagementServer's
+    # event_aggregator, not this proxy.)
+
     # ==================== INTERNAL HTTP HELPERS ====================
     
     def _auth_headers(self, tool_name: str) -> dict[str, str]:

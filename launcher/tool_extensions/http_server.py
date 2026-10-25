@@ -202,9 +202,11 @@ class ExtensionHTTPServer:
             # Only log if enabled
             should_log = self._health_check_logs != "disable"
             log_errors_only = self._health_check_logs == "errors-only"
-            
+
             if should_log and not log_errors_only:
-                logger.warning(f"[HEALTH_CHECK] Received health check request at {start}")
+                # L3 (review 2026-10-24): routine health checks are DEBUG —
+                # WARNING made ~17K noise lines/day across six tools.
+                logger.debug(f"[HEALTH_CHECK] Received health check request at {start}")
             try:
                 # Use include_data=False to avoid calling slow data source handlers
                 extensions_count = sum(
@@ -213,7 +215,7 @@ class ExtensionHTTPServer:
                 elapsed = time.time() - start
                 # Only log completion if not disabled and not errors-only mode
                 if should_log and not log_errors_only:
-                    logger.warning(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
+                    logger.debug(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
                 return {
                     "status": "healthy",
                     "tool": self.tool_name,

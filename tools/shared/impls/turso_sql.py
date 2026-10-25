@@ -238,9 +238,14 @@ class TursoSqlStore:
                 return _update_existing(row)
             return memory_id
 
-        except Exception as e:
-            logger.error(f"Turso upsert failed: {e}")
-            return memory_id
+        except Exception:
+            # S6 (review 2026-10-24): RAISE — the old swallow returned the
+            # success-shaped memory_id, so a SQL failure looked like a store
+            # to memory_tools (vector point written, metadata row missing).
+            # The fail-open now lives ONE layer up: memory_tools.upsertMemory
+            # catches, logs, and continues vector-only.
+            logger.exception("Turso upsert failed")
+            raise
 
     def get_memory(self, memory_id: str) -> dict | None:
         """Get a memory by ID, also increments usage_count."""

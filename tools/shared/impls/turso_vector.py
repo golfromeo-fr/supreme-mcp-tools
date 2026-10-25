@@ -205,16 +205,23 @@ class TursoVectorStore:
                 """)
             except Exception as e:
                 err = str(e).lower()
-                if "already exists" not in err:
-                    # Fallback without vector type
-                    self._conn.execute(f"""
-                        CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
-                            id          TEXT PRIMARY KEY,
-                            embedding   BLOB,
-                            payload     TEXT,
-                            text_content TEXT
-                        )
-                    """)
+                if "already exists" in err:
+                    return
+                # S6 (review 2026-10-24): the BLOB fallback is ONLY for a
+                # build genuinely lacking the VECTOR type — the old catch-all
+                # silently lost vector typing on ANY error (transient locks
+                # included), and every later vector query then failed.
+                vector_unsupported = self._has_vector is False or any(
+                    marker in err for marker in
+                    ("vector", "unknown datatype", "unsupported"))
+                if not vector_unsupported:
+                    raise RuntimeError(
+                        f"ensure_collection('{name}', dense_dim={dense_dim}) "
+                        f"failed and the BLOB fallback does not apply "
+                        f"(VECTOR support IS available): {e}") from e
+                logger.warning(
+                    f"Collection '{name}' created with BLOB embedding — this "
+                    "libSQL build lacks VECTOR support; vector queries will fail")
         else:
             # No dense — FTS5-only collection
             self._conn.execute(f"""

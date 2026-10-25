@@ -633,6 +633,26 @@ async def _open_tool_settings(state) -> None:
     await show_global_tool_settings(servers)
 
 
+def _purge_session_file() -> None:
+    """F4 (review 2026-10-24): delete THIS browser session's on-disk
+    ``.nicegui/storage-user-<id>.json`` on logout. storage.user.clear() only
+    empties the in-memory dict — the sealed mcp_key used to survive in the
+    file until the age-based pruner removed it. Best-effort: a missing
+    request context or an already-gone file is fine (the key still went)."""
+    try:
+        from nicegui import request as ng_request
+        sid = ng_request.session.get("id")
+        if not sid:
+            return
+        # Drop the in-memory persistent dict FIRST so NiceGUI's request
+        # teardown cannot write the file back after we unlink it.
+        nicegui_app.storage._users.pop(sid, None)  # pylint: disable=protected-access
+        (Path.cwd() / ".nicegui" / f"storage-user-{sid}.json").unlink(missing_ok=True)
+        logger.info("Purged session storage file on logout")
+    except Exception as e:
+        logger.debug(f"Session-file purge skipped: {e}")
+
+
 @ui.page("/")
 async def main_page() -> None:
     """Main management page route."""
@@ -645,6 +665,7 @@ async def main_page() -> None:
 
     def logout() -> None:
         nicegui_app.storage.user.clear()
+        _purge_session_file()
         ui.navigate.to("/login")
 
     state = get_state()
