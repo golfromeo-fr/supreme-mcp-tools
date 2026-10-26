@@ -268,6 +268,37 @@ def test_upsert_dedup_no_duplicate_vector_point(mt, monkeypatch):
     assert len(vec.upserts) == 2
 
 
+def test_upsert_remap_preserves_usage_and_edges(mt, monkeypatch):
+    """Branch-review fix: the dedup remap refreshes the surviving point via a
+    MERGE — usage_count / edges / provenance / created_at survive; fresh
+    fields (text, tags, sensitivity) win. The first cut wholesale-replaced
+    the payload and reset the survivor's stats on every re-store."""
+    vec = _RecordingVectorStore()
+    vec.stored["existing-row-id"] = _Point(
+        "existing-row-id",
+        _payload("existing-row-id", "old text", usage_count=7,
+                 created_at="2026-01-01T00:00:00Z"),
+        vector=[1.0, 0.0])
+    vec.stored["existing-row-id"].payload["edges"] = [{"to": "abc", "relation": "related_to"}]
+    vec.stored["existing-row-id"].payload["provenance"] = {"history": [1]}
+    sql = _DedupSqlStore(existing_id="existing-row-id")
+    monkeypatch.setattr(mt, "vector_store", vec)
+    monkeypatch.setattr(mt, "sql_store", sql)
+
+    asyncio.run(mt.upsertMemory("identical memory text", memory_type="lesson",
+                                tags=["fresh"], source="file:///x"))
+
+    survivor = vec.stored["existing-row-id"].payload
+    assert survivor["usage_count"] == 7            # not reset
+    assert survivor["edges"] == [{"to": "abc", "relation": "related_to"}]
+    assert survivor["provenance"] == {"history": [1]}
+    assert survivor["created_at"] == "2026-01-01T00:00:00Z"  # original kept
+    assert survivor["text"] == "identical memory text"       # fresh field wins
+    assert survivor["memory_type"] == "lesson"
+    assert survivor["tags"] == ["fresh"]
+    assert survivor["last_accessed"] != "2026-01-01T00:00:00Z"  # refreshed
+
+
 def test_upsert_vector_only_when_sql_fails(mt, monkeypatch):
     class _BrokenSql(_FakeSqlStore):
         def upsert_memory(self, memory_id, **kw):

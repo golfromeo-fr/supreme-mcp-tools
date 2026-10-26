@@ -317,14 +317,17 @@ async def upsertMemory(
         # and clean up its artifact sidecar if the text replaces it.
         is_update = True
 
-    # When updating, read the existing payload so a replaced artifact sidecar
-    # can be cleaned up (no orphaned blobs).
+    # When updating, read the existing payload so (a) a replaced artifact
+    # sidecar can be cleaned up (no orphaned blobs) and (b) the merge below
+    # can preserve accumulated state.
     old_artifact_key = None
+    old_payload: dict | None = None
     if is_update:
         try:
             existing = vector_store.retrieve(COLLECTION_NAME, [memory_id], with_payload=True)
             if existing:
-                old_artifact_key = existing[0].payload.get("artifact_key")
+                old_payload = dict(existing[0].payload or {})
+                old_artifact_key = old_payload.get("artifact_key")
         except Exception as e:
             logger.warning(f"Could not read existing payload of {memory_id}: {e}")
 
@@ -333,6 +336,24 @@ async def upsertMemory(
     artifact_key = await _store_large_text(memory_id, text, payload)
     if old_artifact_key and old_artifact_key != artifact_key:
         await _delete_artifact_key(old_artifact_key)
+
+    # Branch-review fix (M1 regression): an update / dedup remap must not
+    # RESET accumulated state — the fresh payload carries usage_count=0, an
+    # empty provenance, and no edges, and the old wholesale upsert wiped the
+    # surviving point's usage stats and graph links on every identical
+    # re-store. Merge instead: fresh fields win, accumulated state survives.
+    # Artifact bookkeeping (artifact_key / text_size_bytes) is NEVER carried
+    # over — a big→small update deletes the old blob, and a stale key would
+    # point at it (caught by test_update_to_small_text_deletes_old_artifact).
+    if is_update and old_payload:
+        preserved = ("usage_count", "edges", "provenance", "created_at", "owner")
+        merged = dict(old_payload)
+        for k in ("artifact_key", "text_size_bytes"):
+            merged.pop(k, None)
+        for k, v in payload.items():
+            if k not in preserved:
+                merged[k] = v
+        payload = merged
 
     # Upsert to Qdrant (single point under the RESOLVED id — no duplicates)
     try:
