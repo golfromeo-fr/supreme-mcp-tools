@@ -350,3 +350,39 @@ def test_ragmcp_multi_roleless_still_scoped(monkeypatch):
     monkeypatch.setattr(deps, "get_http_request", lambda: req, raising=False)
     client_id, allowed = ragmcp_fastmcp._caller_rag_access()
     assert client_id == "worker" and allowed == set()
+
+
+# ---------------------------------------------------------------------------
+# CR1 (counter-review 2026-10-27): the role default lives in ONE helper —
+# identity.resolve_role — and every resolver site uses it.
+# ---------------------------------------------------------------------------
+
+def test_resolve_role_convention():
+    from tools.shared.identity import resolve_role
+
+    # legacy mono map: role-less entry = the operator = admin
+    assert resolve_role({"client_id": "x", "scopes": ["mcp"]}, False) == "admin"
+    # user-store verifier: role-less entry is malformed -> fail-closed user
+    assert resolve_role({"client_id": "w"}, True) == "user"
+    # explicit roles always win, both directions
+    assert resolve_role({"role": "admin"}, True) == "admin"
+    assert resolve_role({"role": "user"}, False) == "user"
+    # None entry (anomaly paths) follows the same mode defaults
+    assert resolve_role(None, False) == "admin"
+    assert resolve_role(None, True) == "user"
+
+
+def test_all_resolver_sites_use_the_shared_helper():
+    """Grep-pin: no identity resolver may carry its own role default again —
+    the drift that bricked mono lived in exactly such a duplicate."""
+    import re
+    offenders = []
+    for rel in ("tools/ragmcp/ragmcp_fastmcp.py",
+                "tools/memorymcp/memory_tools.py",
+                "tools/databasemcp/connections.py",
+                "tools/databasemcp/db_tools.py",
+                "tools/shared/server_factory.py"):
+        src = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        if re.search(r'\.get\(\s*["\']role["\']\s*,', src):
+            offenders.append(rel)
+    assert not offenders, f"role defaults must go through identity.resolve_role: {offenders}"

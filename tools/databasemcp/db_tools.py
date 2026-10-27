@@ -585,10 +585,11 @@ def _assert_preset_grant(connection: str | None) -> None:
                 f"caller token not in the user store (map size={len(get_tokens())})")
         logger.warning("preset-grant check skipped: caller token not in map (map size=%d)", len(get_tokens()))
         return
-    # Mono fail-open / multi fail-closed role default (uniform with
-    # _current_caller_grants — see the mono-map convention there).
-    role = entry.get("role", "user" if user_store else "admin")
-    if role == "admin":
+    # Role via the ONE shared default (identity.resolve_role — mono
+    # fail-open, multi fail-closed; uniform with _current_caller_grants).
+    from tools.shared.identity import resolve_role
+
+    if resolve_role(entry, user_store) == "admin":
         return
     granted = set(entry.get("db_presets") or [])
 

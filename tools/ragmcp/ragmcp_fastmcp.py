@@ -118,15 +118,12 @@ def _caller_rag_access() -> tuple[str | None, set[str] | None]:
     entry = get_tokens().get(token)
     if entry is None:
         return ("unknown", set()) if user_store else (None, None)
-    # Mono-map convention (same as databasemcp._current_caller_grants and
-    # the flush gate): the legacy single-entry verifier carries NO role —
-    # defaulting it to "user" denied EVERY collection to the mono operator
-    # (found at a mono-mode deployment 2026-10-26: every search answered
-    # "Collection ... is not granted to your account"). Under a user-store
-    # verifier a role-less entry stays fail-CLOSED (scoped user) — mono
-    # fail-open, multi fail-closed.
-    role = entry.get("role", "user" if user_store else "admin")
-    if role == "admin":
+    # Role via the ONE shared default (identity.resolve_role — see its
+    # docstring for the mono-fail-open/multi-fail-closed convention and the
+    # 2026-10-26 mono-bricking drift it prevents).
+    from tools.shared.identity import resolve_role
+
+    if resolve_role(entry, user_store) == "admin":
         return entry.get("client_id"), None
     return entry.get("client_id"), set(entry.get("rag_collections") or [])
 
