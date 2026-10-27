@@ -341,17 +341,26 @@ fallthrough pins) all green.
    committed examples with `CHANGE-ME-` keys (loud warning at boot). Every
    MCP client call will 401 until you either put real keys in those files or
    export `<TOOL>_API_KEY` / `MCP_API_KEY` env vars.
-1. **Set `MCP_MANAGEMENT_API_KEY`** in the work `.env` — without it the central
+1. **The POD is multi-user even if your host is mono** — the node image bakes
+   `ENV MCP_AUTH_MODE=multi` (deploy/Containerfile:84) and the pod's mounted
+   `.env` is loaded with `load_dotenv`, which does NOT override an existing
+   env var → the image's `multi` wins. The pod therefore enforces per-user
+   grants and needs a store admin. (The host launcher stays mono — that is
+   where mono actually applies.)
+2. **Set `MCP_MANAGEMENT_API_KEY`** in the work `.env` — without it the central
    API runs open-for-reads but REFUSES ALL MUTATIONS (403, audit P2-2): the
    mcp_ui Function-Masks toggles, env edits, and `PUT /api/tools/{tool}/config`
    will all fail. This is the next mono friction they will hit.
-2. **Set `MCP_UI_PASSWORD`** (+ `MCP_UI_SECRET`) — the mono admin/admin login is
-   refused on non-loopback binds by design (P1-1/P1-1-twin); loopback works
-   without.
-3. **Masks are per-machine**: `tools_config.json` is gitignored, so a fresh
+3. **Set `MCP_UI_PASSWORD` to ≥ 8 characters** (+ `MCP_UI_SECRET`) — in the
+   pod (multi, UI bound to 0.0.0.0) the default admin/admin is refused twice
+   over: the store seeding refuses a default-password admin on a non-loopback
+   bind, and the break-glass bootstrap rejects a < 8-character password. The
+   result is a pod with NO admin account and a login that fails with a
+   misleading message. The UI now names the fix explicitly.
+4. **Masks are per-machine**: `tools_config.json` is gitignored, so a fresh
    checkout exposes EVERY function — including the `get_secret` mono test
    fixture and databasemcp's full surface. Mono = admin by design; re-apply the
    standing masks (`get_secret`, `brave_search_web`) via the UI once, or copy
    the home `tools_config.json`.
-4. `.env` absent ⇒ mono + keyless central + ephemeral UI secret (logins die on
-   restart). The three env vars above close all of it.
+5. `.env` absent ⇒ host mono + keyless central + ephemeral UI secret (logins
+   die on restart). The env vars above close all of it.

@@ -376,6 +376,20 @@ def try_login_user(username: str, password: str) -> dict:
             # password mismatched — surface as a failed login, not an error
             if "already exists" in str(e):
                 raise ValueError("Wrong username or password") from e
+            if "8 characters" in str(e):
+                # Counter-review 2026-10-27 (R2-1): the raw ValueError is
+                # misleading here — the operator typed their ENV password
+                # (e.g. admin/admin) and the store rejects it for length.
+                # In the pod (which the image pins to multi) the default-
+                # password admin is ALSO refused on a non-loopback bind, so
+                # the store can end up with NO admin at all. Name the fix.
+                raise ValueError(
+                    "MCP_UI_PASSWORD must be at least 8 characters to "
+                    "bootstrap the store admin (the pod runs multi-user and "
+                    "refuses the default admin/admin on non-loopback binds). "
+                    "Set MCP_UI_PASSWORD (and MCP_UI_USERNAME) in the "
+                    ".env, then sign in with it."
+                ) from e
             raise
     raise ValueError("Wrong username or password")
 
