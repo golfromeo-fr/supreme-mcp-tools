@@ -704,7 +704,7 @@ OWN
   fi
 
   echo "[test:$TOPOLOGY] grabbing latest code..."
-  git pull --ff-only || true
+  git pull --ff-only || echo "[test] WARNING: pull failed — deploying local code"
   cleanup_cluster() {
     ( cd deploy && podman-compose -p "$PROJECT" down ) 2>/dev/null || true
     podman pod rm -f "pod_$PROJECT" >/dev/null 2>&1 || true

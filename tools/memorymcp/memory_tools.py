@@ -95,7 +95,11 @@ def _memory_caller() -> tuple[str | None, bool, bool]:
     entry = get_tokens().get(token)
     if entry is None:
         return ("unknown", False, True) if user_store else (None, False, False)
-    return entry.get("client_id"), entry.get("role") == "admin", True
+    # Role via the ONE shared default (identity.resolve_role — the mono
+    # map's role-less entry defaults to admin; user-store entries to user).
+    from tools.shared.identity import resolve_role
+
+    return entry.get("client_id"), resolve_role(entry, user_store) == "admin", True
 
 # For FEF V3 extensions
 try:
@@ -285,35 +289,13 @@ async def upsertMemory(
                 payload["owner"] = ident[0]
     except Exception:
         pass  # mono mode / non-HTTP scope: no owner concept
-    # When updating, read the existing payload so a replaced artifact sidecar
-    # can be cleaned up (no orphaned blobs).
-    old_artifact_key = None
-    if is_update:
+    # M1 (review 2026-10-24): with a SQL store, run its dedup FIRST and use
+    # the resolved id everywhere (artifact key + vector point). The old order
+    # — vector write, then SQL dedup, then remap — left a fresh duplicate
+    # vector point under the new uuid on every hash-equal re-store.
+    actual_id = memory_id
+    if sql_store.is_available:
         try:
-            existing = vector_store.retrieve(COLLECTION_NAME, [memory_id], with_payload=True)
-            if existing:
-                old_artifact_key = existing[0].payload.get("artifact_key")
-        except Exception as e:
-            logger.warning(f"Could not read existing payload of {memory_id}: {e}")
-
-    # Large texts move to the ArtifactStore; the payload keeps a light
-    # reference (artifact_key + text_preview + text_size_bytes).
-    artifact_key = await _store_large_text(memory_id, text, payload)
-    if old_artifact_key and old_artifact_key != artifact_key:
-        await _delete_artifact_key(old_artifact_key)
-
-    # Upsert to Qdrant
-    try:
-        vector_store.upsert(
-            COLLECTION_NAME,
-            [PointStruct(id=memory_id, vector=embedding, payload=payload)]
-        )
-        logger.info(f"{'Updated' if is_update else 'Stored'} memory {memory_id}")
-
-        # Also store in SQL backend for metadata/dedup (if available).
-        # owner keys the dedup hash namespace (E3/P1) so two users' identical
-        # memories never collapse onto one SQL row.
-        if sql_store.is_available:
             actual_id = sql_store.upsert_memory(
                 memory_id=memory_id,
                 text=text,
@@ -327,10 +309,63 @@ async def upsertMemory(
                 retention_policy=retention_policy,
                 owner=_owner_client_id,
             )
-            if actual_id != memory_id:
-                logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
-                return actual_id
+        except Exception as e:
+            # A SQL failure must not lose the memory — continue vector-only
+            # (the same posture as the no-SQL mode).
+            logger.error(f"SqlStore upsert failed (continuing vector-only): {e}")
+            actual_id = memory_id
+    if actual_id != memory_id:
+        logger.info(f"SqlStore dedup: remapping {memory_id} -> {actual_id}")
+        memory_id = actual_id
+        # The dedup target's vector point already exists — refresh it below
+        # and clean up its artifact sidecar if the text replaces it.
+        is_update = True
 
+    # When updating, read the existing payload so (a) a replaced artifact
+    # sidecar can be cleaned up (no orphaned blobs) and (b) the merge below
+    # can preserve accumulated state.
+    old_artifact_key = None
+    old_payload: dict | None = None
+    if is_update:
+        try:
+            existing = vector_store.retrieve(COLLECTION_NAME, [memory_id], with_payload=True)
+            if existing:
+                old_payload = dict(existing[0].payload or {})
+                old_artifact_key = old_payload.get("artifact_key")
+        except Exception as e:
+            logger.warning(f"Could not read existing payload of {memory_id}: {e}")
+
+    # Large texts move to the ArtifactStore; the payload keeps a light
+    # reference (artifact_key + text_preview + text_size_bytes).
+    artifact_key = await _store_large_text(memory_id, text, payload)
+    if old_artifact_key and old_artifact_key != artifact_key:
+        await _delete_artifact_key(old_artifact_key)
+
+    # Branch-review fix (M1 regression): an update / dedup remap must not
+    # RESET accumulated state — the fresh payload carries usage_count=0, an
+    # empty provenance, and no edges, and the old wholesale upsert wiped the
+    # surviving point's usage stats and graph links on every identical
+    # re-store. Merge instead: fresh fields win, accumulated state survives.
+    # Artifact bookkeeping (artifact_key / text_size_bytes) is NEVER carried
+    # over — a big→small update deletes the old blob, and a stale key would
+    # point at it (caught by test_update_to_small_text_deletes_old_artifact).
+    if is_update and old_payload:
+        preserved = ("usage_count", "edges", "provenance", "created_at", "owner")
+        merged = dict(old_payload)
+        for k in ("artifact_key", "text_size_bytes"):
+            merged.pop(k, None)
+        for k, v in payload.items():
+            if k not in preserved:
+                merged[k] = v
+        payload = merged
+
+    # Upsert to Qdrant (single point under the RESOLVED id — no duplicates)
+    try:
+        vector_store.upsert(
+            COLLECTION_NAME,
+            [PointStruct(id=memory_id, vector=embedding, payload=payload)]
+        )
+        logger.info(f"{'Updated' if is_update else 'Stored'} memory {memory_id}")
         return memory_id
 
     except Exception as e:
@@ -1241,12 +1276,13 @@ async def reindexMemory(
         return "Error: Qdrant client not initialized"
 
     try:
+        import asyncio
         from sentence_transformers import SentenceTransformer
 
         logger.info(f"Loading new model: {new_model}")
-        model = SentenceTransformer(new_model)
+        model = await asyncio.to_thread(SentenceTransformer, new_model)
 
-        test_embedding = model.encode(["test"])[0]
+        test_embedding = (await asyncio.to_thread(model.encode, ["test"]))[0]
         new_dim = len(test_embedding)
 
         collection_info = vector_store.get_collection(COLLECTION_NAME)
@@ -1277,7 +1313,10 @@ async def reindexMemory(
                     # (falls back to the preview on fetch failure).
                     text, _warning = await _rehydrate_payload_text(point.payload)
                 if text:
-                    new_embedding = model.encode([text])[0].tolist()
+                    # M3 (review 2026-10-24): encode off the event loop — a
+                    # large store used to stall every concurrent call.
+                    new_embedding = (await asyncio.to_thread(
+                        model.encode, [text]))[0].tolist()
                     # Merge metadata into existing payload to avoid data loss
                     updated_payload = dict(point.payload)
                     updated_payload["embedding_model"] = new_model

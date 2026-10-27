@@ -631,6 +631,8 @@ def _wire_session_management(app, auth_provider=None) -> None:
         # E3-M3: flush is destructive — admin role only. In mono mode the
         # single map entry has no role field and defaults to admin (same
         # owner as today). A user key here gets 403.
+        user_store_verifier = bool(
+            getattr(auth_provider, "is_user_store", False))
         try:
             from fastmcp.server.dependencies import get_http_request
             req = get_http_request()
@@ -638,13 +640,25 @@ def _wire_session_management(app, auth_provider=None) -> None:
             token = auth[7:] if auth.lower().startswith("bearer ") else None
             entry = (auth_provider.tokens() or {}).get(token) \
                 if (token and auth_provider is not None) else None
-            role = (entry or {}).get("role", "admin")  # legacy mono map = admin
-            if role != "admin":
+            # Role via the ONE shared default (identity.resolve_role — mono
+            # fail-open, multi fail-closed; the real user store always stamps
+            # a role, so the multi default only guards malformed maps).
+            from tools.shared.identity import resolve_role
+
+            if resolve_role(entry, user_store_verifier) != "admin":
                 return JSONResponse(
                     {"error": "admin role required"}, status_code=403,
                 )
         except Exception:
-            pass  # gate must never break the endpoint; auth already ran
+            # S6 (review 2026-10-24): under the user-store verifier the gate
+            # fails CLOSED (an unresolvable destructive-action caller is not
+            # admin); mono keeps the historical fail-open — the single map
+            # entry IS admin, so an exception there changes nothing.
+            if user_store_verifier:
+                return JSONResponse(
+                    {"error": "admin role required "
+                              "(role could not be resolved)"}, status_code=403)
+            pass  # mono: auth already ran; the legacy map has no roles
         # Find the /mcp route's endpoint — it holds the session_manager singleton.
         sm = _get_session_manager(app)
         if sm is None:

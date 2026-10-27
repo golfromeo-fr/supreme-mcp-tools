@@ -60,6 +60,8 @@ async def connect_database(name: str, db_type: str, params: dict) -> str:
     if missing:
         _timing_update(start_time, "connect_database", False)
         return f"Missing required params for {db_type}: {', '.join(missing)}"
+    # Review 2026-10-24 (F1): raw connects are admin-only (see helper).
+    _refuse_non_admin("connect_database")
 
     def _connect():
         REGISTRY.connect(name, db_type, params)
@@ -186,6 +188,9 @@ async def list_connections() -> str:
 async def use_database(name: str) -> str:
     """Switch the active database connection used by query/execute_sql/etc."""
     start_time = time.perf_counter()
+    # Review 2026-10-24 (F1): switching the active entry is gated too — the
+    # metadata tools ride the active connection ungated.
+    _assert_preset_grant(name)
     try:
         entry = await asyncio.to_thread(REGISTRY.set_active, name)
     except LookupError as e:
@@ -224,6 +229,9 @@ async def begin_transaction(connection: str | None = None) -> str:
     Exactly one transaction per connection; idle transactions are rolled
     back automatically after DB_TX_IDLE_TIMEOUT seconds (default 300)."""
     start_time = time.perf_counter()
+    # Review 2026-10-24 (F1): the tx gate must run BEFORE the tx opens, or a
+    # non-admin can execute anything through query/execute(tx_id=...).
+    _assert_preset_grant(connection)
     _ensure_reaper()
     # E3: attribute the transaction to the caller (F7 — identity visible
     # inside tool functions). Unknown owner (in-memory/mono-legacy) is fine.
@@ -490,27 +498,11 @@ def _format_db_error(error_msg: dict) -> str:
         formatted = f"Error: {error_msg['message']}"
     return formatted
 
-
-@mcp.tool()
-async def get_schemas(table_name: str | None = None) -> str:
-    """Get schema information for a specified table."""
-    start_time = time.perf_counter()
-    if not table_name:
-        _timing_update(start_time, "get_schemas", False)
-        return "Error: table_name is required"
-
-    table_name = table_name.upper()
-    schema = connections.fetch_schema_from_cache(table_name)
-
-    if not schema or not isinstance(schema, dict):
-        _timing_update(start_time, "get_schemas", False)
-        return f"Invalid schema for table '{table_name}'."
-
-    _timing_update(start_time, "get_schemas", True)
-    return str({
-        "columns": schema["columns"],
-        "constraints": schema["constraints"]
-    })
+# (Review 2026-10-24 T1: a second @mcp.tool()-decorated get_schemas lived
+# here, calling connections.fetch_schema_from_cache — deleted in the P4
+# overhaul. The later registration at the "Generic Data Tools" section
+# last-wins, so live calls worked, but the dead shadow was one
+# re-registration-order change away from breaking every get_schemas call.)
 
 
 # ============================================================================
@@ -593,8 +585,11 @@ def _assert_preset_grant(connection: str | None) -> None:
                 f"caller token not in the user store (map size={len(get_tokens())})")
         logger.warning("preset-grant check skipped: caller token not in map (map size=%d)", len(get_tokens()))
         return
-    role = entry.get("role", "admin")  # legacy mono map = admin
-    if role == "admin":
+    # Role via the ONE shared default (identity.resolve_role — mono
+    # fail-open, multi fail-closed; uniform with _current_caller_grants).
+    from tools.shared.identity import resolve_role
+
+    if resolve_role(entry, user_store) == "admin":
         return
     granted = set(entry.get("db_presets") or [])
 
@@ -609,20 +604,44 @@ def _assert_preset_grant(connection: str | None) -> None:
     try:
         preset = presets.get_preset(target)
     except LookupError as e:
-        if connection:
-            # unknown explicit name: registry.get raises its own error later
-            logger.warning("preset-grant check skipped: preset lookup failed: %s", e)
-            return
-        raise PermissionError(
-            f"the active connection '{target}' is not a granted preset — "
-            "non-admin callers may only use granted presets"
-        )
+        if not connection:
+            raise PermissionError(
+                f"the active connection '{target}' is not a granted preset — "
+                "non-admin callers may only use granted presets"
+            )
+        # An explicit name that is not a preset is fine ONLY when it names no
+        # live registry entry (registry.get then raises "Unknown connection").
+        # A live entry (raw connect_database / the legacy env default) must be
+        # REFUSED — the old skip-here let a non-admin reach any self-connected
+        # DB by name (review 2026-10-24, F1).
+        if connection in {c["name"] for c in REGISTRY.list()}:
+            raise PermissionError(
+                f"Connection '{connection}' is not a granted preset — "
+                "non-admin callers may only use granted presets."
+            )
+        logger.warning("preset-grant check skipped: preset lookup failed: %s", e)
+        return
     if preset.number not in granted and preset.name not in granted \
             and preset.connection_name not in granted:
         raise PermissionError(
             f"Preset '{connection or target}' is not granted to your account "
             f"({entry.get('client_id', 'unknown')})."
         )
+
+
+def _refuse_non_admin(action: str) -> None:
+    """Review 2026-10-24 (F1): raw connect_database is admin-only under the
+    user-store verifier — a non-admin could otherwise connect to an arbitrary
+    DB and reach it through query/execute by name. Mono mode / unresolvable
+    identity on the MONO verifier stay fail-open via the same discriminator
+    `_current_caller_grants` uses (user-store anomalies fail CLOSED)."""
+    from connections import _current_caller_grants
+
+    _client, role, _grants = _current_caller_grants()
+    if role != "admin":
+        raise PermissionError(
+            f"{action} is admin-only — non-admin callers use granted presets "
+            "(connect_preset('NN') or query(sql, connection='NN')).")
 
 
 def _read_guard(sql: str) -> str | None:
@@ -839,6 +858,9 @@ async def execute_sql(sql: str = "", connection: str | None = None,
         if len(statements) > 50:
             _timing_update(start_time, "execute_sql", False)
             return "Error: statements supports at most 50 per batch"
+        # Review 2026-10-24 (F1): the batch branch used to dispatch before any
+        # grant check.
+        _assert_preset_grant(connection)
         try:
             note = await asyncio.to_thread(_run_batch, connection, statements)
         except Exception as e:
@@ -873,7 +895,9 @@ async def execute_sql(sql: str = "", connection: str | None = None,
                 elapsed_ms = (time.time() - start) * 1000
                 metrics["total_query_time_ms"] += elapsed_ms
 
-        _assert_preset_grant(connection)
+        # (Review 2026-10-24 F9: a second _assert_preset_grant call used to
+        # run here — the one at the head of the single-statement path already
+        # covers it.)
         rowcount = await asyncio.to_thread(_with_entry, connection, _run)
     except Exception as e:
         _timing_update(start_time, "execute_sql", False)
@@ -890,6 +914,8 @@ async def get_schemas(table_name: str, connection: str | None = None) -> str:
     if not table_name or not table_name.strip():
         _timing_update(start_time, "get_schemas", False)
         return "Error: table_name is required"
+    # Review 2026-10-24 (F1): metadata tools ride the target entry ungated.
+    _assert_preset_grant(connection)
     try:
         def _run(entry):
             name = table_name.strip()
@@ -919,6 +945,8 @@ async def get_schemas(table_name: str, connection: str | None = None) -> str:
 async def list_tables(connection: str | None = None) -> str:
     """Lists all tables on the active connection (or the named one) with their comments."""
     start_time = time.perf_counter()
+    # Review 2026-10-24 (F1): metadata tools ride the target entry ungated.
+    _assert_preset_grant(connection)
     try:
         def _run(entry):
             start = time.time()
@@ -948,6 +976,8 @@ async def explain_plan(sql: str, connection: str | None = None) -> str:
     if not sql or not sql.strip():
         _timing_update(start_time, "explain_plan", False)
         return "Error: sql query is required"
+    # Review 2026-10-24 (F1): metadata tools ride the target entry ungated.
+    _assert_preset_grant(connection)
     try:
         def _run(entry):
             start = time.time()
@@ -971,11 +1001,19 @@ async def explain_plan(sql: str, connection: str | None = None) -> str:
 
 
 def _render_error(e: Exception) -> str:
-    """Render a dialect error like the legacy tool strings; strip internals."""
+    """Render a dialect error like the legacy tool strings; strip internals.
+
+    Review 2026-10-24 (T2): resolves the dialect WITHOUT REGISTRY.get(None) —
+    that lazily created the legacy env-default Oracle connection as a side
+    effect of FORMATTING AN ERROR."""
     dialect = None
     try:
-        active_entry = REGISTRY.get(None)
-        dialect = DIALECTS[active_entry.dialect]
+        active_name = REGISTRY.active_name()
+        entry_dialect = next(
+            (c["dialect"] for c in REGISTRY.list() if c["name"] == active_name),
+            None)
+        if entry_dialect:
+            dialect = DIALECTS[entry_dialect]
     except Exception:
         dialect = None
     if dialect is not None:

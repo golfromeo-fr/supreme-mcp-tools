@@ -19,6 +19,16 @@ from memory_core import (
     COLLECTION_NAME,
     get_now_iso, scroll_all,
 )
+from memory_tools import _memory_caller
+
+
+def _edge_visible(owner: str | None, caller: str, is_admin: bool, scoped: bool) -> bool:
+    """M2 (review 2026-10-24): graph tools must respect owner scoping — a
+    scoped non-admin may only link/traverse their own memories (legacy
+    ownerless corpus belongs to admin). Admins and mono mode see everything."""
+    if not scoped or is_admin:
+        return True
+    return owner is None or owner == "" or owner == caller
 
 
 # ============================================================================
@@ -53,6 +63,10 @@ async def createMemoryEdge(
     if not vector_store:
         return "Error: Qdrant client not initialized"
 
+    # M2 (review 2026-10-24): scoped non-admins may only link their own
+    # memories (same semantics as deleteMemory — ownerless is shared).
+    caller, is_admin, scoped = _memory_caller()
+
     try:
         if from_id == to_id:
             results = vector_store.retrieve(
@@ -62,6 +76,8 @@ async def createMemoryEdge(
             if not results:
                 return f"Error: Memory not found: {from_id}"
             src = results[0]
+            if not _edge_visible(src.payload.get("owner"), caller, is_admin, scoped):
+                return f"Memory not found: {from_id}"
             edge = {"to": to_id, "relation": relation, "label": label}
             current_edges = src.payload.get("edges", [])
             if edge not in current_edges:
@@ -81,6 +97,9 @@ async def createMemoryEdge(
             found = {str(r.id) for r in results}
             missing = [x for x in [from_id, to_id] if x not in found]
             return f"Error: Memory not found: {missing[0]}"
+        for r in results:
+            if not _edge_visible(r.payload.get("owner"), caller, is_admin, scoped):
+                return f"Memory not found: {r.id}"
 
         edge = {"to": to_id, "relation": relation, "label": label}
 
@@ -135,6 +154,9 @@ async def getMemoryGraph(
 
     try:
         depth = min(depth, 4)
+        # M2 (review 2026-10-24): scoped non-admins traverse only their own
+        # (and shared ownerless) memories — foreign nodes are dead ends.
+        caller, is_admin, scoped = _memory_caller()
         visited = set()
         nodes = {}
         edges = []
@@ -154,6 +176,8 @@ async def getMemoryGraph(
                 continue
 
             payload = results[0].payload
+            if not _edge_visible(payload.get("owner"), caller, is_admin, scoped):
+                continue
             # Artifact-backed payloads carry text_preview instead of text.
             text = (payload.get("text") or payload.get("text_preview", ""))[:50].replace('"', "'")
             mtype = payload.get("memory_type", "unknown")

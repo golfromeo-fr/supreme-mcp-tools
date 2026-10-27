@@ -84,13 +84,45 @@ class PostgresVectorStore:
     # Collection lifecycle
     # ------------------------------------------------------------------
 
+    def _ensure_map_table(self) -> None:
+        """Create the collection-name mapping table (sanitized -> original)."""
+        with self._pool.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS _vec_collection_map (
+                    sanitized TEXT PRIMARY KEY,
+                    original  TEXT NOT NULL
+                )
+            """)
+
+    def _store_name_mapping(self, name: str) -> None:
+        """Record the original collection name alongside the sanitized one."""
+        self._ensure_map_table()
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO _vec_collection_map (sanitized, original) VALUES (%s, %s) "
+                "ON CONFLICT (sanitized) DO UPDATE SET original = excluded.original",
+                (_s(name), name),
+            )
+
+    def _lookup_original_name(self, sanitized: str) -> str:
+        """Reverse-lookup the original collection name from a sanitized table name."""
+        self._ensure_map_table()
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT original FROM _vec_collection_map WHERE sanitized = %s",
+                (sanitized,)
+            ).fetchone()
+        return row["original"] if row else sanitized
+
     def ensure_collection(
         self, name: str, *,
         dense_dim: int | None = None,
         sparse: bool = False,
         distance: str = "Cosine",
     ) -> None:
+        original_name = name  # record BEFORE _s() sanitizes it
         name = _s(name)
+        self._store_name_mapping(original_name)
         if dense_dim is None:
             # Sparse-only: use tsvector for full-text, no dense vector.
             # Coalesce text/codeChunk/content so both memorymcp and ragmcp index.
@@ -176,18 +208,21 @@ class PostgresVectorStore:
         collection = _s(collection)
         vec_str = _serialize_vector(vec)
         where, params = _filter_to_sql(filter)
-        where_clause = f"AND {where}" if where else ""
-        params = [vec_str, vec_str, limit] + params
+        where_clause = f"WHERE {where}" if where else ""
+        # Placeholder order is textual: similarity-vec, [filter...], order-vec,
+        # limit. (Review 2026-10-24 S2: the old list dropped the filter params
+        # after LIMIT and carried a 4th placeholder the list never bound —
+        # psycopg ProgrammingError on every call.)
+        all_params = [vec_str] + params + [vec_str, limit]
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload,
                        1 - (embedding <=> %s::vector) AS similarity
                 FROM vec_{collection}
-                WHERE 1 - (embedding <=> %s::vector) > -1
                 {where_clause}
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
-            """, tuple(params)).fetchall()
+            """, tuple(all_params)).fetchall()
         results = []
         for row in rows:
             results.append(ScoredPoint(
@@ -211,7 +246,9 @@ class PostgresVectorStore:
         tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
-        params = [tsquery_term, tsquery_term, limit] + params
+        # Textual placeholder order: ts_rank q, @@ q, [filter...], limit
+        # (S2: filter params used to land after LIMIT).
+        all_params = [tsquery_term, tsquery_term] + params + [limit]
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload, ts_rank(search_vector, {tsquery_sql}) AS score
@@ -220,7 +257,7 @@ class PostgresVectorStore:
                 {where_clause}
                 ORDER BY score DESC
                 LIMIT %s
-            """, tuple(params)).fetchall()
+            """, tuple(all_params)).fetchall()
         return [ScoredPoint(
             id=str(row["id"]),
             score=float(row["score"]),
@@ -236,7 +273,10 @@ class PostgresVectorStore:
         tsquery_term, tsquery_sql = _build_tsquery(query_text, sparse)
         where, params = _filter_to_sql(filter)
         where_clause = f"AND {where}" if where else ""
-        params = [vec_str, vec_str, tsquery_term, tsquery_term, limit] + params
+        # Textual placeholder order: similarity-vec, ts_rank q, @@ q,
+        # [filter...], limit (S2: the old list bound a phantom second vec and
+        # pushed filter params past LIMIT).
+        all_params = [vec_str, tsquery_term, tsquery_term] + params + [limit]
         with self._pool.connection() as conn:
             rows = conn.execute(f"""
                 SELECT id, payload,
@@ -247,7 +287,7 @@ class PostgresVectorStore:
                 {where_clause}
                 ORDER BY combined DESC
                 LIMIT %s
-            """, tuple(params)).fetchall()
+            """, tuple(all_params)).fetchall()
         return [ScoredPoint(
             id=str(row["id"]),
             score=float(row["combined"]),
@@ -320,12 +360,26 @@ class PostgresVectorStore:
         )
 
     def list_collections(self) -> list[str]:
+        """Return ORIGINAL collection names (reverse-mapped from sanitized
+        table names — F3, review 2026-10-24: the stripped-table-name return
+        broke lane enumeration on this combo, since lanes.is_lane_name()
+        matches on the original name)."""
+        self._ensure_map_table()
         with self._pool.connection() as conn:
             rows = conn.execute(
                 "SELECT table_name FROM information_schema.tables "
-                "WHERE table_name LIKE 'vec_%' AND table_schema = 'public'"
+                "WHERE table_name LIKE 'vec\\_%' AND table_schema = 'public' "
+                "AND table_name NOT LIKE '%\\_fts' AND table_name != '_vec_collection_map'"
             ).fetchall()
-        return [r["table_name"][4:] for r in rows]  # strip "vec_" prefix
+            result = []
+            for r in rows:
+                sanitized = r["table_name"][4:]  # strip "vec_" prefix
+                row = conn.execute(
+                    "SELECT original FROM _vec_collection_map WHERE sanitized = %s",
+                    (sanitized,)
+                ).fetchone()
+                result.append(row["original"] if row else sanitized)
+        return result
 
     # ------------------------------------------------------------------
     # Migration (R1: default with_vectors=False)
@@ -400,9 +454,19 @@ def _build_tsquery(query_text: str | None, sparse: SparseVector) -> tuple[str, s
 
 
 def _filter_to_sql(f: Filter | None) -> tuple[str, list]:
-    """Translate neutral Filter → SQL WHERE clause + params."""
+    """Translate neutral Filter → SQL WHERE clause + params.
+
+    S4 (review 2026-10-24): ``should`` conditions are NOT implemented on this
+    backend — a should-only Filter silently produces an unfiltered query.
+    """
     if f is None or (not f.must and not f.should and not f.must_not):
         return "", []
+    if f.should:
+        logger.warning(
+            "should conditions dropped by the postgres backend"
+            + (" — query ran UNFILTERED" if not f.must and not f.must_not
+               else " (must/must_not still applied)")
+            + ". should= is Qdrant-only; use must= for narrowing.")
     parts = []
     params: list = []
     for c in f.must:

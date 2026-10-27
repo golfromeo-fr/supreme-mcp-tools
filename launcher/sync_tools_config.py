@@ -90,8 +90,13 @@ def main():
 
     # Discover tools from servers
     logger.info("Discovering tools from servers...")
-    from launcher.env_manager import load_auth_config
-    auth_keys = {name: load_auth_config(name).get("api_key") for name in server_urls}
+    from launcher.env_manager import load_auth_config, resolve_tool_api_key
+    # L3 (review 2026-10-24): env-first key resolution (P2-1's precedence) —
+    # the config-only read made discovery 401 on env-keyed setups.
+    auth_keys = {
+        name: resolve_tool_api_key(name, load_auth_config(name).get("api_key"))
+        for name in server_urls
+    }
     discovered = update_config_with_discovered_tools(server_urls, timeout=args.timeout, auth_keys=auth_keys)
 
     for server_name, tools in discovered.items():

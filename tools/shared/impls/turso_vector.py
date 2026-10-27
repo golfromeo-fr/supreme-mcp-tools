@@ -205,16 +205,23 @@ class TursoVectorStore:
                 """)
             except Exception as e:
                 err = str(e).lower()
-                if "already exists" not in err:
-                    # Fallback without vector type
-                    self._conn.execute(f"""
-                        CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
-                            id          TEXT PRIMARY KEY,
-                            embedding   BLOB,
-                            payload     TEXT,
-                            text_content TEXT
-                        )
-                    """)
+                if "already exists" in err:
+                    return
+                # S6 (review 2026-10-24): the BLOB fallback is ONLY for a
+                # build genuinely lacking the VECTOR type — the old catch-all
+                # silently lost vector typing on ANY error (transient locks
+                # included), and every later vector query then failed.
+                vector_unsupported = self._has_vector is False or any(
+                    marker in err for marker in
+                    ("vector", "unknown datatype", "unsupported"))
+                if not vector_unsupported:
+                    raise RuntimeError(
+                        f"ensure_collection('{name}', dense_dim={dense_dim}) "
+                        f"failed and the BLOB fallback does not apply "
+                        f"(VECTOR support IS available): {e}") from e
+                logger.warning(
+                    f"Collection '{name}' created with BLOB embedding — this "
+                    "libSQL build lacks VECTOR support; vector queries will fail")
         else:
             # No dense — FTS5-only collection
             self._conn.execute(f"""
@@ -664,9 +671,21 @@ def _filter_to_sql(f: Filter | None, payload_col: str = "payload") -> tuple[str,
 
     Uses json_each for tag array containment (MatchContains).
     Uses json_extract for scalar field access.
+
+    S4 (review 2026-10-24): ``should`` conditions are NOT implemented on this
+    backend — a should-only Filter silently produces an unfiltered query.
+    No live caller passes should= today; this warning marks the day one does.
     """
     if f is None or (not f.must and not f.should and not f.must_not):
         return "", []
+    if f.should and not f.must and not f.must_not:
+        logger.warning(
+            "should-only Filter dropped by the turso backend — query ran "
+            "UNFILTERED. should= is Qdrant-only; use must= for narrowing.")
+    elif f.should:
+        logger.warning(
+            "should conditions dropped by the turso backend (must/must_not "
+            "still applied). should= is Qdrant-only.")
 
     parts = []
     params: list = []

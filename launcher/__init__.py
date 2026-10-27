@@ -34,19 +34,17 @@ from .distributed_registry import (
     CacheManager,
     EventAggregator,
     HTTPClient,
-    RequestCoalescer,
 )
 from .distributed_registry import ConfigPersistence as DistributedConfigPersistence
 from .management_server import ManagementServer
 from .tool_extensions import Extension, ExtensionRegistry, ExtensionType, ExtensionHTTPServer
 
 # FEF V3 - Security
-from .security import (
-    APIKeyAuth,
-    verify_api_key,
-    require_permission,
-    RateLimiter,
-)
+# (APIKeyAuth / verify_api_key / require_permission were deleted 2026-10-25,
+# review 2026-10-24 L3: re-export-only dead code — every served surface uses
+# the DualHeaderVerifier in tools/shared/server_factory.py; the module's
+# dict-membership verify was also timing-unsafe. RateLimiter stays — tested.)
+from .security import RateLimiter
 
 # FEF V3 - Resilience
 from .resilience import (
@@ -85,16 +83,12 @@ __all__ = [
     "CacheManager",
     "EventAggregator",
     "HTTPClient",
-    "RequestCoalescer",
     "ManagementServer",
     "Extension",
     "ExtensionRegistry",
     "ExtensionType",
     "ExtensionHTTPServer",
     # FEF V3 - Security
-    "APIKeyAuth",
-    "verify_api_key",
-    "require_permission",
     "RateLimiter",
     # FEF V3 - Resilience
     "retry_with_backoff",

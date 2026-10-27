@@ -118,7 +118,12 @@ def _caller_rag_access() -> tuple[str | None, set[str] | None]:
     entry = get_tokens().get(token)
     if entry is None:
         return ("unknown", set()) if user_store else (None, None)
-    if entry.get("role") == "admin":
+    # Role via the ONE shared default (identity.resolve_role — see its
+    # docstring for the mono-fail-open/multi-fail-closed convention and the
+    # 2026-10-26 mono-bricking drift it prevents).
+    from tools.shared.identity import resolve_role
+
+    if resolve_role(entry, user_store) == "admin":
         return entry.get("client_id"), None
     return entry.get("client_id"), set(entry.get("rag_collections") or [])
 
@@ -824,7 +829,7 @@ def setup_fef_v3():
                     "properties": {
                         "workspace_root": {"type": "string", "description": "Path to workspace to index"},
                         "collection_name": {"type": "string", "description": "Target collection name"},
-                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality"], "description": "Embedding model preset"}
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality", "nvidia-free"], "description": "Embedding model preset"}
                     },
                     "required": ["workspace_root"]
                 },
@@ -2402,7 +2407,7 @@ def setup_extensions(registry=None) -> None:
                     "properties": {
                         "workspace_root": {"type": "string", "description": "Path to workspace to index"},
                         "collection_name": {"type": "string", "description": "Target collection name"},
-                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality"], "description": "Embedding model preset"}
+                        "embedding_model": {"type": "string", "enum": ["auto", "fast", "high-quality", "nvidia-free"], "description": "Embedding model preset"}
                     },
                     "required": ["workspace_root"]
                 },

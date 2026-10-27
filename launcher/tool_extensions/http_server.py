@@ -21,6 +21,10 @@ from ..config_types import DEFAULT_HOST
 
 logger = logging.getLogger(__name__)
 
+# C7 deadline for the per-tool mgmt server's drain on stop (review
+# 2026-10-24 L1) — mirrors server_manager.GRACEFUL_SHUTDOWN_TIMEOUT.
+GRACEFUL_STOP_TIMEOUT_S = 5
+
 
 # Request/Response Models
 class QueryRequest(BaseModel):
@@ -198,9 +202,11 @@ class ExtensionHTTPServer:
             # Only log if enabled
             should_log = self._health_check_logs != "disable"
             log_errors_only = self._health_check_logs == "errors-only"
-            
+
             if should_log and not log_errors_only:
-                logger.warning(f"[HEALTH_CHECK] Received health check request at {start}")
+                # L3 (review 2026-10-24): routine health checks are DEBUG —
+                # WARNING made ~17K noise lines/day across six tools.
+                logger.debug(f"[HEALTH_CHECK] Received health check request at {start}")
             try:
                 # Use include_data=False to avoid calling slow data source handlers
                 extensions_count = sum(
@@ -209,7 +215,7 @@ class ExtensionHTTPServer:
                 elapsed = time.time() - start
                 # Only log completion if not disabled and not errors-only mode
                 if should_log and not log_errors_only:
-                    logger.warning(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
+                    logger.debug(f"[HEALTH_CHECK] Completed in {elapsed:.3f}s, count={extensions_count}")
                 return {
                     "status": "healthy",
                     "tool": self.tool_name,
@@ -372,7 +378,11 @@ class ExtensionHTTPServer:
             host=self.host,
             port=self.port,
             log_level="info",
-            access_log=self._health_check_logs != "disable"
+            access_log=self._health_check_logs != "disable",
+            # C7 (review 2026-10-24 L1): a pinned-open websocket must not let
+            # this mgmt server outlive the shutdown window (tool servers
+            # already carried this deadline; the 81xx servers did not).
+            timeout_graceful_shutdown=5,
         )
         self._server = uvicorn.Server(config)
         
@@ -386,11 +396,17 @@ class ExtensionHTTPServer:
         logger.info(f"Management server for {self.tool_name} started on port {self.port}")
     
     async def stop(self) -> None:
-        """Stop the HTTP server."""
+        """Stop the HTTP server (bounded — a stuck drain must not hang the
+        caller; C7 / review 2026-10-24 L1)."""
         if self._server:
             self._server.should_exit = True
             if self._task:
-                await self._task
+                try:
+                    await asyncio.wait_for(self._task, timeout=GRACEFUL_STOP_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Management server for {self.tool_name} ignored stop for "
+                        f"{GRACEFUL_STOP_TIMEOUT_S}s — abandoned (port frees on exit)")
             logger.info(f"Management server for {self.tool_name} stopped")
     
     def get_app(self) -> FastAPI:

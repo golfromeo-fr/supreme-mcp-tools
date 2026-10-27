@@ -161,16 +161,22 @@ if [ "$REDACT" = 1 ]; then
   python3 - "$BUNDLE/env/.env" <<'PY'
 import re, sys
 p = sys.argv[1]
+# F5 (review 2026-10-24): URLs join the redaction EXCEPT local file: paths
+# (no credential in them) — remote Turso DSNs can carry auth_token= inline
+# (TURSO_DATABASE_URL=libsql://...?auth_token=...).
 secret_suffix = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|DSN)$")
+url_suffix = re.compile(r"URL$")
 out = []
 for line in open(p, encoding="utf-8"):
     s = line.rstrip("\n")
     m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", s)
     if m and m.group(2) != "":
         k = m.group(1)
-        # plan §3.1: (KEY|SECRET|TOKEN|PASSWORD|DSN) suffixes, DB_PRESET_*
-        # and the whole POSTGRES_* family redact
+        # plan §3.1: (KEY|SECRET|TOKEN|PASSWORD|DSN) suffixes, DB_PRESET_*,
+        # the whole POSTGRES_* family, and non-file URLs
+        v = m.group(2)
         if (secret_suffix.search(k) or k.startswith("POSTGRES_")
+                or (url_suffix.search(k) and not v.startswith("file:"))
                 or (k.startswith("DB_PRESET_") and not k.endswith("_DESC"))):
             s = k + "=__REDACTED__"
     out.append(s)

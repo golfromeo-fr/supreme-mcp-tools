@@ -51,8 +51,11 @@ def register_migrate_tools(mcp):
             if import_backend == "auto":
                 import_backend = combo
 
-        if file_path:
-            # Export to file, then import
+        # Review 2026-10-24 (S5): export/import are fully synchronous and can
+        # run for minutes on a real store — they must not block the tool
+        # server's event loop (every concurrent MCP call + health check froze
+        # for the whole migration).
+        def _run_file_mode():
             cmd_export(argparse.Namespace(
                 backend=export_backend, out=file_path, progress_every=None,
             ))
@@ -60,7 +63,8 @@ def register_migrate_tools(mcp):
                 backend=import_backend, **{"in": file_path},
                 progress_every=None, backup_before=False,
             ))
-        else:
+
+        def _run_pipe_mode():
             # Pipe directly via temp file
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".jsonl", delete=False
@@ -76,6 +80,12 @@ def register_migrate_tools(mcp):
                 ))
             finally:
                 os.unlink(tmp_path)
+
+        import asyncio as _asyncio
+        if file_path:
+            await _asyncio.to_thread(_run_file_mode)
+        else:
+            await _asyncio.to_thread(_run_pipe_mode)
 
         return f"Migration complete: {export_backend} -> {import_backend}"
 

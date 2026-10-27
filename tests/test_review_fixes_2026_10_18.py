@@ -173,3 +173,216 @@ def test_mono_default_login_ok_on_loopback(ui_env, monkeypatch):
     monkeypatch.setenv("MCP_UI_HOST", "127.0.0.1")
     session = ui_env.try_login_user("admin", "admin")
     assert session["authenticated"] is True
+
+
+# ---------------------------------------------------------------------------
+# 4. F1 (review 2026-10-24): the grant gate covers EVERY entry point
+# ---------------------------------------------------------------------------
+
+import asyncio
+
+
+def _ungranted_active(grant_env):
+    """Active entry 'default' — an existing registry entry that is NOT a
+    granted preset (the worker is granted only preset '02')."""
+    from connections import ConnectionEntry
+    grant_env._entries["default"] = ConnectionEntry(
+        name="default", dialect="oracle", params={}, handle=object())
+    grant_env._active = "default"
+    return grant_env
+
+
+def test_explicit_existing_entry_refused(grant_env, monkeypatch):
+    """An explicit name that is a LIVE registry entry but not a granted
+    preset must be refused — the old code skipped the check entirely."""
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError, match="not a granted preset"):
+        db_tools._assert_preset_grant("default")
+
+
+def test_batch_statements_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.execute_sql(statements=["SELECT 1 FROM DUAL"]))
+
+
+def test_begin_transaction_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.begin_transaction())
+
+
+def test_metadata_tools_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.get_schemas("SOMETABLE", connection="default"))
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.list_tables(connection="default"))
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.explain_plan("SELECT 1", connection="default"))
+
+
+def test_use_database_ungranted_refused(grant_env, monkeypatch):
+    import db_tools
+    _ungranted_active(grant_env)
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError):
+        asyncio.run(db_tools.use_database("default"))
+
+
+def test_connect_database_refused_for_non_admin(grant_env, monkeypatch):
+    import db_tools
+    _caller(monkeypatch)
+    with pytest.raises(PermissionError, match="admin-only"):
+        asyncio.run(db_tools.connect_database(
+            "zz-raw", "postgres",
+            {"host": "h", "dbname": "d", "user": "u", "password": "p"}))
+    # refused BEFORE any connect attempt — nothing registered
+    assert "zz-raw" not in grant_env._entries
+
+
+def test_connect_database_ok_for_mono(grant_env, monkeypatch):
+    """Mono verifier: raw connects keep working (fail-open by design)."""
+    import core
+    import db_tools
+    monkeypatch.setattr(core.mcp, "auth", _MonoVerifier(
+        {"sys": {"client_id": "databasemcp"}}), raising=False)
+    _break_http(monkeypatch)
+    # A libsql file::memory: connect is cheap and side-effect free
+    result = asyncio.run(db_tools.connect_database(
+        "zz-mono", "libsql", {"url": "file::memory:"}))
+    assert "Connected 'zz-mono'" in result
+
+
+# ---------------------------------------------------------------------------
+# 5. Mono-mode fallthrough (found at a mono deployment 2026-10-26, fixed via
+#    the "legacy mono map = admin" role default) — the mono verifier's single
+#    entry carries NO role, so the successful-auth fallthrough treated the
+#    operator as a role-less user: ragmcp denied every collection, memorymcp
+#    owner-scoped queries to "memorymcp" (hiding the legacy corpus).
+# ---------------------------------------------------------------------------
+
+class _MonoMapVerifier:
+    """Legacy mono shape: tokens() exists, is_user_store absent, no role."""
+    def tokens(self):
+        return {"sys-key": {"client_id": "ragmcp", "scopes": ["mcp"]}}
+
+
+def _mono_http(monkeypatch):
+    import fastmcp.server.dependencies as deps
+    req = type("R", (), {"headers": {"authorization": "Bearer sys-key"}})()
+    monkeypatch.setattr(deps, "get_http_request", lambda: req, raising=False)
+
+
+def test_ragmcp_mono_authenticated_unrestricted(monkeypatch):
+    sys.path.insert(0, str(PROJECT_ROOT / "tools" / "ragmcp"))
+    import ragmcp_fastmcp
+    monkeypatch.setattr(ragmcp_fastmcp.mcp, "auth",
+                        _MonoMapVerifier(), raising=False)
+    _mono_http(monkeypatch)
+    client_id, allowed = ragmcp_fastmcp._caller_rag_access()
+    assert allowed is None, "mono operator must be UNRESTRICTED, not empty-granted"
+    assert client_id == "ragmcp"
+
+
+def test_memorymcp_mono_authenticated_is_admin(monkeypatch):
+    import memory_tools
+    # NOTE: patch memory_tools.mcp directly — a bare `import core` here
+    # resolves to DATABASEMCP's core (both tool dirs are on sys.path).
+    monkeypatch.setattr(memory_tools.mcp, "auth", _MonoMapVerifier(), raising=False)
+    _mono_http(monkeypatch)
+    client_id, is_admin, _scoped = memory_tools._memory_caller()
+    assert is_admin is True, "mono operator must bypass owner scoping"
+    assert client_id == "ragmcp"
+
+
+def test_databasemcp_mono_authenticated_can_connect(monkeypatch):
+    """The user's report (mono deployment): connect_database answered
+    'admin-only' — _current_caller_grants defaulted the role-less mono map
+    entry to role='user'. With the admin default, raw connects work again."""
+    sys.path.insert(0, str(PROJECT_ROOT / "tools" / "databasemcp"))
+    import connections
+
+    # Drive _current_caller_grants with the mono map + authenticated request.
+    import core as db_core
+    monkeypatch.setattr(db_core.mcp, "auth", _MonoMapVerifier(), raising=False)
+    _mono_http(monkeypatch)
+    client_id, role, grants = connections._current_caller_grants()
+    assert role == "admin", "mono map entry without role must default to admin"
+
+    import db_tools
+    from connections import REGISTRY
+    REGISTRY._entries.clear()
+    REGISTRY._active = None
+    db_tools.REGISTRY._entries.clear()
+    db_tools.REGISTRY._active = None
+    monkeypatch.delenv("USERID", raising=False)
+    try:
+        result = asyncio.run(db_tools.connect_database(
+            "second", "libsql", {"url": "file::memory:"}))
+        assert "Connected 'second'" in result
+    finally:
+        REGISTRY._entries.clear()
+        REGISTRY._active = None
+        db_tools.REGISTRY._entries.clear()
+        db_tools.REGISTRY._active = None
+
+
+def test_ragmcp_multi_roleless_still_scoped(monkeypatch):
+    """The default must NOT fire in multi: a user-store entry without a role
+    field (malformed) is still treated as a scoped non-admin."""
+    sys.path.insert(0, str(PROJECT_ROOT / "tools" / "ragmcp"))
+    import ragmcp_fastmcp
+    monkeypatch.setattr(ragmcp_fastmcp.mcp, "auth",
+                        _UserStoreVerifier({
+                            "user-key": {"client_id": "worker"},
+                        }), raising=False)
+    import fastmcp.server.dependencies as deps
+    req = type("R", (), {"headers": {"authorization": "Bearer user-key"}})()
+    monkeypatch.setattr(deps, "get_http_request", lambda: req, raising=False)
+    client_id, allowed = ragmcp_fastmcp._caller_rag_access()
+    assert client_id == "worker" and allowed == set()
+
+
+# ---------------------------------------------------------------------------
+# CR1 (counter-review 2026-10-27): the role default lives in ONE helper —
+# identity.resolve_role — and every resolver site uses it.
+# ---------------------------------------------------------------------------
+
+def test_resolve_role_convention():
+    from tools.shared.identity import resolve_role
+
+    # legacy mono map: role-less entry = the operator = admin
+    assert resolve_role({"client_id": "x", "scopes": ["mcp"]}, False) == "admin"
+    # user-store verifier: role-less entry is malformed -> fail-closed user
+    assert resolve_role({"client_id": "w"}, True) == "user"
+    # explicit roles always win, both directions
+    assert resolve_role({"role": "admin"}, True) == "admin"
+    assert resolve_role({"role": "user"}, False) == "user"
+    # None entry (anomaly paths) follows the same mode defaults
+    assert resolve_role(None, False) == "admin"
+    assert resolve_role(None, True) == "user"
+
+
+def test_all_resolver_sites_use_the_shared_helper():
+    """Grep-pin: no identity resolver may carry its own role default again —
+    the drift that bricked mono lived in exactly such a duplicate."""
+    import re
+    offenders = []
+    for rel in ("tools/ragmcp/ragmcp_fastmcp.py",
+                "tools/memorymcp/memory_tools.py",
+                "tools/databasemcp/connections.py",
+                "tools/databasemcp/db_tools.py",
+                "tools/shared/server_factory.py"):
+        src = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        if re.search(r'\.get\(\s*["\']role["\']\s*,', src):
+            offenders.append(rel)
+    assert not offenders, f"role defaults must go through identity.resolve_role: {offenders}"

@@ -429,7 +429,15 @@ def _current_caller_grants() -> tuple[str, str, list[str]]:
         if ident is None:
             return _unresolved_grants(user_store)
         client_id, entry = ident
-        return client_id, entry.get("role", "user"), list(entry.get("db_presets") or [])
+        # Role via the ONE shared default (identity.resolve_role): the mono
+        # map's role-less entry defaults to admin — defaulting it to "user"
+        # made the F1 admin gates refuse EVERY connect in mono mode (found at
+        # a mono deployment 2026-10-26). User-store entries always carry a
+        # role; a role-less one stays fail-CLOSED there.
+        from tools.shared.identity import resolve_role
+
+        role = resolve_role(entry, user_store)
+        return client_id, role, list(entry.get("db_presets") or [])
     except Exception as e:
         logger.warning(f"caller-grant resolution failed: {type(e).__name__}: {e}")
         return _unresolved_grants(user_store)

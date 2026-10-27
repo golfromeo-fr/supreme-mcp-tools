@@ -311,8 +311,11 @@ class PostgresSqlStore:
                     return actual_id
 
         except Exception as e:
+            # S6 (review 2026-10-24): RAISE — the old swallow returned the
+            # success-shaped memory_id (silent metadata loss). memory_tools
+            # catches and continues vector-only.
             logger.error(f"PG upsert failed: {_safe_error(e)}")
-            return memory_id
+            raise
 
     def get_memory(self, memory_id: str) -> dict | None:
         """Get a memory by ID, also increments usage_count."""

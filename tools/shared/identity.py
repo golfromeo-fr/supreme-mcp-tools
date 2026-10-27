@@ -87,6 +87,26 @@ def current_identity(tokens_map_fn: Callable[[], dict]) -> tuple[str, dict] | No
     return resolve_identity(request, tokens_map_fn)
 
 
+def resolve_role(entry: dict | None, user_store: bool) -> str:
+    """Role of a token-map entry with the mono/multi convention applied.
+
+    THE single source of the role default (counter-review 2026-10-27 CR1:
+    the same default was duplicated at five identity-resolver sites, and
+    one drift — defaulting the role-less MONO entry to "user" — bricked
+    mono mode at a deployment: ragmcp denied every collection, memorymcp
+    hid the legacy corpus, databasemcp refused all connects).
+
+    - Legacy mono map: the single entry carries NO role and the operator IS
+      the admin → default "admin" (mono fail-open).
+    - User-store verifier (multi): stores always stamp an explicit role; a
+      role-less entry is malformed → default "user" (multi fail-closed).
+    - None entry → same defaults (callers use it for the anomaly paths).
+    """
+    if entry is None:
+        return "user" if user_store else "admin"
+    return entry.get("role", "user" if user_store else "admin")
+
+
 class IdentityGateMiddleware(Middleware):
     """Per-user visibility on the LIVE server.
 

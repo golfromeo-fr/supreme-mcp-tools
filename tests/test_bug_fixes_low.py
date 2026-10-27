@@ -197,11 +197,12 @@ class TestLOW11PartialAPIKeyLogged(unittest.TestCase):
 
 
 class TestLOW12StartAllServersDeadCode(unittest.TestCase):
-    """LOW-12: start_all_servers is dead code."""
+    """LOW-12: start_all_servers was dead code — REMOVED 2026-10-25
+    (review 2026-10-24 L3; the pin used to assert the stub existed)."""
 
-    def test_method_exists(self):
+    def test_method_removed(self):
         from launcher.server_manager import ServerManager
-        self.assertTrue(hasattr(ServerManager, 'start_all_servers'))
+        self.assertFalse(hasattr(ServerManager, 'start_all_servers'))
 
 
 class TestLOW13FixedSleep(unittest.TestCase):

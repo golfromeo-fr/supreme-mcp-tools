@@ -288,6 +288,13 @@ def get_api_client():
     return _api_client
 
 
+def stored_env_password() -> str:
+    """The configured ENV admin password (default 'admin') — ONE resolver so
+    the login check and the default-password refusal can never disagree
+    (F10, review 2026-10-24: try_login_user used to duplicate this read)."""
+    return os.environ.get(ENV_PASSWORD) or "admin"
+
+
 def verify_credentials(username: str, password: str) -> bool:
     """Check credentials against env config with per-credential defaults.
 
@@ -295,7 +302,7 @@ def verify_credentials(username: str, password: str) -> bool:
     unset values fall back to admin/admin. Comparison is constant-time.
     """
     stored_username = os.environ.get(ENV_USERNAME) or "admin"
-    stored_password = os.environ.get(ENV_PASSWORD) or "admin"
+    stored_password = stored_env_password()
     user_ok = hmac.compare_digest((username or "").encode(), stored_username.encode())
     pass_ok = hmac.compare_digest((password or "").encode(), stored_password.encode())
     return user_ok and pass_ok
@@ -323,9 +330,8 @@ def try_login_user(username: str, password: str) -> dict:
             # mono env-pair login must not open it either. Only the literal
             # DEFAULT password is refused; an operator-set MCP_UI_PASSWORD
             # is fine on any bind.
-            stored_password = os.environ.get(ENV_PASSWORD) or "admin"
             from tools.shared.users_store import _ui_bind_non_loopback
-            if stored_password == "admin" and _ui_bind_non_loopback():
+            if stored_env_password() == "admin" and _ui_bind_non_loopback():
                 raise ValueError(
                     "default admin/admin login refused on a non-loopback "
                     "bind — set MCP_UI_PASSWORD (and MCP_UI_USERNAME if "
@@ -370,6 +376,20 @@ def try_login_user(username: str, password: str) -> dict:
             # password mismatched — surface as a failed login, not an error
             if "already exists" in str(e):
                 raise ValueError("Wrong username or password") from e
+            if "8 characters" in str(e):
+                # Counter-review 2026-10-27 (R2-1): the raw ValueError is
+                # misleading here — the operator typed their ENV password
+                # (e.g. admin/admin) and the store rejects it for length.
+                # In the pod (which the image pins to multi) the default-
+                # password admin is ALSO refused on a non-loopback bind, so
+                # the store can end up with NO admin at all. Name the fix.
+                raise ValueError(
+                    "MCP_UI_PASSWORD must be at least 8 characters to "
+                    "bootstrap the store admin (the pod runs multi-user and "
+                    "refuses the default admin/admin on non-loopback binds). "
+                    "Set MCP_UI_PASSWORD (and MCP_UI_USERNAME) in the "
+                    ".env, then sign in with it."
+                ) from e
             raise
     raise ValueError("Wrong username or password")
 
@@ -627,6 +647,26 @@ async def _open_tool_settings(state) -> None:
     await show_global_tool_settings(servers)
 
 
+def _purge_session_file() -> None:
+    """F4 (review 2026-10-24): delete THIS browser session's on-disk
+    ``.nicegui/storage-user-<id>.json`` on logout. storage.user.clear() only
+    empties the in-memory dict — the sealed mcp_key used to survive in the
+    file until the age-based pruner removed it. Best-effort: a missing
+    request context or an already-gone file is fine (the key still went)."""
+    try:
+        from nicegui import request as ng_request
+        sid = ng_request.session.get("id")
+        if not sid:
+            return
+        # Drop the in-memory persistent dict FIRST so NiceGUI's request
+        # teardown cannot write the file back after we unlink it.
+        nicegui_app.storage._users.pop(sid, None)  # pylint: disable=protected-access
+        (Path.cwd() / ".nicegui" / f"storage-user-{sid}.json").unlink(missing_ok=True)
+        logger.info("Purged session storage file on logout")
+    except Exception as e:
+        logger.debug(f"Session-file purge skipped: {e}")
+
+
 @ui.page("/")
 async def main_page() -> None:
     """Main management page route."""
@@ -639,6 +679,7 @@ async def main_page() -> None:
 
     def logout() -> None:
         nicegui_app.storage.user.clear()
+        _purge_session_file()
         ui.navigate.to("/login")
 
     state = get_state()

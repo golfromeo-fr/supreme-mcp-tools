@@ -66,7 +66,7 @@ _tools_dir = str(Path(__file__).resolve().parents[2])
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)
 
-from shared.store_models import PointStruct as NeutralPointStruct, SparseVector as NeutralSparseVector, Filter, FieldCondition, MatchText
+from shared.store_models import PointStruct as NeutralPointStruct, SparseVector as NeutralSparseVector, Filter, FieldCondition, MatchValue
 from shared.vector_store import get_vector_store
 
 # Load configuration
@@ -778,14 +778,17 @@ def remove_stale_files(stale_files: list[str], collection_name: str,
 
     for rel_path in stale_files:
         try:
-            # Delete all points for this file
+            # Delete all points for this file. MatchValue = EXACT equality on
+            # filePath — the old MatchText was a substring/full-text match, so
+            # removing stale 'b/utils.py' also deleted 'a/b/utils.py' chunks
+            # (review 2026-10-24, R2).
             vector_store.delete(
                 collection_name,
                 filter=Filter(
                     must=[
                         FieldCondition(
                             key='filePath',
-                            match=MatchText(text=rel_path)
+                            match=MatchValue(value=rel_path)
                         )
                     ]
                 )

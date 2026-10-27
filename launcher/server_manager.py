@@ -195,14 +195,15 @@ class ServerManager:
             # Start management server if enabled
             if mgmt_server:
                 await mgmt_server.start()
-                
+
                 # Register with service registry
-                # NOTE: Use "localhost" for the URL even though server binds to self.host (0.0.0.0)
-                # Clients cannot connect to :: - they need localhost or 127.0.0.1
+                # NOTE: 127.0.0.1, not localhost (repo convention — avoids
+                # IPv6 ::1 resolution pitfalls) and not the bind host (a
+                # 0.0.0.0 bind address is not connectable).
                 if self.service_registry:
                     await self.service_registry.register(
                         name=tool_name,
-                        management_url=f"http://localhost:{mgmt_port}",
+                        management_url=f"http://127.0.0.1:{mgmt_port}",
                         mcp_port=port
                     )
             
@@ -227,35 +228,11 @@ class ServerManager:
                 tool_name=tool_name,
                 port=port
             ) from e
-    
-    async def start_all_servers(
-        self,
-        tools_ports: dict[str, int]
-    ) -> dict[str, ServerInstance]:
-        """
-        Start all servers concurrently.
-        
-        Args:
-            tools_ports: Dictionary of tool name -> port
-            
-        Returns:
-            Dictionary of tool name -> ServerInstance
-        """
-        logger.info(f"Starting {len(tools_ports)} servers concurrently")
-        
-        instances = {}
-        startup_tasks = []
-        
-        # Create startup tasks for all servers
-        for tool_name, port in tools_ports.items():
-            # Get tool metadata from discovery
-            # Note: This assumes tool discovery has been done and metadata is available
-            # We'll need to pass the metadata in a real implementation
-            # For now, we'll handle this in the main launcher
-            pass
-        
-        return instances  # pragma: no cover — stub for future use
-    
+
+    # (start_all_servers was deleted 2026-10-25, review 2026-10-24 L3 —
+    # a pass-body stub since inception; the launcher's concurrent start path
+    # is launchmcp.py:start_servers / __main__.py:Launcher.start.)
+
     async def _run_server(self, instance: ServerInstance) -> None:
         """
         Run a single Uvicorn server.
@@ -305,9 +282,17 @@ class ServerManager:
         logger.info(f"Stopping server for {tool_name}")
         
         try:
-            # Stop management server first (FEF V3)
+            # Stop management server first (FEF V3) — bounded (C7 / review
+            # 2026-10-24 L1): a pinned-open 81xx websocket must not hang a
+            # single-tool stop.
             if instance.mgmt_server:
-                await instance.mgmt_server.stop()
+                try:
+                    await asyncio.wait_for(
+                        instance.mgmt_server.stop(), GRACEFUL_SHUTDOWN_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"mgmt server for {tool_name} did not stop within "
+                        f"{GRACEFUL_SHUTDOWN_TIMEOUT}s — abandoned")
             
             # Unregister from service registry
             if self.service_registry:

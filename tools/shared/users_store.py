@@ -314,6 +314,51 @@ def save_users(store: dict) -> None:
     _store_cache["store"] = store
 
 
+def _mutate_users(mutate):
+    """Read-modify-write the user store under ONE lock (review 2026-10-24 S1):
+    the central API (8200) and the mcp_ui both write users.json — the old
+    load→mutate→save cycles lost one mutation whenever they interleaved
+    (a rotate-key racing a mask edit). File mode runs the whole cycle under
+    atomic_mutate_json's sidecar flock; db mode keeps its current
+    single-document write. ``mutate(store) -> result`` mutates in place and
+    its result is returned (raise inside to abort with no write).
+    """
+    if _users_backend() == "db":
+        conn = _db_conn()
+        if conn is not None:
+            store = _db_load(conn)
+            result = mutate(store)
+            _db_save(conn, store)
+            _store_cache["store"] = store
+            _store_cache["mtime"] = None
+            return result
+        # db unavailable at init → json fallback below (logged at init)
+    from tools.shared.atomic_io import atomic_mutate_json
+
+    mutated_store: dict = {}
+
+    def _cycle(data: dict):
+        if "users" not in data or not isinstance(data.get("users"), dict):
+            data.clear()
+            data.update({"version": 1, "users": {}})
+        result = mutate(data)
+        mutated_store["store"] = data
+        return result
+
+    result = atomic_mutate_json(
+        USERS_PATH, _cycle,
+        default_factory=lambda: {"version": 1, "users": {}})
+    try:
+        # Cache the JUST-WRITTEN store. Updating mtime first while the OLD
+        # store object is still cached would make load_users() return the
+        # stale snapshot (mtime match short-circuits the read).
+        _store_cache["store"] = mutated_store.get("store")
+        _store_cache["mtime"] = USERS_PATH.stat().st_mtime_ns
+    except OSError:
+        pass
+    return result
+
+
 # ---------------------------------------------------------------------------
 # CRUD (each mutates + saves; returns the affected public view or raises)
 # ---------------------------------------------------------------------------
@@ -351,54 +396,63 @@ def create_user(username: str, password: str, role: str = "user",
         raise ValueError("role must be 'admin' or 'user'")
     if not password or len(password) < 8:
         raise ValueError("password must be at least 8 characters")
-    store = load_users()
-    users = store.setdefault("users", {})
-    if username in users:
-        raise ValueError(f"user '{username}' already exists")
-    if username == "system" or username in _tool_names():
-        raise ValueError(f"'{username}' is a reserved name")
-    mcp_key = _unique_key(store)
-    users[username] = {
-        "username": username,
-        "password_hash": hash_password(password),
-        "role": role,
-        "mcp_key": mcp_key,
-        "servers": sorted(set(servers or [])),
-        "masked_functions": (dict(masked_functions) if masked_functions is not None
-                             else _default_masks_for(role, sorted(set(servers or [])))),
-        "db_presets": list(db_presets or []),
-        "rag_collections": list(rag_collections or []),
-        "enabled": True,
-        "created_at": _now_iso(),
-        "key_rotated_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    save_users(store)
+
+    def _apply(store: dict):
+        users = store.setdefault("users", {})
+        if username in users:
+            raise ValueError(f"user '{username}' already exists")
+        if username == "system" or username in _tool_names():
+            raise ValueError(f"'{username}' is a reserved name")
+        mcp_key = _unique_key(store)
+        users[username] = {
+            "username": username,
+            "password_hash": hash_password(password),
+            "role": role,
+            "mcp_key": mcp_key,
+            "servers": sorted(set(servers or [])),
+            "masked_functions": (dict(masked_functions) if masked_functions is not None
+                                 else _default_masks_for(role, sorted(set(servers or [])))),
+            "db_presets": list(db_presets or []),
+            "rag_collections": list(rag_collections or []),
+            "enabled": True,
+            "created_at": _now_iso(),
+            "key_rotated_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        return {"username": username, "mcp_key": mcp_key}
+
+    result = _mutate_users(_apply)
     logger.info(f"user '{username}' created (role={role})")
-    return {"username": username, "mcp_key": mcp_key}
+    return result
 
 
 def delete_user(username: str) -> None:
     username = (username or "").lower()
-    store = load_users()
-    users = store.setdefault("users", {})
-    if username not in users:
-        raise ValueError(f"user '{username}' does not exist")
-    _refuse_last_admin(store, username)
-    del users[username]
-    save_users(store)
+
+    def _apply(store: dict):
+        users = store.setdefault("users", {})
+        if username not in users:
+            raise ValueError(f"user '{username}' does not exist")
+        _refuse_last_admin(store, username)
+        del users[username]
+
+    _mutate_users(_apply)
     logger.info(f"user '{username}' deleted")
 
 
 def set_enabled(username: str, enabled: bool) -> None:
-    record = _require(get_user_record(username), username)
-    store = load_users()
-    record = store["users"][record["username"]]
-    if record["role"] == "admin" and not enabled:
-        _refuse_last_admin(store, username)
-    record["enabled"] = bool(enabled)
-    _touch(record)
-    save_users(store)
+    def _apply(store: dict):
+        users = store["users"]
+        record = users.get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        if record["role"] == "admin" and not enabled:
+            _refuse_last_admin(store, username)
+        record["enabled"] = bool(enabled)
+        _touch(record)
+
+    _require(get_user_record(username), username)
+    _mutate_users(_apply)
 
 
 def set_role(username: str, role: str) -> None:
@@ -412,92 +466,109 @@ def set_role(username: str, role: str) -> None:
     are never removed."""
     if role not in ("admin", "user"):
         raise ValueError("role must be 'admin' or 'user'")
-    record = _require(get_user_record(username), username)
-    store = load_users()
-    record = store["users"][record["username"]]
-    if record["role"] == "admin" and role != "admin":
-        _refuse_last_admin(store, username)
-    record["role"] = role
-    if role == "user":
-        current = dict(record.get("masked_functions") or {})
-        defaults = _default_masks_for("user", sorted(set(current) | set(record.get("servers") or [])))
-        for server, fns in defaults.items():
-            merged = set(current.get(server, [])) | set(fns)
-            if merged:
-                current[server] = sorted(merged)
-        record["masked_functions"] = current
-    _touch(record)
-    save_users(store)
+
+    def _apply(store: dict):
+        record = store["users"].get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        if record["role"] == "admin" and role != "admin":
+            _refuse_last_admin(store, username)
+        record["role"] = role
+        if role == "user":
+            current = dict(record.get("masked_functions") or {})
+            defaults = _default_masks_for("user", sorted(set(current) | set(record.get("servers") or [])))
+            for server, fns in defaults.items():
+                merged = set(current.get(server, [])) | set(fns)
+                if merged:
+                    current[server] = sorted(merged)
+            record["masked_functions"] = current
+        _touch(record)
+
+    _require(get_user_record(username), username)
+    _mutate_users(_apply)
     logger.info(f"user '{username}' role -> {role}")
 
 
 def set_password(username: str, password: str) -> None:
     if not password or len(password) < 8:
         raise ValueError("password must be at least 8 characters")
-    store = load_users()
-    record = store["users"].get((username or "").lower())
-    if record is None:
-        raise ValueError(f"user '{username}' does not exist")
-    record["password_hash"] = hash_password(password)
-    _touch(record)
-    save_users(store)
+
+    def _apply(store: dict):
+        record = store["users"].get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        record["password_hash"] = hash_password(password)
+        _touch(record)
+
+    _mutate_users(_apply)
 
 
 def rotate_key(username: str) -> dict:
     """New globally-unique mcp_key; old key invalid immediately. Shown ONCE."""
     username = (username or "").lower()
-    store = load_users()
-    record = store["users"].get(username)
-    if record is None:
-        raise ValueError(f"user '{username}' does not exist")
-    record["mcp_key"] = _unique_key(store)
-    record["key_rotated_at"] = _now_iso()
-    _touch(record)
-    save_users(store)
-    return {"username": username, "mcp_key": record["mcp_key"]}
+
+    def _apply(store: dict):
+        record = store["users"].get(username)
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        record["mcp_key"] = _unique_key(store)
+        record["key_rotated_at"] = _now_iso()
+        _touch(record)
+        return {"username": username, "mcp_key": record["mcp_key"]}
+
+    return _mutate_users(_apply)
 
 
 def set_servers(username: str, servers: list) -> None:
-    store = load_users()
-    record = store["users"].get((username or "").lower())
-    if record is None:
-        raise ValueError(f"user '{username}' does not exist")
-    record["servers"] = sorted(set(servers or []))
-    _touch(record)
-    save_users(store)
+    def _apply(store: dict):
+        record = store["users"].get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        record["servers"] = sorted(set(servers or []))
+        _touch(record)
+
+    _mutate_users(_apply)
 
 
 def set_masked_functions(username: str, masks: dict) -> None:
-    store = load_users()
-    record = store["users"].get((username or "").lower())
-    if record is None:
-        raise ValueError(f"user '{username}' does not exist")
     clean = {str(k): sorted({str(x) for x in v}) for k, v in (masks or {}).items()}
-    record["masked_functions"] = clean
-    _touch(record)
-    save_users(store)
+
+    def _apply(store: dict):
+        record = store["users"].get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        record["masked_functions"] = clean
+        _touch(record)
+
+    _mutate_users(_apply)
 
 
 def set_db_presets(username: str, presets: list) -> None:
     """E3.5: which databasemcp presets/connections this user may use."""
-    store = load_users()
-    record = store["users"].get((username or "").lower())
-    if record is None:
-        raise ValueError(f"user '{username}' does not exist")
-    record["db_presets"] = sorted({str(x) for x in (presets or [])})
-    _touch(record)
-    save_users(store)
+    granted = sorted({str(x) for x in (presets or [])})
+
+    def _apply(store: dict):
+        record = store["users"].get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        record["db_presets"] = granted
+        _touch(record)
+
+    _mutate_users(_apply)
 
 
 def set_rag_collections(username: str, collections: list) -> None:
     """E3.5: which ragmcp collections this user may use."""
-    store = load_users()
-    record = store["users"].get((username or "").lower())
-    if record is None:
-        raise ValueError(f"user '{username}' does not exist")
-    record["rag_collections"] = sorted({str(x) for x in (collections or [])})
-    _touch(record)
-    save_users(store)
+    granted = sorted({str(x) for x in (collections or [])})
+
+    def _apply(store: dict):
+        record = store["users"].get((username or "").lower())
+        if record is None:
+            raise ValueError(f"user '{username}' does not exist")
+        record["rag_collections"] = granted
+        _touch(record)
+
+    _mutate_users(_apply)
 
 
 def get_data_grants(username: str) -> dict:

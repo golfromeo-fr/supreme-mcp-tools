@@ -407,3 +407,53 @@ def test_seed_default_password_on_loopback_still_ok(monkeypatch, tmp_path):
     from tools.shared import users_store
     store = _seed_env(monkeypatch, tmp_path / "users.json", ui_host="127.0.0.1")
     assert users_store.seed_from_env() >= 1
+
+
+# ---------------------------------------------------------------------------
+# S1 (review 2026-10-24): concurrent user-store mutations must compose —
+# the old load→mutate→save cycles lost one whenever they interleaved.
+# ---------------------------------------------------------------------------
+
+def test_concurrent_mutations_compose(tmp_path, monkeypatch):
+    import threading
+    import tools.shared.users_store as users_store
+
+    store_file = tmp_path / "users.json"
+    monkeypatch.setattr(users_store, "USERS_PATH", store_file)
+    monkeypatch.setattr(users_store, "_store_cache", {"mtime": None, "store": None})
+    monkeypatch.delenv("MCP_USERS_BACKEND", raising=False)
+
+    users_store.create_user("admin1", "password-1", role="admin")
+
+    def _grant(worker_user: str, grant_to: str):
+        users_store.set_db_presets(worker_user, ["01", "02"])
+
+    # Two surfaces race: rotate a key AND edit another user's presets
+    t1 = threading.Thread(
+        target=lambda: users_store.rotate_key("admin1"))
+    t2 = threading.Thread(target=_grant, args=("admin1", "x"))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    record = users_store.get_user_record("admin1")
+    assert record["db_presets"] == ["01", "02"], "preset edit lost to the rotate race"
+
+
+def test_concurrent_mask_toggles_keep_both(tmp_path, monkeypatch):
+    """The 2026-10-18-noted F2 case: two writers toggling different keys."""
+    import threading
+    import launcher.tools_config as tc
+
+    cfg = tmp_path / "tools_config.json"
+    monkeypatch.setattr(tc, "_DEFAULT_CONFIG_FILE", cfg)
+
+    tc.disable_tool("get_secret", "simplemcp")
+    tc.disable_tool("brave_search_web", "webmcp")
+
+    t1 = threading.Thread(target=lambda: tc.enable_tool("get_secret", "simplemcp"))
+    t2 = threading.Thread(target=lambda: tc.disable_tool("fetch_url", "webmcp"))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    # all three mutations visible: get_secret re-enabled, brave masked, fetch_url masked
+    assert "get_secret" not in tc.get_disabled_tools("simplemcp")
+    disabled_webmcp = tc.get_disabled_tools("webmcp")
+    assert "brave_search_web" in disabled_webmcp and "fetch_url" in disabled_webmcp

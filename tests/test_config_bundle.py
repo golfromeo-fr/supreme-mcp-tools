@@ -130,6 +130,11 @@ def test_harvest_missing_optional_records_warning(sandbox, tmp_path):
 
 
 def test_redact(sandbox, tmp_path):
+    # F5 (review 2026-10-24): remote URLs (can carry auth_token= inline) are
+    # redacted; local file: URLs are not.
+    (sandbox / ".env").write_text(
+        (sandbox / ".env").read_text()
+        + "\nREMOTE_TURSO_URL=libsql://db.example.com:9080?auth_token=tk-123\n")
     bundle = tmp_path / "b"
     r = harvest(sandbox, "--redact", str(bundle))
     assert r.returncode == 0, r.stderr
@@ -140,6 +145,7 @@ def test_redact(sandbox, tmp_path):
     assert "DB_PRESET_02_DESC=Local test Postgres" in env  # labels survive
     assert "MCP_UI_USERNAME=admin" in env                # non-secret keys survive
     assert "TURSO_DATABASE_URL=file:/home/gr/turso_data/memorymcp.db" in env
+    assert "REMOTE_TURSO_URL=__REDACTED__" in env        # F5: inline-token URL
     users = json.loads((bundle / "identity" / "users.json").read_text())
     assert users["users"]["admin"]["mcp_key"] == "__REDACTED__"
     assert users["users"]["tester"]["password_hash"] == "__REDACTED__"
