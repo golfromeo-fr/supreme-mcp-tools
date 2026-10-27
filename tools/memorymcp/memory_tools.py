@@ -95,7 +95,14 @@ def _memory_caller() -> tuple[str | None, bool, bool]:
     entry = get_tokens().get(token)
     if entry is None:
         return ("unknown", False, True) if user_store else (None, False, False)
-    return entry.get("client_id"), entry.get("role") == "admin", True
+    # Mono-map convention (same as databasemcp._current_caller_grants): the
+    # legacy single-entry verifier carries NO role — treating it as a
+    # role-less user scoped the mono operator's queries to owner="memorymcp"
+    # and hid the legacy ownerless corpus (ragmcp twin found at a mono-mode
+    # deployment 2026-10-26). Under a user-store verifier a role-less entry
+    # stays fail-CLOSED (scoped non-admin) — mono fail-open, multi fail-closed.
+    role = entry.get("role", "user" if user_store else "admin")
+    return entry.get("client_id"), role == "admin", True
 
 # For FEF V3 extensions
 try:

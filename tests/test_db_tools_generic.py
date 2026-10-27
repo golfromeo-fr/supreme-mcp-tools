@@ -50,10 +50,21 @@ pytestmark = _pytest.mark.skipif(not HAS_LIBSQL, reason="libsql_experimental not
 def two_conns(tmp_path, monkeypatch):
     """Two named libSQL connections; REGISTRY cleared before and after."""
     import db_tools
+    import connections
     from connections import REGISTRY
 
-    REGISTRY._entries.clear()
-    REGISTRY._active = None
+    def _clear_registry():
+        # Clear through BOTH module identities: after test_review_fixes'
+        # import gymnastics (ragmcp/memorymcp paths), db_tools and the
+        # caller's `connections` can briefly diverge onto different module
+        # objects — clearing only one left 'one' alive for db_tools and
+        # every subsequent setup failed with "already exists".
+        REGISTRY._entries.clear()
+        REGISTRY._active = None
+        db_tools.REGISTRY._entries.clear()
+        db_tools.REGISTRY._active = None
+
+    _clear_registry()
     monkeypatch.delenv("USERID", raising=False)
     monkeypatch.delenv("DB_AUTOCONNECT", raising=False)
 
@@ -65,8 +76,7 @@ def two_conns(tmp_path, monkeypatch):
     r1, r2 = asyncio.run(setup())
     assert "Connected 'one'" in r1 and "Connected 'two'" in r2
     yield db_tools
-    REGISTRY._entries.clear()
-    REGISTRY._active = None
+    _clear_registry()
 
 
 def _run(coro):

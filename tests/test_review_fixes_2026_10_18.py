@@ -260,3 +260,98 @@ def test_connect_database_ok_for_mono(grant_env, monkeypatch):
     result = asyncio.run(db_tools.connect_database(
         "zz-mono", "libsql", {"url": "file::memory:"}))
     assert "Connected 'zz-mono'" in result
+
+
+# ---------------------------------------------------------------------------
+# 5. Mono-mode fallthrough (found at a mono deployment 2026-10-26, fixed via
+#    the "legacy mono map = admin" role default) — the mono verifier's single
+#    entry carries NO role, so the successful-auth fallthrough treated the
+#    operator as a role-less user: ragmcp denied every collection, memorymcp
+#    owner-scoped queries to "memorymcp" (hiding the legacy corpus).
+# ---------------------------------------------------------------------------
+
+class _MonoMapVerifier:
+    """Legacy mono shape: tokens() exists, is_user_store absent, no role."""
+    def tokens(self):
+        return {"sys-key": {"client_id": "ragmcp", "scopes": ["mcp"]}}
+
+
+def _mono_http(monkeypatch):
+    import fastmcp.server.dependencies as deps
+    req = type("R", (), {"headers": {"authorization": "Bearer sys-key"}})()
+    monkeypatch.setattr(deps, "get_http_request", lambda: req, raising=False)
+
+
+def test_ragmcp_mono_authenticated_unrestricted(monkeypatch):
+    sys.path.insert(0, str(PROJECT_ROOT / "tools" / "ragmcp"))
+    import ragmcp_fastmcp
+    monkeypatch.setattr(ragmcp_fastmcp.mcp, "auth",
+                        _MonoMapVerifier(), raising=False)
+    _mono_http(monkeypatch)
+    client_id, allowed = ragmcp_fastmcp._caller_rag_access()
+    assert allowed is None, "mono operator must be UNRESTRICTED, not empty-granted"
+    assert client_id == "ragmcp"
+
+
+def test_memorymcp_mono_authenticated_is_admin(monkeypatch):
+    import memory_tools
+    # NOTE: patch memory_tools.mcp directly — a bare `import core` here
+    # resolves to DATABASEMCP's core (both tool dirs are on sys.path).
+    monkeypatch.setattr(memory_tools.mcp, "auth", _MonoMapVerifier(), raising=False)
+    _mono_http(monkeypatch)
+    client_id, is_admin, _scoped = memory_tools._memory_caller()
+    assert is_admin is True, "mono operator must bypass owner scoping"
+    assert client_id == "ragmcp"
+
+
+def test_databasemcp_mono_authenticated_can_connect(monkeypatch):
+    """The user's report (mono deployment): connect_database answered
+    'admin-only' — _current_caller_grants defaulted the role-less mono map
+    entry to role='user'. With the admin default, raw connects work again."""
+    sys.path.insert(0, str(PROJECT_ROOT / "tools" / "databasemcp"))
+    import connections
+    monkeypatch.setattr(connections, "_mono_map_verifier",
+                        _MonoMapVerifier, raising=False)
+
+    def _fake_grants():
+        return connections._current_caller_grants()
+
+    # Drive _current_caller_grants with the mono map + authenticated request.
+    import core as db_core
+    monkeypatch.setattr(db_core.mcp, "auth", _MonoMapVerifier(), raising=False)
+    _mono_http(monkeypatch)
+    client_id, role, grants = connections._current_caller_grants()
+    assert role == "admin", "mono map entry without role must default to admin"
+
+    import db_tools
+    from connections import REGISTRY
+    REGISTRY._entries.clear()
+    REGISTRY._active = None
+    db_tools.REGISTRY._entries.clear()
+    db_tools.REGISTRY._active = None
+    monkeypatch.delenv("USERID", raising=False)
+    try:
+        result = asyncio.run(db_tools.connect_database(
+            "second", "libsql", {"url": "file::memory:"}))
+        assert "Connected 'second'" in result
+    finally:
+        REGISTRY._entries.clear()
+        REGISTRY._active = None
+        db_tools.REGISTRY._entries.clear()
+        db_tools.REGISTRY._active = None
+
+
+def test_ragmcp_multi_roleless_still_scoped(monkeypatch):
+    """The default must NOT fire in multi: a user-store entry without a role
+    field (malformed) is still treated as a scoped non-admin."""
+    sys.path.insert(0, str(PROJECT_ROOT / "tools" / "ragmcp"))
+    import ragmcp_fastmcp
+    monkeypatch.setattr(ragmcp_fastmcp.mcp, "auth",
+                        _UserStoreVerifier({
+                            "user-key": {"client_id": "worker"},
+                        }), raising=False)
+    import fastmcp.server.dependencies as deps
+    req = type("R", (), {"headers": {"authorization": "Bearer user-key"}})()
+    monkeypatch.setattr(deps, "get_http_request", lambda: req, raising=False)
+    client_id, allowed = ragmcp_fastmcp._caller_rag_access()
+    assert client_id == "worker" and allowed == set()
