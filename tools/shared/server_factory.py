@@ -640,7 +640,11 @@ def _wire_session_management(app, auth_provider=None) -> None:
             token = auth[7:] if auth.lower().startswith("bearer ") else None
             entry = (auth_provider.tokens() or {}).get(token) \
                 if (token and auth_provider is not None) else None
-            role = (entry or {}).get("role", "admin")  # legacy mono map = admin
+            # Mono fail-open / multi fail-closed role default (uniform with
+            # the tools' identity resolvers; the real user store always
+            # stamps a role, so the multi branch only guards malformed maps).
+            role = (entry or {}).get(
+                "role", "user" if user_store_verifier else "admin")
             if role != "admin":
                 return JSONResponse(
                     {"error": "admin role required"}, status_code=403,

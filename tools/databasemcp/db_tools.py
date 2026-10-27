@@ -585,7 +585,9 @@ def _assert_preset_grant(connection: str | None) -> None:
                 f"caller token not in the user store (map size={len(get_tokens())})")
         logger.warning("preset-grant check skipped: caller token not in map (map size=%d)", len(get_tokens()))
         return
-    role = entry.get("role", "admin")  # legacy mono map = admin
+    # Mono fail-open / multi fail-closed role default (uniform with
+    # _current_caller_grants — see the mono-map convention there).
+    role = entry.get("role", "user" if user_store else "admin")
     if role == "admin":
         return
     granted = set(entry.get("db_presets") or [])
