@@ -71,6 +71,15 @@ def store(monkeypatch):
         for i in range(1, 8)  # 7 records, insertion order 1..7
     ])
     monkeypatch.setattr(memory_tools, "vector_store", fake)
+    # Pin the identity layer: these tests cover the BROWSE mechanics
+    # (paging, sort, tag filter, row shape, limit clamp), not owner
+    # scoping. Without this the file's result depended on the verifier the
+    # process happened to build — under the user-store verifier the browse
+    # is owner-filtered and the fake points (no owner) came back empty, so
+    # the file failed 6/6 when run alone and only passed in the full suite
+    # by luck of ordering (2026-10-27).
+    monkeypatch.setattr(memory_tools, "_memory_caller",
+                        lambda: ("admin", True, True))
     return fake, memory_tools
 
 
