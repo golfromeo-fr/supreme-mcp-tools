@@ -336,6 +336,11 @@ fallthrough pins) all green.
 
 ## Work-deployment checklist (mono-first)
 
+0. **Tool API keys bootstrap to placeholders**: a fresh checkout has no
+   `tools/*/config.json` (gitignored); the launcher bootstraps them from the
+   committed examples with `CHANGE-ME-` keys (loud warning at boot). Every
+   MCP client call will 401 until you either put real keys in those files or
+   export `<TOOL>_API_KEY` / `MCP_API_KEY` env vars.
 1. **Set `MCP_MANAGEMENT_API_KEY`** in the work `.env` — without it the central
    API runs open-for-reads but REFUSES ALL MUTATIONS (403, audit P2-2): the
    mcp_ui Function-Masks toggles, env edits, and `PUT /api/tools/{tool}/config`

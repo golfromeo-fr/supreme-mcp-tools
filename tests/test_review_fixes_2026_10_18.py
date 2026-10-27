@@ -310,11 +310,6 @@ def test_databasemcp_mono_authenticated_can_connect(monkeypatch):
     entry to role='user'. With the admin default, raw connects work again."""
     sys.path.insert(0, str(PROJECT_ROOT / "tools" / "databasemcp"))
     import connections
-    monkeypatch.setattr(connections, "_mono_map_verifier",
-                        _MonoMapVerifier, raising=False)
-
-    def _fake_grants():
-        return connections._current_caller_grants()
 
     # Drive _current_caller_grants with the mono map + authenticated request.
     import core as db_core
