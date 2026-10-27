@@ -298,3 +298,55 @@ Not reviewed (documented exclusions): plans/**, docs, graphify-out/, examples/, 
 - **Fix soon:** **S3** (turso FTS stale-delete on text-variant re-upserts — live store), **S5** (migration tools freeze the memorymcp event loop), **R2** (stale-file substring delete — collateral chunk loss), **M1** (upsert dedup leaves duplicate vector points), **F2/S1** (config-doc + users.json RMW races).
 - **Batch of LOWs:** L1-L3, S4/S6, T1-T2, R3-R4, M2-M3, F3-F11 as convenience items.
 - **Test gaps to close alongside:** PG query contract cases with filters (S2), keyless-403 PUT config, gate-bypass-free generic db tests, M1/R2 pins.
+
+---
+
+# Mono-mode audit (2026-10-27) — "mono is my main usage"
+
+*Triggered by two live mono bugs at the work deployment (fresh checkout, no .env → mono).*
+*Scope: every site that branches on identity, role, or auth mode.*
+
+## Verdict
+
+After the `20680b0` role-default fixes, **mono mode is coherent end-to-end**: every
+identity resolver treats the mono operator as admin/unrestricted, and nothing in
+the E3/E3.5/E1 layers requires a user store. Certification: 94 tests across the
+mono-focused set (real-transport auth, session flush, masks, the new mono
+fallthrough pins) all green.
+
+## Site-by-site matrix (mono semantics after the fixes)
+
+| Surface | Mono behavior | Status |
+|---|---|---|
+| `create_fastmcp_server` | DualHeaderVerifier, single system key, no gate | solid (real-transport tests) |
+| ragmcp `_caller_rag_access` | authenticated → unrestricted (`None`) | fixed + pinned |
+| memorymcp `_memory_caller` | authenticated → admin | fixed + pinned |
+| databasemcp `_current_caller_grants` / `_refuse_non_admin` / `_assert_preset_grant` | role=admin → all connects/presets/metadata allowed | fixed + pinned |
+| flush gate (`server_factory`) | `role` defaults admin → allowed | was already correct |
+| IdentityGateMiddleware | not installed in mono; even if present, role-less entry masks nothing | safe |
+| 81xx `_is_admin` | system key = admin; open server = admin | solid |
+| central 8200 `_verify_api_key` | system key = "system"; **keyless = reads open, mutations 403 (P2-2)** | by design — see checklist |
+| mcp_ui mono login | env pair; default admin/admin refused only on non-loopback binds | solid + pinned |
+| mcp_ui sidebar/Users tab | admin sees all; Users tab hidden (multi-only) | solid |
+| E1 runtime masks / `apply_function_masks` | mode-independent (file/state doc) | solid |
+| E4 tx owner attribution | mono over HTTP stamps owner=<tool> — attribution only | solid |
+| users_store seeding | never triggered in pure mono (only multi/mcp_ui-multi paths call it) | fine |
+| `MCP_REQUIRE_IDENTITY` | no-op in mono (gate not installed) | documented |
+| pod_ui | env-pair auth, mode-agnostic | solid |
+
+## Work-deployment checklist (mono-first)
+
+1. **Set `MCP_MANAGEMENT_API_KEY`** in the work `.env` — without it the central
+   API runs open-for-reads but REFUSES ALL MUTATIONS (403, audit P2-2): the
+   mcp_ui Function-Masks toggles, env edits, and `PUT /api/tools/{tool}/config`
+   will all fail. This is the next mono friction they will hit.
+2. **Set `MCP_UI_PASSWORD`** (+ `MCP_UI_SECRET`) — the mono admin/admin login is
+   refused on non-loopback binds by design (P1-1/P1-1-twin); loopback works
+   without.
+3. **Masks are per-machine**: `tools_config.json` is gitignored, so a fresh
+   checkout exposes EVERY function — including the `get_secret` mono test
+   fixture and databasemcp's full surface. Mono = admin by design; re-apply the
+   standing masks (`get_secret`, `brave_search_web`) via the UI once, or copy
+   the home `tools_config.json`.
+4. `.env` absent ⇒ mono + keyless central + ephemeral UI secret (logins die on
+   restart). The three env vars above close all of it.
