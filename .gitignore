@@ -256,6 +256,7 @@ setup_opencode_mcp.sh
 /opencode-*.md
 /zcode-*.md
 /misc/
+/scripts/legacy/
 /.zcode/
 deploy/node.env
 startcluster

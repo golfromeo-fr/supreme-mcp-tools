@@ -23,6 +23,12 @@ python launchmcp.py --dry-run webmcp         # preview without starting
 # UI
 python -m mcp_ui                             # NiceGUI management UI (port 8400)
 
+# Mainline start scripts (wrappers → scripts/*.sh; precedence flag > env > .env > default)
+./startlauncher [-t tools|--all|--engine modern|--verbose ...]    # host launcher (default = historical 6-tool command)
+./startui [--port N|--host H]                                     # management UI (8400)
+./startpodui [--port N|--host H]                                  # pod UI (8401)
+./setup_opencode_mcp.sh [--tools|--config|--no-restart|--dry-run] # opencode client bootstrap (scripts/setup_opencode.sh)
+
 # Podman environments + config bundles (plans/pod-config-bundle-2026-09-17.md)
 ./startcluster work|test ...                 # the two pod environments (see deploy/README.md)
 ./startcluster harvest [NAME|PATH]           # snapshot config → <cwd>/my-bundles/<NAME> (default: bundle-<UTC ts>)
@@ -232,7 +238,7 @@ To test: `python -m pytest tests/test_memory_autouse.py -v`
 
 ## Environment
 
-- `.env` at project root is loaded at startup by all tools (via `dotenv`)
+- `.env` at project root is loaded at startup by all tools (via `dotenv`); the committed `.env.example` documents every key (CHANGE-ME placeholders) — `cp .env.example .env` on a fresh machine
 - Auth defaults: `MCP_UI_USERNAME`/`MCP_UI_PASSWORD` (default admin/admin)
 - `memorymcp` requires: `QDRANT_HOST`, `QDRANT_PORT` (defaults: qdrant:6333) OR `TURSO_DATABASE_URL`
 - `memorymcp` optional: `POSTGRES_HOST` (or `TURSO_DATABASE_URL`) for SQL metadata/dedup
