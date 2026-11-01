@@ -196,7 +196,7 @@ class TursoVectorStore:
                 self._conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
                         id          TEXT PRIMARY KEY,
-                        embedding   VECTOR({dense_dim}),
+                        embedding   VECTOR({int(dense_dim)}),
                         payload     TEXT,
                         text_content TEXT,
                         created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -713,8 +713,9 @@ def _condition_to_sql(c: FieldCondition, payload_col: str, negated: bool) -> tup
     VALUES are still parameterized.
     """
     key = c.key
-    # Sanitize key for SQL embedding (alphanumeric + underscore only)
-    if not key.replace("_", "").isalnum():
+    # Sanitize key for SQL embedding (strict ASCII bareword — str.isalnum()
+    # alone admits Unicode letters like "café" into the json path)
+    if not re.fullmatch(r"[A-Za-z0-9_]+", key):
         return "", []  # skip unsafe keys
 
     if c.range_:
