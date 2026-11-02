@@ -194,3 +194,42 @@ class TestBypassAndAutoconnect:
         assert (connected, failed) == (2, 0)         # 01 and 03 flagged, 02 not
         assert reg.get("01").name == "01"
         assert reg.get("03").name == "03"
+
+
+class TestMaskUrlQueryTokens:
+    """Credentials can ride in the QUERY STRING (Turso's ?authToken=…), not
+    only the user:password segment — mask_url used to pass them through
+    byte-for-byte into every listing (found via work-box analysis,
+    2026-11). Sensitive keys are masked case-insensitively; non-sensitive
+    params survive byte-for-byte (no re-encoding)."""
+
+    def test_auth_token_masked(self):
+        assert mask_url("libsql://db.turso.io?authToken=tok123") == \
+            "libsql://db.turso.io?authToken=***"
+
+    def test_sensitive_keys_masked_non_sensitive_preserved(self):
+        out = mask_url("libsql://db.turso.io?authToken=T&region=fra&sslmode=require")
+        assert out == "libsql://db.turso.io?authToken=***&region=fra&sslmode=require"
+        assert "fra" in out and "require" in out
+
+    def test_case_insensitive_including_underscore_form(self):
+        # repo-canonical "auth_token" AND Turso's camelCase "authToken"
+        out = mask_url("libsql://db?AUTH_TOKEN=x&keep=1")
+        assert "AUTH_TOKEN=***" in out and "keep=1" in out
+
+    def test_password_query_param_also_masked(self):
+        out = mask_url("postgres://u:pw@h:5432/db?password=pp&opt=z")
+        assert out == "postgres://u:***@h:5432/db?password=***&opt=z"
+
+    def test_untouched_urls_pass_through(self):
+        assert mask_url("file:/tmp/x.db") == "file:/tmp/x.db"
+        assert mask_url("postgres://u:pw@h/db") == "postgres://u:***@h/db"
+
+    def test_load_presets_listing_never_shows_query_token(self, env_presets, monkeypatch):
+        # end-to-end: whatever mask_url does, the list_presets payload carries no token
+        monkeypatch.setenv(
+            "DB_PRESET_04", "libsql://secret-db.turso.io?authToken=sekrit-token")
+        listing = [(p.url_masked, p.desc, p.number) for p in load_presets()]
+        flat = str(listing)
+        assert "sekrit-token" not in flat
+        assert "authToken=***" in flat

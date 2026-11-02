@@ -36,11 +36,37 @@ class Preset:
         return self.name or self.number
 
 
+# Query-parameter keys whose VALUES are credentials when they appear in a
+# preset URL (Turso's ?authToken=… is the live case). Matched case-
+# insensitively; non-sensitive params pass through byte-for-byte.
+_SENSITIVE_QUERY_KEYS = {
+    "authtoken", "auth_token", "token", "access_token", "apikey", "api_key",
+    "password", "passwd", "pwd", "secret",
+}
+
+
 def mask_url(url: str) -> str:
-    """Mask the password segment of a URL: scheme://user:***@host/..."""
+    """Mask credentials in a display URL, preserving everything else.
+
+    Two layers: the password segment (scheme://user:***@host/...) and the
+    values of sensitive query parameters (?authToken=***). Query pairs are
+    inspected key-wise and rebuilt without re-encoding, so non-sensitive
+    parameters survive byte-for-byte."""
     import re as _re
 
-    return _re.sub(r"((?:[A-Za-z][A-Za-z0-9+.\-]*://)[^:/@\s]+:)([^@\s/]+)@", r"\1***@", url)
+    masked = _re.sub(
+        r"((?:[A-Za-z][A-Za-z0-9+.\-]*://)[^:/@\s]+:)([^@\s/]+)@", r"\1***@", url)
+    if "?" in masked:
+        base, _, query = masked.partition("?")
+        pairs = []
+        for pair in query.split("&"):
+            key, sep, _value = pair.partition("=")
+            if sep and key.strip().lower() in _SENSITIVE_QUERY_KEYS:
+                pairs.append(f"{key}=***")
+            else:
+                pairs.append(pair)
+        masked = f"{base}?{'&'.join(pairs)}"
+    return masked
 
 
 def parse_preset_url(url: str) -> tuple[str, dict]:
