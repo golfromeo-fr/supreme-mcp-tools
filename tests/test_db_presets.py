@@ -1,5 +1,6 @@
 """P7 — connection presets: parser, masking, lazy bypass, autoconnect."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -96,6 +97,12 @@ class TestParsePresetUrl:
 
 @pytest.fixture()
 def env_presets(monkeypatch):
+    # Hermetic: purge ambient DB_PRESET* first — importing the tool modules
+    # load_dotenv()s the real .env, and any real _NAME/_DESC/AUTOCONNECT key
+    # would otherwise merge into these fixtures (found live 2026-11-01: a
+    # real DB_PRESET_03_NAME leaked into preset 03's fixture env).
+    for _k in [k for k in os.environ if k.startswith("DB_PRESET")]:
+        monkeypatch.delenv(_k, raising=False)
     monkeypatch.setenv("DB_PRESET_01", "oracle://scott:tiger@db:1521/ORCL")
     monkeypatch.setenv("DB_PRESET_01_DESC", "Work Oracle")
     monkeypatch.setenv("DB_PRESET_02", "file:/tmp/preset_two.db")

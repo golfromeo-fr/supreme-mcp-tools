@@ -51,6 +51,11 @@ python -m pytest tests/test_memory_text.py -v
 # scripts/sweep_all.py + probe_eras.py). Live servers must be up.
 ```
 
+## Repo skills
+
+- [`mcp-live-tool-test`](.agents/skills/mcp-live-tool-test/SKILL.md) — live-testing the MCP servers with native `mcp__<server>__<function>` calls; use when asked to "test the tools", "do tool calls", or verify after a launcher restart.
+- [`databasemcp-client-usage`](.agents/skills/databasemcp-client-usage/SKILL.md) — client-side guide for the databasemcp server (preset nicknames, lazy-bypass connections, transactions, read/write rules); read it BEFORE any database task through the `mcp__databasemcp*` tools.
+
 There is no linter, formatter, or typecheck configured — no lint/typecheck step needed.
 
 ## Architecture

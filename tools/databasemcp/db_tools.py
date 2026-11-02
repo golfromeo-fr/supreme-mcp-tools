@@ -83,17 +83,19 @@ async def connect_database(name: str, db_type: str, params: dict) -> str:
 
 @mcp.tool()
 async def list_presets() -> str:
-    """Lists the connection presets defined in .env (DB_PRESET_<NN>), with
-    dialect, description, autoconnect flag — passwords never shown. A preset
-    can be used directly: pass its number or NAME as `connection` in
-    query/execute_sql/etc. (connects lazily), or via connect_preset."""
+    """Lists the connection presets defined in .env (DB_PRESET_<NN>) with
+    dialect, description, autoconnect flag — passwords never shown. Address
+    a preset by its NAME (shown first in this listing) — the preferred
+    handle; the bare number still works everywhere. Pass it as `connection`
+    in query/execute_sql/etc. (connects lazily), or via connect_preset."""
     start_time = time.perf_counter()
     found = presets.load_presets()
     if not found:
         _timing_update(start_time, "list_presets", True)
         return (
             "none — add DB_PRESET_<NN>=oracle://user:pass@host:port/service "
-            "(or postgres://..., or file:/path.db) to .env and restart"
+            "(or postgres://..., or file:/path.db) to .env and restart\n"
+            "Usage guide: .agents/skills/databasemcp-client-usage/SKILL.md"
         )
     lines = []
     for p_ in found:
@@ -101,20 +103,34 @@ async def list_presets() -> str:
         if p_.autoconnect:
             flags.append("autoconnect")
         label = f" — {p_.desc}" if p_.desc else ""
-        alias = f" (name: {p_.name})" if p_.name else ""
+        flags_s = f"  [{', '.join(flags)}]" if flags else ""
+        if p_.name:
+            # NAME first — LLM clients copy the leading token, so the
+            # nickname must be the most prominent handle in this listing.
+            lines.append(
+                f"- {p_.name} (preset {p_.number}) [{p_.dialect}]{label} {p_.url_masked}{flags_s}"
+            )
+        else:
+            lines.append(
+                f"- {p_.number} [{p_.dialect}]{label} {p_.url_masked}{flags_s}"
+            )
+    if any(p_.name for p_ in found):
         lines.append(
-            f"- {p_.number}{alias} [{p_.dialect}]{label} {p_.url_masked}"
-            + (f"  [{', '.join(flags)}]" if flags else "")
+            "Prefer the NAME over the preset number when passing `connection` — both work everywhere."
         )
+    lines.append(
+        "Usage guide: .agents/skills/databasemcp-client-usage/SKILL.md"
+    )
     _timing_update(start_time, "list_presets", True)
     return "\n".join(lines)
 
 
 @mcp.tool()
 async def connect_preset(preset: str) -> str:
-    """Connects using a preset from .env — by number ("01") or NAME alias
-    ("pglocal") — and registers the connection (first one becomes active).
-    Equivalent to connect_database with the preset's params."""
+    """Connects using a preset from .env — prefer the NAME alias ("pglocal",
+    case-insensitive); the number ("01") still works. Registers the
+    connection (first one becomes active). Equivalent to connect_database
+    with the preset's params."""
     start_time = time.perf_counter()
     try:
         p_ = presets.get_preset(preset)

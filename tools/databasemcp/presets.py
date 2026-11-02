@@ -130,7 +130,7 @@ def get_preset(key: str) -> Preset:
         ):
             return preset
     available = [
-        f"{p.number}{'/' + p.name if p.name else ''} ({p.dialect})"
+        f"{p.name or p.number}{'/' + p.number if p.name else ''} ({p.dialect})"
         for p in load_presets()
     ]
     raise LookupError(
