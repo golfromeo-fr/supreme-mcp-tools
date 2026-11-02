@@ -106,3 +106,63 @@ class TestLibsqlContract:
         dialect, handle = db
         err = dialect.format_error(ValueError("boom"))
         assert err == {"error": "DB_ERROR", "code": None, "message": "boom", "offset": None}
+
+
+class TestBuildAgnosticDurability:
+    """Some libsql_experimental builds (the work-box install that surfaced
+    this, 2026-11) have NO settable .autocommit — a bare assignment raised
+    AttributeError and local connections never opened. The dialect must be
+    build-agnostic: guarded assignment, execute() commits on success and
+    rolls back on failure, writes persist across close/reconnect."""
+
+    def test_set_autocommit_helper(self):
+        from dialects.libsql import _set_autocommit_if_supported
+
+        class ReadOnlyProp:
+            # the actual no-autocommit build shape: property without a
+            # setter — assignment raises AttributeError
+            @property
+            def autocommit(self):
+                return True
+
+        class Writable:
+            def __init__(self):
+                self.autocommit = None
+
+        assert _set_autocommit_if_supported(ReadOnlyProp(), True) is False
+        w = Writable()
+        assert _set_autocommit_if_supported(w, True) is True
+        assert w.autocommit is True
+
+    def test_writes_persist_across_reconnect(self, tmp_path):
+        # End-to-end durability: whatever the build's autocommit support,
+        # execute()'d writes must survive close + reopen of a file DB.
+        from dialects.libsql import LibsqlDialect
+
+        url = f"file:{tmp_path / 'persist.db'}"
+        dialect = LibsqlDialect()
+        h1 = dialect.connect({"url": url})
+        dialect.execute(h1, "CREATE TABLE t (id INTEGER PRIMARY KEY, label TEXT)")
+        dialect.execute(h1, "INSERT INTO t VALUES (1, 'a')")
+        dialect.execute(h1, "INSERT INTO t VALUES (2, 'b')")
+        dialect.close(h1)
+
+        h2 = dialect.connect({"url": url})
+        rows, _ = dialect.run_select(h2, "SELECT COUNT(*) AS n FROM t", max_rows=10)
+        assert rows[0]["n"] == 2
+        dialect.close(h2)
+
+    def test_failed_statement_reraises_and_handle_stays_usable(self, tmp_path):
+        from dialects.libsql import LibsqlDialect
+
+        dialect = LibsqlDialect()
+        h = dialect.connect({"url": f"file:{tmp_path / 'fail.db'}"})
+        dialect.execute(h, "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        dialect.execute(h, "INSERT INTO t VALUES (1)")
+        with pytest.raises(Exception):
+            dialect.execute(h, "INSERT INTO missing_table VALUES (9)")
+        # the rollback path must leave the handle usable
+        dialect.execute(h, "INSERT INTO t VALUES (2)")
+        rows, _ = dialect.run_select(h, "SELECT COUNT(*) AS n FROM t", max_rows=10)
+        assert rows[0]["n"] == 2
+        dialect.close(h)

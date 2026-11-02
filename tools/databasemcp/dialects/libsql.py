@@ -35,6 +35,21 @@ def _connect_params(params: dict) -> tuple[str, str | None]:
     return params["url"], params.get("auth_token")
 
 
+def _set_autocommit_if_supported(conn: Any, value: bool) -> bool:
+    """Set ``conn.autocommit`` when the driver build exposes it.
+
+    libsql_experimental builds differ: 0.0.55 (this repo's pin) exposes a
+    settable ``.autocommit``; other builds — e.g. the work-box install that
+    surfaced this — lack the attribute, and a bare assignment raises
+    AttributeError before any SQL runs. Returns True when actually set.
+    """
+    try:
+        conn.autocommit = value
+        return True
+    except AttributeError:
+        return False
+
+
 class LibsqlDialect(DbDialect):
     name = "libsql"
     REQUIRED_PARAMS = ("url",)
@@ -46,7 +61,7 @@ class LibsqlDialect(DbDialect):
             conn = libsql.connect(params["url"], auth_token=params["auth_token"])
         else:
             conn = libsql.connect(params["url"])
-        conn.autocommit = True
+        _set_autocommit_if_supported(conn, True)
         return conn
 
     def close(self, handle) -> None:
@@ -70,7 +85,22 @@ class LibsqlDialect(DbDialect):
         # statement of a multi-statement string on file DBs (probe
         # correction, 2026-09-06). Reject instead of partially executing.
         _reject_multi_statement(sql)
-        cursor = handle.execute(sql)
+        try:
+            cursor = handle.execute(sql)
+        except Exception:
+            # Build-agnostic durability: on builds without a settable
+            # .autocommit the connection buffers writes — undo the failed
+            # statement (no-op under autocommit, probe-verified) first.
+            try:
+                handle.rollback()
+            except Exception:
+                pass
+            raise
+        # Commit after EVERY successful statement: no-op under autocommit;
+        # the thing that makes writes durable on builds where autocommit
+        # cannot be enabled. (execute_tx must NOT do this — transactions
+        # need the explicit commit_tx.)
+        handle.commit()
         return cursor.rowcount
 
     def list_tables(self, handle) -> list[dict]:
@@ -138,7 +168,10 @@ class LibsqlDialect(DbDialect):
             tx = libsql.connect(url, auth_token=auth_token)
         else:
             tx = libsql.connect(url)
-        tx.autocommit = False
+        # Builds lacking a settable .autocommit default to sqlite's
+        # implicit-transaction mode, so tx semantics hold either way —
+        # only the assignment needs guarding (work-box build, 2026-11).
+        _set_autocommit_if_supported(tx, False)
         return tx
 
     def select_tx(self, tx_handle, sql: str, max_rows: int) -> tuple[list[dict], bool]:

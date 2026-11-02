@@ -37,6 +37,18 @@ def _looks_stale(err: BaseException) -> bool:
     return any(m in text for m in _STALE_MARKERS)
 
 
+def _set_autocommit_if_supported(conn, value: bool) -> None:
+    """Some libsql_experimental builds lack a settable ``.autocommit`` on
+    the connection object — a bare assignment raises AttributeError.
+    Tolerate that (the proxy's ``autocommit`` property reports True either
+    way — sqlite's default isolation already behaves autocommit-off-until-
+    commit on such builds)."""
+    try:
+        conn.autocommit = value
+    except AttributeError:
+        pass
+
+
 class ReconnectingLibsql:
     """Proxy around a libsql connection: ``execute`` transparently
     reconnects once on stale-stream errors, then replays the statement.
@@ -47,13 +59,13 @@ class ReconnectingLibsql:
     def __init__(self, connect):
         self._connect = connect          # () -> fresh libsql connection
         self._conn = connect()
-        self._conn.autocommit = True
+        _set_autocommit_if_supported(self._conn, True)
         self._lock = threading.Lock()
 
     # -- internals --------------------------------------------------------
     def _reconnect(self) -> None:
         new = self._connect()
-        new.autocommit = True
+        _set_autocommit_if_supported(new, True)
         self._conn = new
 
     # -- proxied surface --------------------------------------------------
