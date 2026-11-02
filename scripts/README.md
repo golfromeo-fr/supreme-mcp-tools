@@ -16,9 +16,9 @@ cp .env.example .env          # fill in the CHANGE-ME placeholders
 ./startlauncher               # or: scripts/startlauncher.sh
 ```
 
-On a fresh clone the gitignored root wrappers don't exist — call the scripts
-directly (`scripts/startlauncher.sh`) or recreate the 2-line wrappers (bottom
-of this file).
+The root wrappers (`./startlauncher`, `./startui`, `./startpodui`,
+`./setup_opencode_mcp.sh`) are tracked 2-line shims — a fresh clone can use
+them immediately; `scripts/*.sh` hold the real logic.
 
 ## startlauncher.sh
 
@@ -67,12 +67,10 @@ unparseable existing config → abort with `--force` escape hatch); launcher
 restart uses narrowed pkill patterns (`python -m launcher`, `launchmcp\.py`),
 then a bounded 8200 `/health` wait; written config chmod 600.
 
-## Root wrappers (optional, gitignored)
+## Root wrappers (tracked convenience shims)
 
-```bash
-#!/usr/bin/env bash
-exec "$(cd "$(dirname "$0")" && pwd)/scripts/startlauncher.sh" "$@"
-```
-
-(Same 2-line shape for `startui` → `scripts/startui.sh`, `startpodui` →
-`scripts/startpodui.sh`, `setup_opencode_mcp.sh` → `scripts/setup_opencode.sh`.)
+`./startlauncher` → `scripts/startlauncher.sh`, `./startui` →
+`scripts/startui.sh`, `./startpodui` → `scripts/startpodui.sh`,
+`./setup_opencode_mcp.sh` → `scripts/setup_opencode.sh` — each a 2-line
+`exec "$(cd "$(dirname "$0")" && pwd)/scripts/<name>.sh" "$@"` shim, so the
+short names work from a fresh clone while the logic stays in one place.

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Thin wrapper — real logic in scripts/startlauncher.sh (startcluster precedent:
+# wrapper at root stays tiny, logic lives in scripts/; old script archived in
+# scripts/legacy/2026-10-31/).
+exec "$(cd "$(dirname "$0")" && pwd)/scripts/startlauncher.sh" "$@"

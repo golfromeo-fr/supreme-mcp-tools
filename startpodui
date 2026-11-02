@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Thin wrapper → scripts/startpodui.sh (old script archived in scripts/legacy/2026-10-31/).
+exec "$(cd "$(dirname "$0")" && pwd)/scripts/startpodui.sh" "$@"
