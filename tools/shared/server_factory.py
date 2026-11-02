@@ -254,6 +254,16 @@ class RequestLogMiddleware:
         self.logger = logging.getLogger("mcp.access")
         # E3-M1: optional callable (lowercased headers dict) -> client_id|None
         self.identity_resolver = identity_resolver
+        # 404s on these paths are external-probe noise (the launcher's own
+        # health checks target the MANAGEMENT port; something else polls the
+        # MCP port where /health 404s by design) — not logged. Any non-404
+        # on these paths still logs; MCP_ACCESS_LOG_SKIP_404_PATHS overrides
+        # the list (comma-separated, empty = log everything).
+        self.quiet_404_paths = {
+            p.strip() for p in os.environ
+            .get("MCP_ACCESS_LOG_SKIP_404_PATHS", "/health").split(",")
+            if p.strip()
+        }
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -338,12 +348,13 @@ class RequestLogMiddleware:
                     user = self.identity_resolver(headers) or "-"
                 except Exception:
                     user = "-"
-            self.logger.info(
-                "[%s] %s %s from %s v=%s session=%s user=%s -> %s in %dms%s%s",
-                self.name, method, path, peer, proto or "-",
-                session[:8] if session else "NEW", user, status or "-",
-                elapsed_ms, rpc, error_field,
-            )
+            if not (status == 404 and path in self.quiet_404_paths):
+                self.logger.info(
+                    "[%s] %s %s from %s v=%s session=%s user=%s -> %s in %dms%s%s",
+                    self.name, method, path, peer, proto or "-",
+                    session[:8] if session else "NEW", user, status or "-",
+                    elapsed_ms, rpc, error_field,
+                )
 
 
 # ── Factory function ──────────────────────────────────────────────────────

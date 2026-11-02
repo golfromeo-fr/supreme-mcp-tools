@@ -32,10 +32,16 @@ webmcp memorymcp databasemcp convertermcp`.
 | `--all` | launch ALL discovered tools (no positional filter) |
 | `--engine legacy\|modern` | `legacy` = `launchmcp.py` (default; only entry with `--dry-run`/`--list-tools`/`--health-check-*`/`--no-sync-tools`); `modern` = `python -m launcher` |
 | `--verbose` | legacy: `--verbose` · modern: `--debug` |
+| `--quiet` | export `MCP_DISABLE_REQUEST_LOGS=1` — no per-request access lines at all |
 | anything else | forwarded verbatim (`--dry-run`, `--list-tools`, `--no-management`, `--no-sync-tools`, `--log-level`, `--host`, `--management-port`, `--transport`, `--health-check-logs`, `--health-check-interval`, `--debug`, …) |
 
 Env knobs: `STARTLAUNCHER_TOOLS`, `STARTLAUNCHER_ENGINE`,
 `STARTLAUNCHER_HEALTH_CHECK_LOGS`, `STARTLAUNCHER_VERBOSE`.
+
+Access-log noise: `GET /health` 404s (external probers hitting the MCP port)
+are skipped by the access middleware by default
+(`MCP_ACCESS_LOG_SKIP_404_PATHS`, default `/health`; empty = log everything);
+`--quiet` removes the whole per-request trail.
 
 ## startui.sh / startpodui.sh
 

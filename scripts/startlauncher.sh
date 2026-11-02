@@ -44,6 +44,10 @@ First-class options:
                           --dry-run/--list-tools/--health-check-*/--no-sync-tools)
                           modern = python -m launcher
   --verbose               legacy: --verbose · modern: --debug
+  --quiet                 silence the per-request access log entirely
+                          (MCP_DISABLE_REQUEST_LOGS=1). GET /health 404s are
+                          already skipped by default — see the
+                          MCP_ACCESS_LOG_SKIP_404_PATHS note in AGENTS.md.
   -h, --help              this help
 
 Everything else is forwarded verbatim to the engine, e.g.:
@@ -67,6 +71,7 @@ while [ $# -gt 0 ]; do
             ENGINE="$2"; shift 2 ;;
         --engine=*) ENGINE="${1#*=}"; shift ;;
         --verbose) VERBOSE=1; shift ;;
+        --quiet) export MCP_DISABLE_REQUEST_LOGS=1; shift ;;
         --health-check-logs)
             [ $# -ge 2 ] || smc_die "--health-check-logs needs a value"
             PASS+=(--health-check-logs "$2"); SAW_HEALTH_LOGS=1; shift 2 ;;

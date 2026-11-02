@@ -260,3 +260,63 @@ def test_no_session_yields_new():
     assert _extract_log_session({}, "/messages/", b"other=1") is None
     assert _extract_log_session({}, "/mcp", b"session_id=not-for-mcp") is None
     assert _extract_log_session({}, "/messages/", b"session_id=") is None
+
+
+class TestQuiet404Paths:
+    """External probers (v=-, no MCP headers) hit /health on the MCP port,
+    where the route 404s by design — the real health endpoint lives on the
+    tool's management port. Those 404s are pure log noise (176 lines in one
+    launcher.log) and are skipped by default; any non-404 on the path, and
+    404s on other paths, still log. MCP_ACCESS_LOG_SKIP_404_PATHS overrides
+    the skip list (empty = log everything)."""
+
+    def _get(self, client, path):
+        return client.get(path, headers={"Authorization": "Bearer test-key-123"})
+
+    def test_health_404_skipped_but_other_traffic_logged(self, reqlog_app, caplog):
+        from starlette.testclient import TestClient
+
+        caplog.set_level(logging.INFO, logger="mcp.access")
+        with TestClient(reqlog_app) as client:
+            self._get(client, "/health")
+            self._get(client, "/some-other-missing-path")
+        records = _access_records(caplog)
+        assert not [r for r in records if "/health" in r.getMessage()]
+        assert [r for r in records if "/some-other-missing-path" in r.getMessage()]
+
+    def test_non_404_on_quiet_path_is_logged(self, reqlog_app, caplog):
+        # if /health ever becomes a real route, its 200 must stay visible
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        caplog.set_level(logging.INFO, logger="mcp.access")
+
+        async def real_health(request):
+            return JSONResponse({"ok": True})
+
+        app = reqlog_app
+        app.router.routes.insert(0, Route("/health", real_health))
+        with TestClient(app) as client:
+            self._get(client, "/health")
+        assert [r for r in _access_records(caplog) if "/health" in r.getMessage()]
+
+    def test_skip_list_env_override(self, monkeypatch, caplog):
+        # MCP_ACCESS_LOG_SKIP_404_PATHS="" restores full logging (env is read
+        # per app build, so a fresh app sees the override)
+        import starlette.testclient as tc
+        from tools.shared.server_factory import create_fastmcp_server, get_transport_app
+
+        monkeypatch.setenv("REQLOG_TEST_API_KEY", "test-key-123")
+        monkeypatch.setenv("MCP_ACCESS_LOG_SKIP_404_PATHS", "")
+        mcp = create_fastmcp_server("reqlog_quiet_override")
+
+        @mcp.tool()
+        def echo(x: int) -> int:
+            return x
+
+        app = get_transport_app(mcp)
+        caplog.set_level(logging.INFO, logger="mcp.access")
+        with tc.TestClient(app) as client:
+            client.get("/health", headers={"Authorization": "Bearer test-key-123"})
+        assert [r for r in _access_records(caplog) if "/health" in r.getMessage()]
