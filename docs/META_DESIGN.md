@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-11-04):** design snapshot from 2026-06-04 — predates the
+> fastmcp 4 migration (pinned `fastmcp==4.0.0`), the centralized transport/auth
+> selection in `tools/shared/server_factory.py:get_transport_app`, and the
+> multi-transport default. Kept for design rationale; current behavior =
+> root `AGENTS.md`.
+
 # Meta Design Choices — supreme-mcp-tools
 
 **Date:** 2026-06-04

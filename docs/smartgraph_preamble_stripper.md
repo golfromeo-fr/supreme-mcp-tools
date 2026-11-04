@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-11-04):** the line references below predate the memorymcp
+> monolith split into focused modules (see `DISCOVERIES.md`); treat paths as
+> historical. Kept for the regex/pattern rationale.
+
 # textToSmartGraph: Preamble Stripper — Design & Test Results
 
 ## Problem
