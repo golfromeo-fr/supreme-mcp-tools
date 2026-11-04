@@ -265,3 +265,95 @@ def test_multi_user_mask_filtering(tmp_path, monkeypatch):
         assert r.status_code == 404
         assert r.json() == {"error": "Unknown tool"}
         assert c.post("/utcp/call/ping").status_code == 200
+
+
+# ── Require-identity regression (counter-review N1, 2026-11-04) ────────────
+#
+# MCP_REQUIRE_IDENTITY=1 + an unresolvable identity must 401 on BOTH routes.
+# Unreachable in mono (frozen token map: outer auth and the handler always
+# agree) and racy in multi (UserStoreVerifier.tokens() rebuilds per call — a
+# revoke landing between the outer auth check and the handler is the real
+# trigger). Hence handler-level invocation with a stub mcp/request instead of
+# a full app: the race is deterministic here.
+
+
+def _stub_mcp():
+    class _Verifier:
+        is_user_store = True
+
+        def tokens(self):
+            return {}
+
+    class _Mcp:
+        name = "requireprobe"
+        auth = _Verifier()
+
+        async def list_tools(self, **kw):
+            raise AssertionError("must not reach: identity gate first")
+
+        async def get_tool(self, name):
+            raise AssertionError("must not reach: identity gate first")
+
+        async def call_tool(self, *a, **kw):
+            raise AssertionError("must not reach: identity gate first")
+
+    return _Mcp()
+
+
+def _bare_request(path="/utcp", token="revoked-mid-request-key"):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http", "method": "GET", "path": path,
+        "headers": [(b"authorization", b"Bearer " + token.encode())],
+        "query_string": b"",
+        # the route's request.user gate reads scope["user"] (starlette raises
+        # AssertionError without it — same as the flush route under real apps)
+        "user": type("U", (), {"is_authenticated": True})(),
+    }
+    if path != "/utcp":
+        scope["path_params"] = {"tool_name": "echo"}
+    return Request(scope)
+
+
+def test_require_identity_401_on_both_routes(monkeypatch):
+    import asyncio
+
+    from tools.shared.utcp_endpoint import _call_response, _manual_response
+
+    monkeypatch.setenv("MCP_REQUIRE_IDENTITY", "1")
+    mcp = _stub_mcp()
+
+    r = asyncio.run(_manual_response(mcp, _bare_request("/utcp")))
+    assert r.status_code == 401
+    assert json.loads(r.body) == {"error": "unauthorized"}
+
+    r2 = asyncio.run(_call_response(mcp, _bare_request("/utcp/call/echo")))
+    assert r2.status_code == 401
+    assert json.loads(r2.body) == {"error": "unauthorized"}
+
+
+def test_manual_outputs_strip_vendor_keys():
+    """N3: no x-fastmcp-* markers in the published manual (spec artifact)."""
+    import asyncio
+
+    from tools.shared.utcp_endpoint import _manual_response
+
+    mcp = _probe_mcp()
+    r = asyncio.run(_manual_response(mcp, _bare_request("/utcp")))
+    # bare request carries a token absent from the probe verifier map — but
+    # require-identity is unset here, so mono fail-open applies and the
+    # manual builds.
+    manual = json.loads(r.body)
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                assert not str(k).startswith("x-fastmcp-"), k
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    _walk(manual)
+    assert manual["tools"], "manual unexpectedly empty"

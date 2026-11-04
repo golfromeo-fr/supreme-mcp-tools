@@ -79,3 +79,8 @@ result = await client.call_tool("simplemcp.square", {"body": {"value": 5}})
 Live-verified 2026-11-04 against the running launcher: 6 manuals registered
 (64 tools), search + `simplemcp.square` → `25.0`, `databasemcp.query` honest
 tool-error surfaced.
+
+Note: the config pins the tools' MCP ports from `config/ports.json`. Those
+ports are pinned and fail loudly if taken (unlike mgmt ports, which
+auto-allocate) — but if a port ever shifts, re-run the generator and restart
+the client; same staleness property as any hardcoded MCP client entry.

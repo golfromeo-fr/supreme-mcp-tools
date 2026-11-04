@@ -155,7 +155,7 @@ explicit argument > config.json key > env var > default `multi`. Single selectio
 point: `tools/shared/server_factory.py:get_transport_app`; the launcher only sets
 `MCP_TRANSPORT` when explicitly asked, so the default reaches the tools. History:
 SSE was removed 2026-08-14 (Phase -1), re-added 2026-08-30, then generalized into the
-multi-transport default the same day (spike-proven against fastmcp 4.0.0b3). UTCP is the fourth dialect (2026-11-04): manual at `/utcp`, calls at `/utcp/call/<tool>` — wire format matched to the reference client (utcp-http 1.x `body_field` semantics); suppress per tool with `MCP_DISABLE_UTCP_ENDPOINT=1` or `"utcp": false` in `tools/<name>/config.json`. Client config for any harness (MCP-only via the bridge, CLI, python): `./scripts/setup_utcp_client.sh` → `docs/UTCP_CLIENTS.md`.
+multi-transport default the same day (spike-proven against fastmcp 4.0.0b3). UTCP is the fourth dialect (2026-11-04): manual at `/utcp`, calls at `/utcp/call/<tool>` — wire format matched to the reference client (utcp-http 1.x `body_field` semantics); suppress with `MCP_DISABLE_UTCP_ENDPOINT=1` (global) or per tool via `"utcp": false` in `tools/<name>/config.json`. Client config for any harness (MCP-only via the bridge, CLI, python): `./scripts/setup_utcp_client.sh` → `docs/UTCP_CLIENTS.md`.
 
 ### Session management
 

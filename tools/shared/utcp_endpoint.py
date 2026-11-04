@@ -92,6 +92,21 @@ def _var_name(server_name: str) -> str:
     return "UTCP_" + server_name.upper().replace("-", "_") + "_API_KEY"
 
 
+def _strip_vendor_keys(schema):
+    """Drop fastmcp's internal markers (x-fastmcp-*) from a published schema.
+
+    JSON Schema ignores unknown keywords, so they are harmless to clients —
+    but the manual is a spec-facing artifact and shouldn't carry the
+    implementation's vendor extensions.
+    """
+    if isinstance(schema, dict):
+        return {k: _strip_vendor_keys(v) for k, v in schema.items()
+                if not k.startswith("x-fastmcp-")}
+    if isinstance(schema, list):
+        return [_strip_vendor_keys(v) for v in schema]
+    return schema
+
+
 def _manual_tool(tool, base_url: str, server_name: str) -> dict:
     """One UTCP Tool object from a fastmcp Tool (schema-bearing attributes)."""
     real_schema = tool.parameters or {"type": "object", "properties": {}}
@@ -119,7 +134,7 @@ def _manual_tool(tool, base_url: str, server_name: str) -> dict:
         "name": tool.name,
         "description": tool.description or "",
         "inputs": inputs,
-        "outputs": tool.output_schema or {"type": "object"},
+        "outputs": _strip_vendor_keys(tool.output_schema) or {"type": "object"},
         "tool_call_template": template,
     }
 
@@ -264,6 +279,8 @@ async def _call_response(mcp, request):
     except ToolError as e:
         return JSONResponse({"error": str(e)}, status_code=500)
     except Exception as e:  # noqa: BLE001 — the route reports, never raises
+        # fastmcp wraps tool exceptions with their text ("Error calling tool
+        # ...") — the same exposure the MCP dialects have; parity kept.
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
     return JSONResponse(_result_body(result))
 
