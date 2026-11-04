@@ -486,7 +486,11 @@ TODO.md
 
 graphify-out/
 
-docs/
+docs/*
+!docs/UTCP_CLIENTS.md
+!docs/META_DESIGN.md
+!docs/DISCOVERIES.md
+!docs/smartgraph_preamble_stripper.md
 
 requirements.merged.txt
 
