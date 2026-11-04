@@ -22,6 +22,14 @@ fastapi>=0.133.0
 # HTTP client
 httpx>=0.27.0
 
+# UTCP dialect client (2026-11-04) — the tool SERVERS never import this
+# (the /utcp endpoints are pure starlette); it is the reference CLIENT for
+# probing the fourth dialect (live sweeps, /tmp proof scripts, future UTCP
+# clients). EXACT pins: utcp-http <1.1.12 has a fixed high-severity SSRF
+# (CVE-2026-101058) — never relax to a floor.
+utcp==1.2.0
+utcp-http==1.1.15
+
 # Management UI (NiceGUI)
 nicegui==3.16.0
 aiohttp>=3.9.0

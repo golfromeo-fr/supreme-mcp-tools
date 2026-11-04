@@ -145,6 +145,7 @@ nothing to configure:
 | `/mcp` | streamable HTTP, stateful | sessions, `/admin/flush-sessions`, idle TTL |
 | `/mcp-stateless` | streamable HTTP, stateless | per-request fresh, no session ids (for LB/multi-process setups or handshake-less clients) |
 | `/sse` + `/messages` | legacy SSE | outdated harnesses; clients self-heal via EventSource reconnect |
+| `/utcp` + `/utcp/call/<tool>` | UTCP (manual + plain-HTTP calls) | 4th dialect (2026-11-04, `tools/shared/utcp_endpoint.py`): GET the manual, POST `{"body": <args>}`; auth placeholder `${UTCP_<NAME>_API_KEY}` resolved client-side; E3 per-user masks enforced at route level |
 
 Auth (dual-header `X-API-Key` / `Authorization: Bearer`) and `mcp.access` logging cover
 all endpoints. Single-transport modes remain as escape hatches via `--transport` /
@@ -154,7 +155,7 @@ explicit argument > config.json key > env var > default `multi`. Single selectio
 point: `tools/shared/server_factory.py:get_transport_app`; the launcher only sets
 `MCP_TRANSPORT` when explicitly asked, so the default reaches the tools. History:
 SSE was removed 2026-08-14 (Phase -1), re-added 2026-08-30, then generalized into the
-multi-transport default the same day (spike-proven against fastmcp 4.0.0b3).
+multi-transport default the same day (spike-proven against fastmcp 4.0.0b3). UTCP is the fourth dialect (2026-11-04): manual at `/utcp`, calls at `/utcp/call/<tool>` — wire format matched to the reference client (utcp-http 1.x `body_field` semantics); suppress per tool with `MCP_DISABLE_UTCP_ENDPOINT=1` or `"utcp": false` in `tools/<name>/config.json`. Client config for any harness (MCP-only via the bridge, CLI, python): `./scripts/setup_utcp_client.sh` → `docs/UTCP_CLIENTS.md`.
 
 ### Session management
 
@@ -165,6 +166,7 @@ Sessions live in-process (`StreamableHTTPSessionManager._server_instances`); a l
 | `POST /admin/flush-sessions` | Terminate all in-memory sessions. Stale client `Mcp-Session-Id` values then get HTTP 404 and the client re-initializes. Auth: same tool API key as `/mcp` (`Authorization: Bearer <key>` or `X-API-Key`). | enabled |
 | `MCP_SESSION_IDLE_TIMEOUT` (secs) | Idle-session TTL — stale sessions self-evict instead of accumulating. `0`/unset disables. | 1800 |
 | `MCP_DISABLE_FLUSH_ENDPOINT` | Suppress the flush route (TTL still applies). | unset |
+| `MCP_DISABLE_UTCP_ENDPOINT` | Suppress the `/utcp` + `/utcp/call/<tool>` routes on every tool (per-tool opt-out: `"utcp": false` in config.json; no config-side opt-in). | unset |
 | `MCP_ACCESS_LOG_SKIP_404_PATHS` | Comma-separated paths whose **404** responses are not logged (external `/health` probers on the MCP port are noise by design; the real health endpoint lives on the management port). Any non-404 on these paths still logs. Empty = log everything. | `/health` |
 | `MCP_DISABLE_REQUEST_LOGS` | Suppress the per-request access line on the `mcp.access` logger (`POST /mcp from 127.0.0.1 session=NEW -> 200`) — the only INFO-level trace of client connects, since uvicorn access log is off and session reuse is silent. | unset |
 

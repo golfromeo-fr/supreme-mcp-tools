@@ -518,6 +518,13 @@ def get_transport_app(mcp, transport: str | None = None):
         app = _build_http_app(mcp, transport)
         if transport == "streamable-http":
             _wire_session_management(app, auth_provider)
+    # UTCP (2026-11-04): a fourth client dialect on every transport mode —
+    # GET /utcp manual + POST /utcp/call/{tool}. Same app, same port, same
+    # auth stack; suppression via MCP_DISABLE_UTCP_ENDPOINT / "utcp": false.
+    from tools.shared.utcp_endpoint import utcp_enabled, wire_utcp
+
+    if utcp_enabled(getattr(mcp, "name", None)):
+        wire_utcp(app, mcp)
     # User middleware runs outside the router, so the normalizer executes
     # before FastMCP's per-route RequireAuthMiddleware on every route.
     app.add_middleware(ApiKeyFallbackMiddleware)

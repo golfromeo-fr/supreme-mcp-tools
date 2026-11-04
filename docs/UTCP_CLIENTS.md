@@ -6,7 +6,7 @@ same port, same auth). One generated config serves every client shape:
 ```bash
 ./scripts/setup_utcp_client.sh          # writes (outside the repo, no gitignore needed):
 #   ~/.config/supreme-mcp-tools/utcp-client.json   — secret-free client config
-#   ~/.env sibling: utcp-client.env                — the API keys (dotenv-loaded)
+#   ~/.config/supreme-mcp-tools/utcp-client.env   — the API keys (dotenv-loaded)
 ```
 
 The config lists all manuals (`http://127.0.0.1:<port>/utcp`, `X-API-Key` auth

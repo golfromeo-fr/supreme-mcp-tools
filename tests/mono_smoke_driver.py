@@ -59,6 +59,32 @@ def call_tool(name: str, args: dict) -> str:
                      if c.get("type") == "text")
 
 
+def _utcp(method: str, path: str, payload: dict | None = None):
+    """One UTCP request against the running tool (X-API-Key header)."""
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{PORT}{path}", data=data, method=method)
+    req.add_header("X-API-Key", KEY)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.status, json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode() or "{}")
+
+
+def utcp_call(name: str, args: dict) -> str:
+    """One UTCP tool call; returns the result text (raises on failure)."""
+    status, body = _utcp("POST", f"/utcp/call/{name}",
+                         {"body": args} if args else None)
+    if status != 200:
+        raise AssertionError(f"{name}: UTCP HTTP {status} {body}")
+    if isinstance(body.get("result"), str):
+        return body["result"]
+    return json.dumps(body)
+
+
 def wait_ready(timeout: float = 90.0) -> None:
     deadline = time.time() + timeout
     last = None
@@ -95,6 +121,12 @@ def run() -> None:
     try:
         wait_ready()
 
+        # UTCP dialect (2026-11-04): fourth dialect on the same app — the
+        # manual must serve and one tool call must round-trip over plain HTTP.
+        status, manual = _utcp("GET", "/utcp")
+        check("utcp manual serves", status == 200 and len(manual.get("tools", [])) > 0,
+              f"status={status} tools={len(manual.get('tools', []))}")
+
         if TOOL == "databasemcp":
             # the live report: a SECOND raw connection must be allowed in mono
             out = call_tool("connect_database", {
@@ -113,6 +145,15 @@ def run() -> None:
             check("connect_preset reports a usable answer (not a refusal)",
                   "not granted" not in out and "admin-only" not in out, out)
 
+            # one tool call over the UTCP dialect, same mono environment
+            utcp_out = utcp_call("connect_database", {
+                "name": "smoke_utcp", "db_type": "libsql",
+                "params": {"url": "file::memory:"}})
+            check("utcp connect_database allowed in mono",
+                  "Connected 'smoke_utcp'" in utcp_out, utcp_out)
+            utcp_out = utcp_call("query", {"sql": "SELECT 1", "connection": "smoke_utcp"})
+            check("utcp query on that connection", "1" in utcp_out, utcp_out)
+
         elif TOOL == "memorymcp":
             out = call_tool("upsertMemory", {
                 "text": "a mono smoke memory", "memory_type": "concept",
@@ -127,6 +168,12 @@ def run() -> None:
                 # path is already covered by the upsert check above.
                 check("queryMemory (skipped: no embedding model)", True, str(e))
 
+            utcp_out = utcp_call("upsertMemory", {
+                "text": "a mono smoke memory (utcp)", "memory_type": "concept",
+                "embedding": [0.01] * 1024})
+            check("utcp upsertMemory allowed in mono",
+              not utcp_out.startswith("Error"), utcp_out)
+
         elif TOOL == "ragmcp":
             out = call_tool("list_collections", {})
             check("list_collections not denied in mono",
@@ -134,6 +181,10 @@ def run() -> None:
             names = _rpc("tools/list", {}).get("result", {}).get("tools", [])
             check("search tool is visible in mono",
                   any(t.get("name") == "search" for t in names), "")
+
+            utcp_out = utcp_call("list_collections", {})
+            check("utcp list_collections not denied in mono",
+              "not granted to your account" not in utcp_out, utcp_out)
     finally:
         server.should_exit = True
         time.sleep(1.0)

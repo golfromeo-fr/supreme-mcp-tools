@@ -200,3 +200,25 @@ snippet (repo has httpx):
 
 Ports come from `config/ports.json` (`assignments.mcp`), keys from
 `tools/<name>/config.json` (`auth.api_key`).
+
+## UTCP dialect probe (raw HTTP — no native harness tool exists for it)
+
+Every tool also serves UTCP (2026-11-04): `GET /utcp` = tool manual,
+`POST /utcp/call/<tool>` with body `{"body": <args>}` = plain-HTTP call
+(X-API-Key auth, same key as MCP). Unlike MCP functions, UTCP has no
+`mcp__<server>__<function>` harness binding — probe it with curl:
+
+```bash
+KEY=$(python3 -c "import json;print(json.load(open('tools/simplemcp/config.json'))['auth']['api_key'])")
+curl -s -H "X-API-Key: $KEY" http://127.0.0.1:8000/utcp | python3 -m json.tool | head -20
+curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"body":{"message":"hi"}}' http://127.0.0.1:8000/utcp/call/echo
+```
+
+Expect the manual to list the same tool set as MCP `tools/list` (minus E3
+per-user masks) and the call to return `{"result": ...}` (text tools) or the
+structured dict (output-schema tools).
+
+For harness-based UTCP testing (MCP-only clients via the bridge, or the
+code-mode CLI), generate the client config with
+`scripts/setup_utcp_client.sh` and follow `docs/UTCP_CLIENTS.md`.
