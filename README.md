@@ -1,6 +1,8 @@
-# MCP Launcher
+# MCP + UTCP Launcher
 
 > My need is being able to launch MCP server tools in a flexible manner depending on my current needs.
+
+**One launcher, four client dialects on every tool**: MCP streamable **stateful** (`/mcp`, sessions + idle TTL), MCP **stateless** (`/mcp-stateless`, per-request fresh), legacy **SSE** (`/sse` + `/messages`), and **UTCP** (`GET /utcp` manual + plain-HTTP `POST /utcp/call/<tool>`) — all on the same port, selected by URL, nothing to configure.
 
 **Status**: Tested as single user server (not yet tested as multi-user)
 
@@ -348,7 +350,7 @@ By default the app serves every client dialect simultaneously from one FastMCP i
 `/mcp` (streamable HTTP, stateful), `/mcp-stateless` (streamable HTTP, stateless),
 `/sse` + `/messages` (legacy SSE), and UTCP — `GET /utcp` serves a UTCP manual and
 `POST /utcp/call/<tool>` executes tools as plain HTTP/JSON (same auth, same port;
-suppress per tool with `MCP_DISABLE_UTCP_ENDPOINT` or `"utcp": false` in config.json).
+suppress with the global `MCP_DISABLE_UTCP_ENDPOINT=1` or per tool via `"utcp": false` in config.json).
 Client selection is by URL, nothing to configure.
 Single-transport pinning remains available as an escape hatch via `--transport`,
 the `MCP_TRANSPORT` env var, or the `"transport"` key in `tools/<name>/config.json`.
