@@ -87,7 +87,7 @@ INFO:     127.0.0.1:35188 - "POST /mcp HTTP/1.1" 200 OK
 - **Comprehensive Logging**: Detailed logging for debugging and monitoring
 - **Multi-User Mode** (E3): per-user MCP keys, server-enforced function masks, per-user data-plane grants, and an admin Users UI
 - **Management UI**: NiceGUI dashboard (port 8400) for tool status, function masks, memory explorer, and user administration
-- **Multi-Transport Serving**: every tool serves `/mcp` (streamable), `/mcp-stateless`, and `/sse` simultaneously
+- **Multi-Transport Serving**: every tool serves `/mcp` (streamable), `/mcp-stateless`, `/sse`, and UTCP (`GET /utcp` manual + plain-HTTP `POST /utcp/call/<tool>`) simultaneously
 
 ## Installation
 
@@ -345,8 +345,11 @@ app = get_transport_app(mcp)             # multi-transport app (default)
 ```
 
 By default the app serves every client dialect simultaneously from one FastMCP instance —
-`/mcp` (streamable HTTP, stateful), `/mcp-stateless` (streamable HTTP, stateless), and
-`/sse` + `/messages` (legacy SSE). Client selection is by URL, nothing to configure.
+`/mcp` (streamable HTTP, stateful), `/mcp-stateless` (streamable HTTP, stateless),
+`/sse` + `/messages` (legacy SSE), and UTCP — `GET /utcp` serves a UTCP manual and
+`POST /utcp/call/<tool>` executes tools as plain HTTP/JSON (same auth, same port;
+suppress per tool with `MCP_DISABLE_UTCP_ENDPOINT` or `"utcp": false` in config.json).
+Client selection is by URL, nothing to configure.
 Single-transport pinning remains available as an escape hatch via `--transport`,
 the `MCP_TRANSPORT` env var, or the `"transport"` key in `tools/<name>/config.json`.
 
