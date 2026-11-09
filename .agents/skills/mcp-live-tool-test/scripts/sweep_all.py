@@ -3,7 +3,9 @@
 
 Exercises the full path (client -> auth -> session -> server -> tool) against
 a launcher you started yourself. Safe reads only; mutations are skipped by
-design (see SKILL.md in this directory).
+design (see SKILL.md in this directory). Server-masked functions
+(disabled_tools in tools_config.json) are auto-detected and reported SKIP —
+never FAIL — using the same masked_tools() rule the servers enforce.
 
 Usage:
     python .agents/skills/mcp-live-tool-test/scripts/sweep_all.py
@@ -30,6 +32,10 @@ from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
 ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.shared.function_masks import masked_tools  # noqa: E402
 
 # brave_search_web NOT SWEPT — user directive 2026-08-27: the function is not
 # meant to be used (it can't be hidden server-side); never call it in sweeps.
@@ -58,6 +64,8 @@ CALLS = {
         ("double", {"value": 21}),
         ("square", {"value": 7}),
         ("greet", {"name": "smoke", "greeting": "Howdy"}),
+        # Stays listed: the sweep checks masked_tools() per server, so a
+        # masked get_secret reads SKIP and lifting the mask re-arms the call.
         ("get_secret", {}),
     ],
     "ragmcp": [
@@ -119,12 +127,17 @@ async def sweep(server, port):
     cfg = json.loads((ROOT / f"tools/{server}/config.json").read_text())
     key = cfg["auth"]["api_key"]
     url = f"http://127.0.0.1:{port}/mcp"
+    masked = set(masked_tools(server))
     rows, tools_n, proto, err = [], None, None, None
     try:
         async with Client(url, auth=BearerAuth(key)) as c:
             tools_n = len(await c.list_tools())
             proto = c.protocol_version
             for fn, args in CALLS[server]:
+                if fn in masked:
+                    rows.append((fn, json.dumps(args), "SKIP",
+                                 "(server-masked via tools_config.json — not called)"))
+                    continue
                 try:
                     res = await c.call_tool(fn, args)
                     out = res.content[0].text if getattr(res, "content", None) else ""
@@ -177,7 +190,7 @@ async def main() -> int:
         print(f"note: running but NOT swept (add to CALLS or pass --only): "
               f"{', '.join(unswept_running)}")
 
-    reachable, unexpected, upstream_n = 0, 0, 0
+    reachable, unexpected, upstream_n, masked_n = 0, 0, 0, 0
     for server in servers:
         port = int(ports[server])
         print(f"\n=== {server} :{port} ===")
@@ -197,13 +210,15 @@ async def main() -> int:
                 unexpected += 1
             elif status == "UPSTREAM":
                 upstream_n += 1
+            elif status == "SKIP":
+                masked_n += 1
 
     if reachable == 0:
         print("\nNOTHING WAS SWEPT — no target server reachable."
               + (f" (--only {only} matched nothing running)" if only else ""))
         return 2
     print(f"\nswept {reachable} server(s): {unexpected} unexpected failure(s), "
-          f"{upstream_n} upstream-tolerated")
+          f"{upstream_n} upstream-tolerated, {masked_n} skipped (server-masked)")
     return 1 if unexpected else 0
 
 

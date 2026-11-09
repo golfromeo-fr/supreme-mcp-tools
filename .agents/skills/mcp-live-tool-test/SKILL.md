@@ -63,7 +63,7 @@ native sweeps are done, and warn that it kills the harness's own sessions.
 | `mcp__simplemcp__double` | `{"value": 21}` | yes → 42 |
 | `mcp__simplemcp__square` | `{"value": 7}` | yes → 49 |
 | `mcp__simplemcp__greet` | `{"name": "smoke", "greeting": "Howdy"}` | yes → "Howdy, smoke!" |
-| `mcp__simplemcp__get_secret` | `{}` | returns the SIMPLEMCP_SECRET fixture |
+| `mcp__simplemcp__get_secret` | `{}` | returns the SIMPLEMCP_SECRET fixture — may be masked server-side (`disabled_tools`); a masked call fails "Unknown tool" by design, and sweep_all.py auto-skips masked functions as SKIP |
 | webmcp `brave_search_api` | `{"query": "...", "count": 3}` | 429 = upstream rate limit, not a defect |
 | webmcp `google_search_api` | `{"query": "..."}` | no |
 | webmcp `post_url` | `https://httpbin.org/post` + small JSON body | echoed payload |
