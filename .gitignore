@@ -580,3 +580,7 @@ deploy/compose-g*.bundle.yml
 
 tools/*/config.json
 
+
+# harness-local state from CLI tools (Qwen CLI settings, video2code plugin pointer)
+.qwen/
+.v2c/

@@ -70,7 +70,7 @@ def _resolve_management_api_key(cli_key: str | None) -> str | None:
     return cli_key or os.environ.get("MCP_MANAGEMENT_API_KEY")
 
 
-def setup_logging(debug: bool = False) -> None:
+def setup_logging(debug: bool = False, config_path: str | None = None) -> None:
     """Configure logging — console + rotating file handler.
 
     The file handler is built from config/launcher_config.json logging block
@@ -92,9 +92,15 @@ def setup_logging(debug: bool = False) -> None:
 
     # Rotating file handler from config (monthly rotation by default).
     try:
-        from launcher.config import Config
+        from launcher.launcher_config import Config
         from launcher.config_types import make_file_handler
-        cfg = Config.load().logging_config
+        # Same file the legacy entry point defaults to (launchmcp.py) —
+        # Config() with no path loads built-in defaults whose logging.file
+        # is None, which would silently skip the file handler.
+        resolved = config_path or str(
+            Path(__file__).resolve().parent.parent / "config" / "launcher_config.json"
+        )
+        cfg = Config(resolved).logging_config
         fh = make_file_handler(cfg)
         if fh is not None:
             fh.setFormatter(fmt)
@@ -437,7 +443,7 @@ async def main(args: list[str] | None = None) -> None:
     parsed_args = parse_args(args)
     
     # Setup logging
-    setup_logging(debug=parsed_args.debug)
+    setup_logging(debug=parsed_args.debug, config_path=parsed_args.config)
     
     # Create launcher
     launcher = Launcher(parsed_args)
