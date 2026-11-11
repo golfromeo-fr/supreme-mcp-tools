@@ -241,5 +241,29 @@ class TestLOW15DeadCode(unittest.TestCase):
         self.assertIn("return", source)
 
 
+class TestR5OrphanTaskCancelledOnFailedStart(unittest.TestCase):
+    """R5 (review 2026-11-11): the MCP task is live the moment it is created,
+    so the mgmt-start/registry-registration section must cancel it on failure
+    (BaseException — CancelledError from the startup timeout passes through
+    `except Exception`) BEFORE the instance is registered in self.servers."""
+
+    def test_cancel_site_sits_inside_mgmt_section_before_dict_registration(self):
+        source = (PROJECT_ROOT / "launcher/server_manager.py").read_text()
+
+        create = source.index("asyncio.create_task(self._run_server(instance))")
+        mgmt_start = source.index("await mgmt_server.start()")
+        cancel = source.index("task.cancel()", create)
+        assign = source.index("self.servers[tool_name] = instance")
+        base_exc = source.index("except BaseException:", create)
+
+        # ordered: task created -> mgmt start -> (BaseException guard +
+        # cancel) -> dict registration only after success
+        self.assertLess(create, base_exc)
+        self.assertLess(mgmt_start, cancel)
+        self.assertLess(cancel, assign)
+        self.assertIn("task.cancel()", source[base_exc: cancel + len("task.cancel()")])
+        self.assertIn("raise", source[cancel: assign])
+
+
 if __name__ == "__main__":
     unittest.main()

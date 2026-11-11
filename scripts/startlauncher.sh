@@ -86,10 +86,15 @@ case "$ENGINE" in
     legacy)
         ENGINE_CMD=("$SMC_ROOT/launchmcp.py")
         if [ "$VERBOSE" = 1 ]; then
-            PASS+=(--verbose)
+            PASS=(--verbose "${PASS[@]}")
         fi
         if [ "$SAW_HEALTH_LOGS" = 0 ]; then
-            PASS+=(--health-check-logs "$HEALTH_LOGS")
+            # Prepend, never append: argparse can't parse positionals that
+            # follow optionals (intermix limitation) — a forwarded bare word
+            # before the flags used to die with "unrecognized arguments".
+            # HEALTH_LOGS already honors the STARTLAUNCHER_HEALTH_CHECK_LOGS
+            # knob (env/.env > default 'disable').
+            PASS=(--health-check-logs "$HEALTH_LOGS" "${PASS[@]}")
         fi
         ;;
     modern)
@@ -105,7 +110,14 @@ cd "$SMC_ROOT"
 
 TOOL_ARGS=()
 if [ -n "$TOOLS" ]; then
-    read -ra TOOL_ARGS <<< "${TOOLS//,/ }"
+    if [ "$ENGINE" = "modern" ]; then
+        # R6 (review 2026-11-11): the modern entry takes tools ONLY via
+        # --tools (comma-separated string), not as positionals — forwarding
+        # the bare names used to die with argparse "unrecognized arguments".
+        TOOL_ARGS=(--tools "${TOOLS// /,}")
+    else
+        read -ra TOOL_ARGS <<< "${TOOLS//,/ }"
+    fi
 fi
 
 echo "+ ${ENGINE_CMD[*]} ${PASS[*]} ${TOOL_ARGS[*]}" >&2
