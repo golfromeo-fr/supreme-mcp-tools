@@ -8,6 +8,9 @@ concerns moved here during the backend abstraction):
 - LOW-5: DSN passwords must never surface in logs — _masked_dsn()/_safe_error()
   strip them from keyword-form and URL-form conninfo (and from exception
   messages that embed the conninfo, as psycopg OperationalError does).
+- R1 (review 2026-11-11): upsert_memory must resolve an explicit id BEFORE the
+  hash dedup and move text_hash with the text — the old path hit the id
+  PRIMARY KEY and the caller's vector-only fallback silently diverged.
 
 All tests run WITHOUT a live Postgres: schema-init behaviour is exercised
 through a mocked connection (same pattern as TestPostgresSqlStoreWithMock in
@@ -99,11 +102,14 @@ class TestSafeError(unittest.TestCase):
 class _FakeConn:
     """Records executed SQL, optionally failing on pg_trgm statements."""
 
-    def __init__(self, fail_on_trgm=False, search_rows=None):
+    def __init__(self, fail_on_trgm=False, search_rows=None, fetchone_rows=None):
         self.sqls: list[str] = []
         self.params: list[tuple] = []
         self.fail_on_trgm = fail_on_trgm
         self.search_rows = search_rows or []
+        # Values consumed one-per-execute by fetchone (schema init never calls
+        # fetchone, so the first scripted value lands on the first CRUD call).
+        self.fetchone_rows = list(fetchone_rows or [])
 
     def execute(self, query, params=None):
         q = " ".join(query.split())
@@ -112,7 +118,9 @@ class _FakeConn:
         if self.fail_on_trgm and ("pg_trgm" in q or "gin_trgm_ops" in q):
             raise Exception('permission denied to create extension "pg_trgm"')
         result = MagicMock()
-        result.fetchone.return_value = None
+        result.fetchone.side_effect = lambda: (
+            self.fetchone_rows.pop(0) if self.fetchone_rows else None
+        )
         result.fetchall.return_value = list(self.search_rows)
         return result
 
@@ -236,6 +244,35 @@ class TestLOW5InitFailureLogMasked(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertNotIn("hunter2", joined)
         self.assertIn("password=***", joined)
+
+
+# ---------------------------------------------------------------------------
+# R1 (review 2026-11-11): upsert_memory resolves explicit ids BEFORE dedup
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(HAS_PSYCOPG, reason="psycopg not installed")
+class TestR1UpsertByIdResolution(unittest.TestCase):
+    """An existing id with CHANGED text must UPDATE that row (text AND
+    text_hash) — the old path hit the id PRIMARY KEY, the caller's
+    vector-only fallback swallowed the raise, and the SQL row kept the old
+    text on a success-shaped return."""
+
+    def test_existing_id_updates_text_and_hash(self):
+        conn = _FakeConn(fetchone_rows=[{"id": "uuid-1", "usage_count": 0}])
+        store = _make_store(conn)
+        actual = store.upsert_memory(
+            "uuid-1", "new different text", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        self.assertEqual(actual, "uuid-1")
+        # construction runs schema init; upsert's calls are the last two
+        select_sql, update_sql = conn.sqls[-2:]
+        self.assertIn("SELECT id, usage_count FROM memories WHERE id = %s", select_sql)
+        self.assertIn("text_hash = %s", update_sql)
+        from shared.hashing import text_hash
+        params = conn.params[-1]
+        self.assertEqual(params[0], "new different text")
+        self.assertEqual(params[1], text_hash("new different text", None))
 
 
 if __name__ == "__main__":

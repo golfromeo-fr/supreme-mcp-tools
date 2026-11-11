@@ -175,17 +175,23 @@ class TursoSqlStore:
                 (id, rowid, old_text) — external-content FTS5 deletes MUST
                 replay the text as it was INDEXED; deleting with the new text
                 left the old terms in the doclist forever (review 2026-10-24,
-                S3: hash-equal texts can differ in case/whitespace)."""
+                S3: hash-equal texts can differ in case/whitespace).
+
+                text_hash is set from ``thash`` too (R1, review 2026-11-11):
+                a by-id update with CHANGED text must move the hash atomically
+                with the text, or a later re-store of the OLD text dedups back
+                to this row and ping-pongs the content.
+                """
                 existing_id, existing_rowid, old_text = str(row[0]), row[1], row[2] or ""
                 self._conn.execute("""
                     UPDATE memories SET
-                        text = ?, tags = ?, source = ?,
+                        text = ?, text_hash = ?, tags = ?, source = ?,
                         path = COALESCE(?, path), "commit" = COALESCE(?, "commit"),
                         agent_id = COALESCE(?, agent_id),
                         sensitivity = ?, retention_policy = ?,
                         usage_count = usage_count + 1, last_accessed = ?
                     WHERE id = ?
-                """, (text, tags_json, source, path, commit, agent_id,
+                """, (text, thash, tags_json, source, path, commit, agent_id,
                       sensitivity, retention_policy, now, existing_id))
                 self._conn.execute(
                     "INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', ?, ?)",
@@ -197,6 +203,21 @@ class TursoSqlStore:
                 )
                 logger.info(f"Turso: dedup update for memory {existing_id}")
                 return existing_id
+
+            # R1 (review 2026-11-11): explicit updates resolve BY ID FIRST.
+            # The dedup lookup below only catches hash-equal texts — an
+            # existing id with CHANGED text used to fall through to the
+            # INSERT and hit the id PRIMARY KEY (the ON CONFLICT clause
+            # covers only the (text_hash, memory_type) index). The S6 raise
+            # then got caught by memory_tools, which continued vector-only:
+            # the tool returned success while the SQL row kept the old text
+            # forever (silent SQL/vector divergence).
+            row = self._conn.execute(
+                "SELECT id, rowid, text FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            if row:
+                return _update_existing(row)
 
             # Check dedup (id, rowid, OLD text — the FTS delete needs it)
             row = self._conn.execute(
@@ -434,8 +455,26 @@ class TursoSqlStore:
                 params_list.append(retention_policy)
 
             where = " AND ".join(conditions)
+            # R2 (review 2026-11-11): sync FTS5 BEFORE the rows go away — a
+            # bare DELETE left orphan doclists behind (libsql gets no sync
+            # triggers), and SQLite rowid reuse then made the ORPHANED terms
+            # match unrelated NEW memories in search_text. Same
+            # replay-the-old-text pattern as delete_memory.
+            doomed = self._conn.execute(
+                f"SELECT rowid, text FROM memories WHERE {where}", tuple(params_list)
+            ).fetchall()
+            for drow in doomed:
+                try:
+                    self._conn.execute(
+                        "INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', ?, ?)",
+                        (drow[0], drow[1] or ""),
+                    )
+                except Exception as e:
+                    logger.debug(f"FTS5 decay-side sync skipped: {e}")
             result = self._conn.execute(f"DELETE FROM memories WHERE {where}", tuple(params_list))
-            return result.rowcount
+            # len(doomed) is the honest count — the direct rowcount proved
+            # unreliable on libsql for this statement shape (reported 0).
+            return len(doomed)
         except Exception as e:
             logger.error(f"Turso decay failed: {e}")
             return 0

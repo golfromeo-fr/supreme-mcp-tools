@@ -9,6 +9,7 @@ libSQL at all and always run.
 """
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,70 @@ class TestTursoSqlStoreContract:
             )
         rows = list(turso_sql_store.iter_all())
         assert len(rows) == 5
+
+    def test_update_by_id_with_changed_text(self, turso_sql_store):
+        """R1 (review 2026-11-11): upserting an EXISTING id with new text must
+        update the SQL row (text AND text_hash). The old path hit the id
+        PRIMARY KEY, the caller's vector-only fallback swallowed the raise,
+        and the SQL row kept the old text while the vector point moved on —
+        a silent SQL/vector divergence on a success-shaped return."""
+        first = turso_sql_store.upsert_memory(
+            "uuid-a", "first version zebra", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        second = turso_sql_store.upsert_memory(
+            "uuid-a", "second version apple", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        assert first == second == "uuid-a"
+        mem = turso_sql_store.get_memory("uuid-a")
+        assert mem is not None and mem["text"] == "second version apple"
+        # FTS serves the NEW text; the OLD terms are gone from the doclist
+        assert any(m["id"] == "uuid-a" for m in turso_sql_store.search_text("apple"))
+        assert not turso_sql_store.search_text("zebra")
+
+    def test_update_by_id_moves_hash_no_ping_pong(self, turso_sql_store):
+        """R1: text_hash moves with the text on a by-id update — a later
+        re-store of the OLD text must NOT dedup back onto the updated row."""
+        turso_sql_store.upsert_memory(
+            "uuid-x", "old unique wording", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        turso_sql_store.upsert_memory(
+            "uuid-x", "completely new wording", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        re_old = turso_sql_store.upsert_memory(
+            "uuid-y", "old unique wording", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        # the old text lands on its OWN row, not on uuid-x
+        assert re_old == "uuid-y"
+        assert turso_sql_store.get_memory("uuid-x")["text"] == "completely new wording"
+
+    def test_decay_syncs_fts_no_phantom_hits(self, turso_sql_store):
+        """R2 (review 2026-11-11): decay deleted rows WITHOUT FTS5 sync; rowid
+        reuse then made the orphaned terms match an unrelated NEW memory in
+        search_text (search for a dead term returned fresh content)."""
+        doomed = turso_sql_store.upsert_memory(
+            "uuid-dead", "zebra doomed text", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        # SQLite's julianday() parses sub-second time to MILLISECONDS, so a
+        # decay in the same ms sees age 0.0 and matches nothing (real TTLs
+        # are >= 1 day, so this is a test-only consideration).
+        time.sleep(0.01)
+        removed = turso_sql_store.decay_memories(ttl_days=0, min_usage_count=1)
+        assert removed >= 1
+        assert turso_sql_store.get_memory(doomed) is None
+        # A fresh memory (SQLite may reuse the freed rowid)...
+        fresh = turso_sql_store.upsert_memory(
+            "uuid-live", "apple banana fresh", "concept",
+            "agent", [], None, None, "a", "low", "auto-delete",
+        )
+        assert fresh == "uuid-live"
+        # ...must NOT be returned for the decayed memory's terms.
+        assert not turso_sql_store.search_text("zebra")
 
 
 @_libsql_required
@@ -279,6 +344,47 @@ class TestTursoVectorStoreContract:
         assert rows[0].vector == [0.1, 0.2, 0.3, 0.4]
         # get_collection dim detection also works on legacy spaced rows
         assert turso_vector_store.get_collection("legacy").dim == 4
+
+    def test_reupsert_changed_text_resyncs_fts(self, turso_vector_store):
+        """R3 (review 2026-11-11): a text-changing re-upsert must replay-delete
+        the OLD FTS entry — external-content FTS5 keeps old terms in the
+        doclist otherwise, so BOTH texts matched in the sparse lane."""
+        from shared.store_models import PointStruct, SparseVector
+        turso_vector_store.ensure_collection("ftsr", dense_dim=self.DIM, sparse=True)
+        point = PointStruct(id="p1", vector=[0.1] * self.DIM,
+                            payload={"text": "zebra only here"})
+        turso_vector_store.upsert("ftsr", [point])
+        assert turso_vector_store.query_sparse(
+            "ftsr", SparseVector(indices=[], values=[]), query_text="zebra")
+        point.payload = {"text": "apple changed now"}
+        turso_vector_store.upsert("ftsr", [point])
+        assert not turso_vector_store.query_sparse(
+            "ftsr", SparseVector(indices=[], values=[]), query_text="zebra")
+        hits = turso_vector_store.query_sparse(
+            "ftsr", SparseVector(indices=[], values=[]), query_text="apple")
+        assert hits and hits[0].id == "p1"
+
+    def test_delete_resyncs_fts_no_rowid_reuse_phantom(self, turso_vector_store):
+        """R3: delete() never synced the FTS sidecar; rowid reuse then glued
+        the deleted point's terms onto an unrelated NEW point."""
+        from shared.store_models import PointStruct, SparseVector
+        turso_vector_store.ensure_collection("ftsd", dense_dim=self.DIM, sparse=True)
+        turso_vector_store.upsert("ftsd", [
+            PointStruct(id="p-old", vector=[0.1] * self.DIM,
+                        payload={"text": "zebra dead point"}),
+        ])
+        assert turso_vector_store.query_sparse(
+            "ftsd", SparseVector(indices=[], values=[]), query_text="zebra")
+        turso_vector_store.delete("ftsd", ids=["p-old"])
+        turso_vector_store.upsert("ftsd", [
+            PointStruct(id="p-new", vector=[0.2] * self.DIM,
+                        payload={"text": "apple living point"}),
+        ])
+        assert not turso_vector_store.query_sparse(
+            "ftsd", SparseVector(indices=[], values=[]), query_text="zebra")
+        hits = turso_vector_store.query_sparse(
+            "ftsd", SparseVector(indices=[], values=[]), query_text="apple")
+        assert hits and hits[0].id == "p-new"
 
 
 class TestVectorSerialization:

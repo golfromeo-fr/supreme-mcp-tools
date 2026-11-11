@@ -229,6 +229,25 @@ def test_scroll_paginates_turso(turso_vec):
     assert ids == {f"p{i}" for i in range(25)}
 
 
+def test_scroll_paginates_pg(pg_vec):
+    """R4 (review 2026-11-11): scroll used to append an extra bind param on
+    PG — LIMIT/OFFSET are f-string-interpolated there, so the stray `[limit]`
+    made psycopg count placeholders and scroll FAILED on every call (no PG
+    scroll test existed to catch it)."""
+    store, created = pg_vec
+    created.append("c3pg")
+    store.ensure_collection("c3pg", dense_dim=DIM)
+    for i in range(5):
+        store.upsert("c3pg", [
+            PointStruct(id=f"p{i}", vector=[float(i)] * DIM, payload={"i": i}),
+        ])
+    batch, offset = store.scroll("c3pg", limit=2)
+    assert [p.id for p in batch] == ["p0", "p1"]
+    assert offset == 2
+    batch2, _ = store.scroll("c3pg", limit=10, offset=offset)
+    assert {p.id for p in batch2} == {"p2", "p3", "p4"}
+
+
 # ---------------------------------------------------------------------------
 # C3: list_collections returns list[str] (ragmcp called .name on these)
 # ---------------------------------------------------------------------------

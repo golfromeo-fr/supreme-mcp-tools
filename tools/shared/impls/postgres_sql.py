@@ -269,16 +269,24 @@ class PostgresSqlStore:
 
         try:
             with self._pool.connection() as conn:
+                # R1 (review 2026-11-11): explicit updates resolve BY ID
+                # FIRST — the dedup lookup below only catches hash-equal
+                # texts; an existing id with CHANGED text used to fall
+                # through to the INSERT and violate the id PRIMARY KEY, and
+                # the caller's vector-only fallback then diverged the SQL
+                # row from the vector point on a successful return. text_hash
+                # moves with the text so a later re-store of the OLD text
+                # can't dedup back to this row and ping-pong the content.
                 row = conn.execute(
-                    "SELECT id, usage_count FROM memories WHERE text_hash = %s AND memory_type = %s",
-                    (thash, memory_type),
+                    "SELECT id, usage_count FROM memories WHERE id = %s",
+                    (memory_id,),
                 ).fetchone()
 
                 if row:
                     existing_id = str(row["id"])
                     conn.execute("""
                         UPDATE memories SET
-                            text = %s,
+                            text = %s, text_hash = %s,
                             tags = %s,
                             source = %s,
                             path = COALESCE(%s, path),
@@ -289,7 +297,32 @@ class PostgresSqlStore:
                             usage_count = usage_count + 1,
                             last_accessed = %s
                         WHERE id = %s
-                    """, (text, tags_json, source, path, commit, agent_id,
+                    """, (text, thash, tags_json, source, path, commit, agent_id,
+                          sensitivity, retention_policy, now, existing_id))
+                    logger.info(f"PG: update by id for memory {existing_id}")
+                    return existing_id
+
+                row = conn.execute(
+                    "SELECT id, usage_count FROM memories WHERE text_hash = %s AND memory_type = %s",
+                    (thash, memory_type),
+                ).fetchone()
+
+                if row:
+                    existing_id = str(row["id"])
+                    conn.execute("""
+                        UPDATE memories SET
+                            text = %s, text_hash = %s,
+                            tags = %s,
+                            source = %s,
+                            path = COALESCE(%s, path),
+                            commit = COALESCE(%s, commit),
+                            agent_id = COALESCE(%s, agent_id),
+                            sensitivity = %s,
+                            retention_policy = %s,
+                            usage_count = usage_count + 1,
+                            last_accessed = %s
+                        WHERE id = %s
+                    """, (text, thash, tags_json, source, path, commit, agent_id,
                           sensitivity, retention_policy, now, existing_id))
                     logger.info(f"PG: dedup update for memory {existing_id}")
                     return existing_id
@@ -299,7 +332,7 @@ class PostgresSqlStore:
                             path, commit, agent_id, sensitivity, retention_policy, created_at, last_accessed)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (text_hash, memory_type) DO UPDATE SET
-                            text = EXCLUDED.text,
+                            text = EXCLUDED.text, text_hash = EXCLUDED.text_hash,
                             tags = EXCLUDED.tags,
                             usage_count = memories.usage_count + 1,
                             last_accessed = EXCLUDED.last_accessed
