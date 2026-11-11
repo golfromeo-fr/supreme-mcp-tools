@@ -110,15 +110,9 @@ class ServiceRegistry:
         self._health_check_task: asyncio.Task | None = None
         self._running = False
         self._session: aiohttp.ClientSession | None = None
-    
-    def _should_log_health(self, level: str = "info") -> bool:
-        """Check if health check logging is enabled for a given level."""
-        mode = self._health_check_logs
-        if mode == "disable":
-            return False
-        if mode == "errors-only":
-            return level in ("error", "warning")
-        return True
+
+    # (R21, review 2026-11-11: _should_log_health was unused since inception —
+    # the call sites log via their own level checks; deleted as dead code.)
     
     async def start(self) -> None:
         """Start the health check background task."""

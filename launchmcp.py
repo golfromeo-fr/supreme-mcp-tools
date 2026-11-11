@@ -229,18 +229,19 @@ Examples:
     parser.add_argument(
         "--transport",
         type=str,
-        choices=["streamable-http", "sse"],
+        choices=["multi", "streamable-http", "streamable-stateless", "sse"],
         default=None,
-        help="Transport protocol for all tools (default: streamable-http; "
-             "sse is legacy compatibility for outdated harnesses)"
+        help="Transport protocol for all tools (default: multi — every dialect "
+             "at once; sse is legacy compatibility for outdated harnesses)"
     )
 
     parser.add_argument(
         "--health-check-logs",
         type=str,
         choices=["enable", "disable", "errors-only"],
-        default="enable",
-        help="Health check logging mode (default: enable)"
+        default=None,
+        help="Health check logging mode (default: MCP_HEALTH_CHECK_LOGS from "
+             "env/.env, else 'enable' — an unset flag no longer clobbers the knob)"
     )
 
     parser.add_argument(
@@ -886,7 +887,10 @@ async def main() -> int:
         # Sync tools config from running servers (unless disabled)
         if not args.no_sync_tools:
             try:
-                from launcher.tools_config import save_tools_config, load_tools_config, validate_and_cleanup_config
+                from launcher.tools_config import (
+                    save_tools_config, load_tools_config,
+                    merge_discovered_tools, validate_and_cleanup_config,
+                )
                 logging.info(f"Syncing tools config from {len(started_tools)} servers...")
                 validate_and_cleanup_config()
                 discovered = {}
@@ -915,11 +919,16 @@ async def main() -> int:
                     else:
                         discovered[tool.name] = []
                 config_data = load_tools_config()
-                if "tools" not in config_data:
-                    config_data["tools"] = {}
-                for server_name, tool_names in discovered.items():
-                    config_data["tools"][server_name] = tool_names
-                save_tools_config(config_data)
+                discovered = {k: v for k, v in discovered.items() if v}
+                if discovered:
+                    # R11 (review 2026-11-11): UNION, never replace —
+                    # mcp.list_tools() omits E1-masked functions, so a plain
+                    # assignment shrank the stored inventory by exactly the
+                    # masks on every boot (the merge guard below exists for
+                    # this), and a list_tools exception wrote an empty list,
+                    # wiping a server's whole inventory.
+                    merge_discovered_tools(config_data, discovered)
+                    save_tools_config(config_data)
                 for name, tool_names in discovered.items():
                     logging.info(f"  {name}: {len(tool_names)} tools")
                 logging.info("Tools config synced")

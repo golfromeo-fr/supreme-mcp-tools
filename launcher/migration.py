@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -222,7 +223,13 @@ class MigrationManager:
             # Backup config files
             config_dir = Path.home() / ".config" / "supreme-mcp-tools"
             if config_dir.exists():
-                shutil.copytree(config_dir, backup_path / "config")
+                # R20 (review 2026-11-11): never copy the backups/ subtree —
+                # it lives INSIDE config_dir, so the old plain copytree tried
+                # to copy the in-progress backup into itself.
+                shutil.copytree(
+                    config_dir, backup_path / "config",
+                    ignore=shutil.ignore_patterns("backups"),
+                )
             
             self.status.backup_path = str(backup_path)
             
@@ -366,9 +373,20 @@ from launcher.tool_extensions import ExtensionRegistry, Extension, ExtensionType
             backup_config = backup_dir / "config"
             if backup_config.exists():
                 config_dir = Path.home() / ".config" / "supreme-mcp-tools"
-                if config_dir.exists():
-                    shutil.rmtree(config_dir)
-                shutil.copytree(backup_config, config_dir)
+                # R20 (review 2026-11-11): the backup lives INSIDE config_dir
+                # (backups/), so the old `rmtree(config_dir)` destroyed the
+                # source before the copy and rollback ALWAYS failed. Stage
+                # the backup aside first, wipe, then restore from the stage
+                # (same filesystem — a move, not a copy).
+                staging = config_dir.parent / f".supreme-mcp-tools-restore-{int(time.time() * 1000)}"
+                shutil.move(str(backup_config), str(staging))
+                try:
+                    if config_dir.exists():
+                        shutil.rmtree(config_dir)
+                    shutil.copytree(staging, config_dir)
+                finally:
+                    if Path(staging).exists():
+                        shutil.rmtree(staging)
             
             # Update status
             self.status.version = "v1"

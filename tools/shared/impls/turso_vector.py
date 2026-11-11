@@ -222,6 +222,20 @@ class TursoVectorStore:
                 logger.warning(
                     f"Collection '{name}' created with BLOB embedding — this "
                     "libSQL build lacks VECTOR support; vector queries will fail")
+                # R17 (review 2026-11-11): the S6 fix deleted the BLOB DDL but
+                # kept this message — on a build genuinely lacking VECTOR the
+                # table was never created and every later upsert failed "no
+                # such table". Degrade for real: BLOB storage, queries fail.
+                self._conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
+                        id          TEXT PRIMARY KEY,
+                        embedding   BLOB,
+                        payload     TEXT,
+                        text_content TEXT,
+                        created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                        updated_at  TEXT
+                    )
+                """)
         else:
             # No dense — FTS5-only collection
             self._conn.execute(f"""

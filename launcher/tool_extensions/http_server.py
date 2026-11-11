@@ -52,6 +52,25 @@ class FunctionMaskRequest(BaseModel):
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
+def _load_ui_ports() -> set[int]:
+    """reserved management_ui / pod_management_ui ports from ports.json.
+
+    R19 (review 2026-11-11): the CORS allow-list used the tool's mgmt port
+    (81xx) — a port no browser UI calls; the real browser origins are these
+    UI ports. Fallback matches the hardcoded defaults (8400/8401).
+    """
+    try:
+        from launcher.launcher_config import load_ports_config
+        reserved = load_ports_config().get("reserved", {})
+        return {
+            int(reserved[k]) for k in ("management_ui", "pod_management_ui")
+            if reserved.get(k)
+        }
+    except Exception as e:
+        logger.debug(f"Could not load UI ports from ports.json: {e}")
+        return {8400, 8401}
+
+
 class ExtensionHTTPServer:
     """
     HTTP server for extension management in tool processes.
@@ -133,10 +152,14 @@ class ExtensionHTTPServer:
         
         # Add CORS middleware
         _mgmt_port = self._get_default_mgmt_port(tool_name) or 8400
-        _allowed_origins = [
-            f"http://localhost:{_mgmt_port}",
-            f"http://127.0.0.1:{_mgmt_port}",
-        ]
+        # R19 (review 2026-11-11): also allow the actual UI origins — the
+        # mgmt-port origin is never used by a browser client.
+        _allowed_origins = []
+        for _p in sorted({_mgmt_port} | _load_ui_ports()):
+            _allowed_origins += [
+                f"http://localhost:{_p}",
+                f"http://127.0.0.1:{_p}",
+            ]
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=_allowed_origins,
@@ -393,6 +416,19 @@ class ExtensionHTTPServer:
         # Wait for server to start
         await asyncio.sleep(0.5)
         
+        # R7 (review 2026-11-11): the fixed sleep never verified the bind —
+        # a port grabbed between the availability probe and the bind let the
+        # serve task die silently while startup declared success (registry
+        # health then touted a healthy mgmt URL with a dead MCP endpoint).
+        if self._task.done():
+            exc = self._task.exception()
+            if exc is not None:
+                raise RuntimeError(
+                    f"{self.tool_name} mgmt serve task failed during startup: {exc}"
+                ) from exc
+            raise RuntimeError(
+                f"{self.tool_name} mgmt serve task exited during startup")
+
         logger.info(f"Management server for {self.tool_name} started on port {self.port}")
     
     async def stop(self) -> None:

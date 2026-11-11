@@ -459,7 +459,10 @@ def _update_env_file(var_name: str, value: str, env_path: Path) -> None:
     # Create file if it doesn't exist
     if not env_path.exists():
         env_path.parent.mkdir(parents=True, exist_ok=True)
-        with Path(env_path).open("w") as f:
+        # R14 (review 2026-11-11): create with 0o640 like the update path —
+        # the old plain open() gave a fresh .env 0644 (secrets world-readable).
+        fd = os.open(str(env_path), os.O_WRONLY | os.O_CREAT, 0o640)
+        with os.fdopen(fd, "w") as f:
             f.write(f"{var_name}={value}\n")
         logger.info(f"Created .env file at {env_path} with {var_name}")
         return

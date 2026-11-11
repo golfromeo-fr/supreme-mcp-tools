@@ -40,7 +40,9 @@ def get_server_urls_from_ports():
     server_urls = {}
 
     for server_name, port in assignments.items():
-        server_urls[server_name] = f"http://localhost:{port}/mcp"
+        # 127.0.0.1, not localhost — the repo convention (avoids IPv6 ::1
+        # resolution pitfalls on the management-plane probes).
+        server_urls[server_name] = f"http://127.0.0.1:{port}/mcp"
 
     return server_urls
 

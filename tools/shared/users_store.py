@@ -584,13 +584,19 @@ def get_data_grants(username: str) -> dict:
 def revoke_system_key(tool_name: str) -> None:
     """OPTIONAL: retire one tool's system key (its config.json key stops
     authenticating; only user keys remain). Off by default — admin action."""
-    store = load_users()
-    revoked = store.setdefault("revoked_system_keys", [])
     tool = (tool_name or "").strip().lower()
-    if tool not in revoked:
-        revoked.append(tool)
-        save_users(store)
-        logger.warning(f"[E3] system key for '{tool}' REVOKED — user keys only")
+
+    def _revoke(store: dict) -> dict:
+        revoked = store.setdefault("revoked_system_keys", [])
+        if tool not in revoked:
+            revoked.append(tool)
+            logger.warning(f"[E3] system key for '{tool}' REVOKED — user keys only")
+        return store
+
+    # R13 (review 2026-11-11): under _mutate_users' sidecar flock like every
+    # other store CRUD — the old raw load→mutate→save could lose the
+    # revocation to a concurrent mutation (a revocation that never persists).
+    _mutate_users(_revoke)
 
 
 # ---------------------------------------------------------------------------

@@ -654,9 +654,13 @@ class DistributedExtensionRegistry:
     
     def _auth_headers(self, tool_name: str) -> dict[str, str]:
         """Get auth headers for a tool's management API."""
-        from launcher.env_manager import load_auth_config
+        from launcher.env_manager import load_auth_config, resolve_tool_api_key
+
+        # R15 (review 2026-11-11): env-first, same as the 81xx servers
+        # themselves — with <NAME>_API_KEY / MCP_API_KEY env keys the old
+        # config-only header sent the wrong key and every proxied call 401'd.
         auth_cfg = load_auth_config(tool_name)
-        api_key = auth_cfg.get("api_key")
+        api_key = resolve_tool_api_key(tool_name, auth_cfg.get("api_key"))
         return {"X-API-Key": api_key} if api_key else {}
 
     async def _http_get(

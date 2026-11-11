@@ -265,5 +265,28 @@ class TestR5OrphanTaskCancelledOnFailedStart(unittest.TestCase):
         self.assertIn("raise", source[cancel: assign])
 
 
+class TestR8EscapedEntryPointsGated(unittest.TestCase):
+    """R8 (review 2026-11-11): get_valid_languages and the schema-context
+    block of optimize_sql_with_ai escaped the F1 grant-gate sweep — both must
+    call _assert_preset_grant(None) before touching the active connection."""
+
+    def test_get_valid_languages_gated_before_entry_use(self):
+        source = (PROJECT_ROOT / "tools" / "databasemcp" / "db_tools.py").read_text()
+        start = source.index("async def get_valid_languages()")
+        first_with_entry = source.index("_with_entry", start)
+        gate = source.index("_assert_preset_grant(None)", start)
+        self.assertLess(gate, first_with_entry)
+
+    def test_optimize_schema_context_gated(self):
+        source = (PROJECT_ROOT / "tools" / "databasemcp" / "db_tools.py").read_text()
+        # the two R8 gate sites exist, and the schema-context one sits
+        # directly before REGISTRY.get(None)
+        self.assertGreaterEqual(source.count("_assert_preset_grant(None)"), 2)
+        self.assertIn(
+            "_assert_preset_grant(None)\n            entry = REGISTRY.get(None)",
+            source,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

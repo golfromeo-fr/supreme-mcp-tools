@@ -18,13 +18,22 @@ from ._base import DbDialect
 
 def _reject_multi_statement(sql: str) -> None:
     """Quote-aware multi-statement rejection (libsql silently runs only the
-    FIRST statement of a multi-statement string on file DBs)."""
+    FIRST statement of a multi-statement string on file DBs).
+
+    R18 (review 2026-11-11): tracks double quotes too — a `"` containing a
+    `'` used to flip the single-quote state and let `SELECT "it's"; DROP ...`
+    through, which libsql then silently half-ran — the exact partial
+    execution this guard exists to prevent.
+    """
     body = sql.rstrip().rstrip(";")
     in_str = False
+    in_dquote = False
     for ch in body:
-        if ch == "'":
+        if ch == "'" and not in_dquote:
             in_str = not in_str
-        elif ch == ";" and not in_str:
+        elif ch == '"' and not in_str:
+            in_dquote = not in_dquote
+        elif ch == ";" and not in_str and not in_dquote:
             raise ValueError(
                 "Multiple statements detected; execute one statement at a time."
             )
@@ -164,6 +173,16 @@ class LibsqlDialect(DbDialect):
         import libsql_experimental as libsql
 
         url, auth_token = _connect_params(params)
+        # R9 (review 2026-11-11): a file::memory: URL cannot carry a
+        # transaction — every connect() returns a PRIVATE empty database, so
+        # the tx/batch used to "commit" into a throwaway DB and report
+        # success. Refuse loudly instead of doing nothing.
+        if url and ":memory:" in url:
+            raise ValueError(
+                "transactions/atomic batches are not supported on file::memory: "
+                "connections — each connect() is a separate empty database; "
+                "use a file: path or a libsql:// URL"
+            )
         if auth_token:
             tx = libsql.connect(url, auth_token=auth_token)
         else:

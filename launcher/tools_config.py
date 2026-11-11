@@ -388,11 +388,14 @@ def update_config_with_discovered_tools(
     """
     discovered = discover_all_tools(server_urls, timeout, auth_keys=auth_keys)
 
-    config = load_tools_config(config_path)
-    config = merge_discovered_tools(config, discovered)
+    # R12 (review 2026-11-11): the old load→merge→save ran outside the lock
+    # and could clobber a concurrent mask toggle; the merge is idempotent, so
+    # re-running it under the same lock every other writer uses is safe.
+    def _apply(config):
+        merge_discovered_tools(config, discovered)
+        return discovered
 
-    save_tools_config(config, config_path)
-    return discovered
+    return _mutate_config(_apply, config_path)
 
 
 def validate_and_cleanup_config(config_path: Path | None = None) -> dict[str, list[str]]:
@@ -407,24 +410,21 @@ def validate_and_cleanup_config(config_path: Path | None = None) -> dict[str, li
     Returns:
         Dictionary with validation results
     """
-    config = load_tools_config(config_path)
     results = {"removed_invalid": [], "servers_updated": []}
 
-    tools = config.get("tools", {})
-    disabled = config.get("disabled_tools", {})
+    def _apply(config):
+        # E3 fix (2026-09-08): do NOT prune disabled entries for being absent
+        # from the `tools` inventory — that inventory comes from the MASKED
+        # tools/list, so an enforced mask makes its own function "missing" and
+        # the prune silently DELETED user masks on every restart (get_secret /
+        # brave_search_web were lost this way). A mask for a function that
+        # truly no longer exists is harmless; masks are user data and are only
+        # removed via the management API / Functions tab.
+        config["disabled_tools"] = config.get("disabled_tools", {})
+        return results
 
-    # E3 fix (2026-09-08): do NOT prune disabled entries for being absent
-    # from the `tools` inventory — that inventory comes from the MASKED
-    # tools/list, so an enforced mask makes its own function "missing" and
-    # the prune silently DELETED user masks on every restart (get_secret /
-    # brave_search_web were lost this way). A mask for a function that
-    # truly no longer exists is harmless; masks are user data and are only
-    # removed via the management API / Functions tab.
-
-    config["disabled_tools"] = disabled
-    save_tools_config(config, config_path)
-
-    return results
+    # R12 (review 2026-11-11): under the same lock every other writer uses.
+    return _mutate_config(_apply, config_path)
 
 
 def filter_tools_by_disabled(

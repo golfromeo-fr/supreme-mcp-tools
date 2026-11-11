@@ -70,21 +70,31 @@ def _resolve_management_api_key(cli_key: str | None) -> str | None:
     return cli_key or os.environ.get("MCP_MANAGEMENT_API_KEY")
 
 
-def setup_logging(debug: bool = False, config_path: str | None = None) -> None:
+def setup_logging(debug: bool = False, config_path: str | None = None,
+                  level: str | None = None) -> None:
     """Configure logging — console + rotating file handler.
 
     The file handler is built from config/launcher_config.json logging block
     (default: logs/launcher.log, rotated monthly). This keeps the new
     `python -m launcher` entry point consistent with the legacy launchmcp.py,
     which already used the same make_file_handler helper.
+
+    ``level`` honors --log-level (R21, review 2026-11-11: the flag was parsed
+    but never applied before); ``debug`` still wins over it.
     """
-    level = logging.DEBUG if debug else logging.INFO
+    if debug:
+        log_level = logging.DEBUG
+    # argparse choices already validated the value
+    elif level:
+        log_level = getattr(logging, level, logging.INFO)
+    else:
+        log_level = logging.INFO
     fmt = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     root = logging.getLogger()
-    root.setLevel(level)
+    root.setLevel(log_level)
     root.handlers.clear()
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(fmt)
@@ -193,10 +203,10 @@ Examples:
     parser.add_argument(
         "--transport",
         type=str,
-        choices=["streamable-http", "sse"],
+        choices=["multi", "streamable-http", "streamable-stateless", "sse"],
         default=None,
-        help="Transport protocol for all tools (default: streamable-http; "
-             "sse is legacy compatibility for outdated harnesses)"
+        help="Transport protocol for all tools (default: multi — every dialect "
+             "at once; sse is legacy compatibility for outdated harnesses)"
     )
     
     return parser.parse_args(args)
@@ -365,7 +375,12 @@ class Launcher:
                     f"Management={mgmt_port or 'disabled'}"
                 )
             except Exception as e:
+                # R5 already cancels the half-started MCP task inside
+                # start_server; release the port reservations too, so a
+                # retry in this process doesn't see phantom allocations.
                 logger.error(f"Failed to start {tool_name}: {e}")
+                self.port_manager.release_port(tool_name)
+                self.port_manager.release_port(f"{tool_name}_mgmt")
         
         self.running = True
         logger.info("Launcher started successfully")
@@ -443,7 +458,8 @@ async def main(args: list[str] | None = None) -> None:
     parsed_args = parse_args(args)
     
     # Setup logging
-    setup_logging(debug=parsed_args.debug, config_path=parsed_args.config)
+    setup_logging(debug=parsed_args.debug, config_path=parsed_args.config,
+                  level=parsed_args.log_level)
     
     # Create launcher
     launcher = Launcher(parsed_args)
