@@ -222,6 +222,20 @@ class TursoVectorStore:
                 logger.warning(
                     f"Collection '{name}' created with BLOB embedding — this "
                     "libSQL build lacks VECTOR support; vector queries will fail")
+                # R17 (review 2026-11-11): the S6 fix deleted the BLOB DDL but
+                # kept this message — on a build genuinely lacking VECTOR the
+                # table was never created and every later upsert failed "no
+                # such table". Degrade for real: BLOB storage, queries fail.
+                self._conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS vec_{_s(name)} (
+                        id          TEXT PRIMARY KEY,
+                        embedding   BLOB,
+                        payload     TEXT,
+                        text_content TEXT,
+                        created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                        updated_at  TEXT
+                    )
+                """)
         else:
             # No dense — FTS5-only collection
             self._conn.execute(f"""
@@ -259,16 +273,18 @@ class TursoVectorStore:
     # Writes
     # ------------------------------------------------------------------
 
-    def upsert(self, collection: str, points: list[PointStruct]) -> None:
-        # Check if FTS5 sidecar exists
-        fts_exists = False
+    def _fts_exists(self, collection: str) -> bool:
+        """True when the FTS5 sidecar table for ``collection`` exists."""
         try:
             fts_check = self._conn.execute(
                 f"SELECT name FROM sqlite_master WHERE type='table' AND name='vec_{_s(collection)}_fts'"
             ).fetchone()
-            fts_exists = bool(fts_check)
+            return bool(fts_check)
         except Exception:
-            fts_exists = False
+            return False
+
+    def upsert(self, collection: str, points: list[PointStruct]) -> None:
+        fts_exists = self._fts_exists(collection)
 
         for p in points:
             payload_str = json.dumps(p.payload or {})
@@ -286,6 +302,17 @@ class TursoVectorStore:
                         vec_str = _serialize_vector(v)
                         break
 
+            # R3 (review 2026-11-11): capture the OLD FTS row BEFORE the
+            # upsert — external-content FTS5 keeps old terms in the doclist
+            # unless a 'delete' replays them, so a re-upsert with CHANGED
+            # text used to leave BOTH texts matching in the sparse lane.
+            old_fts = None
+            if fts_exists:
+                old_fts = self._conn.execute(
+                    f"SELECT rowid, text_content FROM vec_{_s(collection)} WHERE id = ?",
+                    (str(p.id),),
+                ).fetchone()
+
             self._conn.execute(f"""
                 INSERT INTO vec_{_s(collection)} (id, embedding, payload, text_content)
                 VALUES (?, ?, ?, ?)
@@ -296,16 +323,23 @@ class TursoVectorStore:
                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
             """, (str(p.id), vec_str, payload_str, text_content))
 
-            # FTS5 sync (only if sidecar exists)
-            if fts_exists and text_content:
-                fts_row = self._conn.execute(
-                    f"SELECT rowid FROM vec_{_s(collection)} WHERE id = ?", (str(p.id),)
-                ).fetchone()
-                if fts_row:
+            # FTS5 sync (only if sidecar exists): replay-delete the old text,
+            # then index the new one at the same rowid.
+            if fts_exists:
+                if old_fts is not None and old_fts[1]:
                     self._conn.execute(
-                        f"INSERT INTO vec_{_s(collection)}_fts(rowid, text_content) VALUES (?, ?)",
-                        (fts_row[0], text_content),
+                        f"INSERT INTO vec_{_s(collection)}_fts(vec_{_s(collection)}_fts, rowid, text_content) VALUES ('delete', ?, ?)",
+                        (old_fts[0], old_fts[1]),
                     )
+                if text_content:
+                    fts_row = old_fts or self._conn.execute(
+                        f"SELECT rowid FROM vec_{_s(collection)} WHERE id = ?", (str(p.id),)
+                    ).fetchone()
+                    if fts_row is not None:
+                        self._conn.execute(
+                            f"INSERT INTO vec_{_s(collection)}_fts(rowid, text_content) VALUES (?, ?)",
+                            (fts_row[0], text_content),
+                        )
 
     def set_payload(self, collection: str, payload: dict, *, ids: list[str]) -> None:
         """Shallow top-level merge of ``payload`` into each point's payload.
@@ -350,6 +384,30 @@ class TursoVectorStore:
     def delete(self, collection: str, *,
                ids: list[str] | None = None,
                filter: Filter | None = None) -> None:
+        # R3 (review 2026-11-11): sync the FTS5 sidecar before the rows
+        # vanish — deleting a point used to leave its terms in the doclist,
+        # and rowid reuse then glued them onto UNRELATED new points in the
+        # sparse lane.
+        if self._fts_exists(collection):
+            if ids:
+                where_sql = f"id IN ({','.join('?' for _ in ids)})"
+                where_params: tuple = tuple(ids)
+            elif filter:
+                where_sql, fparams = _filter_to_sql(filter, "payload")
+                where_params = tuple(fparams)
+            else:
+                where_sql, where_params = "", ()
+            if where_sql:
+                doomed = self._conn.execute(
+                    f"SELECT rowid, text_content FROM vec_{_s(collection)} WHERE {where_sql}",
+                    where_params,
+                ).fetchall()
+                for drow in doomed:
+                    if drow[1]:
+                        self._conn.execute(
+                            f"INSERT INTO vec_{_s(collection)}_fts(vec_{_s(collection)}_fts, rowid, text_content) VALUES ('delete', ?, ?)",
+                            (drow[0], drow[1]),
+                        )
         if ids:
             placeholders = ",".join("?" for _ in ids)
             self._conn.execute(

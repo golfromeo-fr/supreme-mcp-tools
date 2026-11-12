@@ -326,7 +326,9 @@ class PostgresVectorStore:
         where, params = _filter_to_sql(filter)
         where_clause = f"WHERE {where}" if where else ""
         offset_clause = f"OFFSET {int(offset)}" if offset is not None else ""
-        params = params + [limit]
+        # R4 (review 2026-11-11): LIMIT/OFFSET are f-string-interpolated ints
+        # here — the old extra `[limit]` bind param made psycopg count one
+        # placeholder more than supplied and scroll() failed on EVERY call.
         with self._pool.connection() as conn:
             rows = conn.execute(
                 f"SELECT id, payload FROM vec_{collection} {where_clause} "
@@ -337,7 +339,10 @@ class PostgresVectorStore:
             PointStruct(id=str(r["id"]), vector=[], payload=r["payload"] if with_payload else None)
             for r in rows
         ]
-        next_offset = (int(offset) + len(results)) if results else None
+        # R4 (review 2026-11-11): offset can be None on the FIRST page — the
+        # old `int(offset) + len(results)` raised TypeError here, so after the
+        # placeholder-count fix the very first scroll page still failed.
+        next_offset = ((offset or 0) + len(results)) if results else None
         return results, next_offset
 
     def get_collection(self, name: str) -> CollectionInfo:

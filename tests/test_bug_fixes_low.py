@@ -241,5 +241,52 @@ class TestLOW15DeadCode(unittest.TestCase):
         self.assertIn("return", source)
 
 
+class TestR5OrphanTaskCancelledOnFailedStart(unittest.TestCase):
+    """R5 (review 2026-11-11): the MCP task is live the moment it is created,
+    so the mgmt-start/registry-registration section must cancel it on failure
+    (BaseException — CancelledError from the startup timeout passes through
+    `except Exception`) BEFORE the instance is registered in self.servers."""
+
+    def test_cancel_site_sits_inside_mgmt_section_before_dict_registration(self):
+        source = (PROJECT_ROOT / "launcher/server_manager.py").read_text()
+
+        create = source.index("asyncio.create_task(self._run_server(instance))")
+        mgmt_start = source.index("await mgmt_server.start()")
+        cancel = source.index("task.cancel()", create)
+        assign = source.index("self.servers[tool_name] = instance")
+        base_exc = source.index("except BaseException:", create)
+
+        # ordered: task created -> mgmt start -> (BaseException guard +
+        # cancel) -> dict registration only after success
+        self.assertLess(create, base_exc)
+        self.assertLess(mgmt_start, cancel)
+        self.assertLess(cancel, assign)
+        self.assertIn("task.cancel()", source[base_exc: cancel + len("task.cancel()")])
+        self.assertIn("raise", source[cancel: assign])
+
+
+class TestR8EscapedEntryPointsGated(unittest.TestCase):
+    """R8 (review 2026-11-11): get_valid_languages and the schema-context
+    block of optimize_sql_with_ai escaped the F1 grant-gate sweep — both must
+    call _assert_preset_grant(None) before touching the active connection."""
+
+    def test_get_valid_languages_gated_before_entry_use(self):
+        source = (PROJECT_ROOT / "tools" / "databasemcp" / "db_tools.py").read_text()
+        start = source.index("async def get_valid_languages()")
+        first_with_entry = source.index("_with_entry", start)
+        gate = source.index("_assert_preset_grant(None)", start)
+        self.assertLess(gate, first_with_entry)
+
+    def test_optimize_schema_context_gated(self):
+        source = (PROJECT_ROOT / "tools" / "databasemcp" / "db_tools.py").read_text()
+        # the two R8 gate sites exist, and the schema-context one sits
+        # directly before REGISTRY.get(None)
+        self.assertGreaterEqual(source.count("_assert_preset_grant(None)"), 2)
+        self.assertIn(
+            "_assert_preset_grant(None)\n            entry = REGISTRY.get(None)",
+            source,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

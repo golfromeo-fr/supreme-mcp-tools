@@ -789,6 +789,11 @@ async def get_valid_languages() -> str:
     """Get valid language codes from the LANGUES table (Oracle work DB only)."""
     start_time = time.perf_counter()
     try:
+        # R8 (review 2026-11-11): this entry point escaped the F1 grant-gate
+        # sweep — the active connection (including the legacy env-default
+        # lazy connect) was readable without any preset grant.
+        _assert_preset_grant(None)
+
         def _run(entry):
             if entry.dialect != "oracle":
                 raise RuntimeError(
@@ -1084,6 +1089,11 @@ async def optimize_sql_with_ai(sql: str) -> str:
         # Live schema context via the registry (cached describe; any dialect)
         table_descriptions = None
         try:
+            # R8 (review 2026-11-11): the schema context reads table metadata
+            # from the active connection — gate it like every other entry
+            # point so a non-admin cannot extract schemas (which are then
+            # sent off to the external AI endpoint).
+            _assert_preset_grant(None)
             entry = REGISTRY.get(None)
             schemas_result = {}
             for table_name in extract_table_names_from_sql(sql):

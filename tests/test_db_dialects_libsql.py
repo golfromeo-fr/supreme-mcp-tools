@@ -166,3 +166,38 @@ class TestBuildAgnosticDurability:
         rows, _ = dialect.run_select(h, "SELECT COUNT(*) AS n FROM t", max_rows=10)
         assert rows[0]["n"] == 2
         dialect.close(h)
+
+    # R9 (review 2026-11-11): every file::memory: connect() is a PRIVATE
+    # empty database, so a transaction "committed" into a throwaway DB —
+    # open_tx must refuse instead of reporting success for nothing.
+    def test_open_tx_refuses_memory_urls(self, db):
+        dialect, _ = db
+        with pytest.raises(ValueError, match="file::memory:"):
+            dialect.open_tx(None, {"url": "file::memory:"})
+
+    def test_open_tx_refuses_bare_memory_urls(self, db):
+        dialect, _ = db
+        with pytest.raises(ValueError, match="connect"):
+            dialect.open_tx(None, {"url": ":memory:"})
+
+    def test_open_tx_file_url_still_opens(self, db, tmp_path):
+        dialect, handle = db
+        tx = dialect.open_tx(handle, {"url": f"file:{tmp_path / 'tx.db'}"})
+        dialect.close_tx(handle, tx)  # no raise — file DBs unchanged
+
+    # R18 (review 2026-11-11): the multi-statement guard only tracked single
+    # quotes — a `"` containing a `'` flipped the state and let the second
+    # statement through (libsql then silently ran only the first one).
+    def test_reject_multi_statement_tracks_double_quotes(self, db):
+        from dialects.libsql import _reject_multi_statement
+
+        with pytest.raises(ValueError):
+            _reject_multi_statement('SELECT "it\'s"; DROP TABLE x')
+        with pytest.raises(ValueError):
+            _reject_multi_statement("SELECT 'a'; DROP TABLE x")
+
+    def test_reject_multi_statement_allows_semicolons_inside_quotes(self, db):
+        from dialects.libsql import _reject_multi_statement
+
+        _reject_multi_statement('SELECT "a;b" FROM t')  # must not raise
+        _reject_multi_statement("SELECT 'a;b' FROM t")  # must not raise

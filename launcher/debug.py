@@ -242,45 +242,7 @@ class DiagnosticTool:
             Health check results
         """
         return await self._check_management_server()
-    
-    async def check_circuit_breakers(self) -> dict[str, Any]:
-        """
-        Check circuit breaker states.
-        
-        Returns:
-            Circuit breaker states
-        """
-        try:
-            session = await self._get_session()
-            async with session.get(
-                f"{self.management_url}/api/circuit-breakers"
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    return {"error": f"HTTP {response.status}"}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    async def check_cache(self) -> dict[str, Any]:
-        """
-        Check cache statistics.
-        
-        Returns:
-            Cache statistics
-        """
-        try:
-            session = await self._get_session()
-            async with session.get(
-                f"{self.management_url}/api/cache/stats"
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    return {"error": f"HTTP {response.status}"}
-        except Exception as e:
-            return {"error": str(e)}
-    
+
     def check_config(self) -> dict[str, Any]:
         """
         Check configuration.
@@ -300,7 +262,10 @@ class DiagnosticTool:
         Returns:
             Recent log entries
         """
-        log_dir = Path.home() / ".config" / "supreme-mcp-tools" / "logs"
+        # R21 (review 2026-11-11): the real launcher log lives in the repo's
+        # logs/ dir — the old ~/.config path is never written. Also fall back
+        # to a bare directory listing rather than "not found" noise.
+        log_dir = Path(__file__).resolve().parent.parent / "logs"
         
         if not log_dir.exists():
             return {"error": "Log directory not found"}
@@ -337,7 +302,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     
     parser.add_argument(
         "command",
-        choices=["diagnose", "health", "circuit", "cache", "config", "logs"],
+        choices=["diagnose", "health", "config", "logs"],
         help="Diagnostic command"
     )
     
@@ -395,10 +360,6 @@ async def main(args: list[str] | None = None) -> None:
             result = await tool.diagnose()
         elif parsed_args.command == "health":
             result = await tool.check_health()
-        elif parsed_args.command == "circuit":
-            result = await tool.check_circuit_breakers()
-        elif parsed_args.command == "cache":
-            result = await tool.check_cache()
         elif parsed_args.command == "config":
             result = tool.check_config()
         elif parsed_args.command == "logs":

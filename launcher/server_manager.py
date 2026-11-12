@@ -194,18 +194,31 @@ class ServerManager:
             
             # Start management server if enabled
             if mgmt_server:
-                await mgmt_server.start()
+                # R5 (review 2026-11-11): the MCP task is LIVE from the
+                # moment it is created. If the mgmt start or the registry
+                # registration fails — or the 30s startup timeout CANCELS
+                # this coroutine at that await (CancelledError passes through
+                # `except Exception` below) — the task must be cancelled
+                # HERE. The old cleanup only knew tasks already registered
+                # in self.tasks, so a failed start left an untracked uvicorn
+                # serving the MCP port while the tool was reported FAILED
+                # and its port reservation was released for re-allocation.
+                try:
+                    await mgmt_server.start()
 
-                # Register with service registry
-                # NOTE: 127.0.0.1, not localhost (repo convention — avoids
-                # IPv6 ::1 resolution pitfalls) and not the bind host (a
-                # 0.0.0.0 bind address is not connectable).
-                if self.service_registry:
-                    await self.service_registry.register(
-                        name=tool_name,
-                        management_url=f"http://127.0.0.1:{mgmt_port}",
-                        mcp_port=port
-                    )
+                    # Register with service registry
+                    # NOTE: 127.0.0.1 below, not localhost (repo convention —
+                    # avoids IPv6 ::1 resolution pitfalls) and not the bind
+                    # host (a 0.0.0.0 bind address is not connectable).
+                    if self.service_registry:
+                        await self.service_registry.register(
+                            name=tool_name,
+                            management_url=f"http://127.0.0.1:{mgmt_port}",
+                            mcp_port=port
+                        )
+                except BaseException:
+                    task.cancel()
+                    raise
             
             # Assign to dicts only after successful startup to avoid
             # zombie state if mgmt_server.start() raises.

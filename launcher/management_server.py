@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 from .service_registry import ServiceRegistry
@@ -228,7 +228,9 @@ class EnvVarUpdate(BaseModel):
 
 class AuthUpdate(BaseModel):
     """Request model for updating tool auth configuration."""
-    api_key: str
+    # R16 (review 2026-11-11): a non-empty constraint — an empty key locks
+    # every client out on next boot (put_tool_config already guarded this).
+    api_key: str = Field(..., min_length=1)
 
 
 def _get_default_management_port() -> int:
@@ -240,6 +242,25 @@ def _get_default_management_port() -> int:
     except Exception as e:
         logger.debug(f"Could not load ports.json: {e}")
         return None
+
+
+def _load_ui_ports() -> set[int]:
+    """reserved management_ui / pod_management_ui ports from ports.json.
+
+    R19 (review 2026-11-11): the CORS allow-lists used the central-management
+    port (8200) — a port no browser UI calls; the real browser origins are
+    these UI ports. Fallback matches the hardcoded defaults (8400/8401).
+    """
+    try:
+        from launcher.launcher_config import load_ports_config
+        reserved = load_ports_config().get("reserved", {})
+        return {
+            int(reserved[k]) for k in ("management_ui", "pod_management_ui")
+            if reserved.get(k)
+        }
+    except Exception as e:
+        logger.debug(f"Could not load UI ports from ports.json: {e}")
+        return {8400, 8401}
 
 
 class ManagementServer:
@@ -333,10 +354,16 @@ class ManagementServer:
 
         # Add CORS middleware
         _mgmt_port = _get_default_management_port() or 8400
-        _allowed_origins = [
-            f"http://localhost:{_mgmt_port}",
-            f"http://127.0.0.1:{_mgmt_port}",
-        ]
+        # R19 (review 2026-11-11): the origin list pointed only at the
+        # central-management port, which no browser client calls — add the
+        # actual UI origins (ports.json reserved management_ui /
+        # pod_management_ui; 8400/8401 fallback).
+        _allowed_origins = []
+        for _p in sorted({_mgmt_port} | _load_ui_ports()):
+            _allowed_origins += [
+                f"http://localhost:{_p}",
+                f"http://127.0.0.1:{_p}",
+            ]
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=_allowed_origins,
@@ -1088,6 +1115,17 @@ class ManagementServer:
         # Wait for server to start
         await asyncio.sleep(0.5)
         
+        # R7 (review 2026-11-11): the fixed sleep never verified the bind — a
+        # port grabbed between the availability probe and the bind let the
+        # serve task die silently while startup declared success. Fail loudly.
+        if self._task.done():
+            exc = self._task.exception()
+            if exc is not None:
+                raise RuntimeError(
+                    f"central management serve task failed during startup: {exc}"
+                ) from exc
+            raise RuntimeError("central management serve task exited during startup")
+
         logger.info(f"Management server started on port {self.port}")
     
     async def stop(self) -> None:

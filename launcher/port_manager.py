@@ -12,6 +12,8 @@ Port Types:
     - ui: Web UI services (default range: 8400-8499)
 """
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 import socket
@@ -274,6 +276,24 @@ class PortManager:
         """Return the configured manual port for a service, if any."""
         return self._get_manual_ports_for_type(port_type).get(name)
 
+    def _run_wait(self, coro):
+        """Run a bounded wait coroutine WITHOUT stalling a running event loop.
+
+        The launcher's concurrent start path calls these sync methods from
+        async code — a raw time.sleep there froze sibling tool startups and
+        the health-check loop for the whole busy window. When a loop is
+        already running, the wait coroutine runs in a worker thread on a
+        fresh loop (the sync caller blocks; the caller's loop stays free).
+        Outside a loop: plain asyncio.run. Known-unfixed since 2026-09-25
+        review; closed 2026-11-11.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+
     def wait_for_busy_ports(
         self,
         ports: dict[str, int],
@@ -295,10 +315,15 @@ class PortManager:
             f"previous launcher still shutting down?)"
         )
         deadline = time.monotonic() + timeout
-        while busy and time.monotonic() < deadline:
-            time.sleep(PORT_BUSY_RETRY_INTERVAL)
-            busy = {n for n in busy if not self._is_port_available(ports[n], port_type)}
-        return busy
+
+        async def _wait():
+            still = set(busy)
+            while still and time.monotonic() < deadline:
+                await asyncio.sleep(PORT_BUSY_RETRY_INTERVAL)
+                still = {n for n in still if not self._is_port_available(ports[n], port_type)}
+            return still
+
+        return self._run_wait(_wait())
 
     def allocate_port(
         self,
@@ -346,11 +371,17 @@ class PortManager:
                         f"{PORT_BUSY_RETRY_SECS:.0f}s (previous launcher still shutting down?)"
                     )
                     deadline = time.monotonic() + PORT_BUSY_RETRY_SECS
-                    while time.monotonic() < deadline:
-                        time.sleep(PORT_BUSY_RETRY_INTERVAL)
-                        if self._is_port_available(manual_port, port_type):
-                            break
-                    else:
+
+                    async def _retry():
+                        while time.monotonic() < deadline:
+                            await asyncio.sleep(PORT_BUSY_RETRY_INTERVAL)
+                            if self._is_port_available(manual_port, port_type):
+                                return True
+                        return False
+
+                    # async-capable wait — keeps the launcher's event loop
+                    # free for sibling tool startups during the busy window.
+                    if not self._run_wait(_retry()):
                         # Timed out. MCP ports must fail loudly (clients pin them
                         # by URL), but a pinned MGMT port is only a preference —
                         # its URL reaches consumers via the service registry.
