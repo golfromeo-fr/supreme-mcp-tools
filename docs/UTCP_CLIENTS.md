@@ -84,3 +84,56 @@ Note: the config pins the tools' MCP ports from `config/ports.json`. Those
 ports are pinned and fail loudly if taken (unlike mgmt ports, which
 auto-allocate) — but if a port ever shifts, re-run the generator and restart
 the client; same staleness property as any hardcoded MCP client entry.
+
+## 4. Testing your UTCP client setup
+
+**Automated (suite):** `python -m pytest tests/test_utcp_client_integration.py -v`
+boots an ephemeral multi-transport app on a real port and drives it with the
+official Python UTCP client — manual registration from `GET /utcp` (auth
+template + `${VAR}` placeholder resolution), discovery + word-match search,
+`{"body": ...}` calls, honest 400 surfacing, and bad-key rejection. No
+launcher needed; needs the `utcp` pins from requirements.txt (client-only).
+
+**Quick live probes** (launcher running; key = `tools/<name>/config.json`
+`auth.api_key`):
+
+```bash
+# manual (discoverability)
+curl -s -H "X-API-Key: $KEY" http://127.0.0.1:8002/utcp | python3 -m json.tool
+# expect 401 without a key
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8002/utcp
+```
+
+```bash
+# call route — args go under "body"
+curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"body":{"value":5}}' http://127.0.0.1:8002/utcp/call/square
+```
+
+**Python client against the generated config:**
+
+```python
+import asyncio
+from utcp.utcp_client import UtcpClient
+
+async def main():
+    client = await UtcpClient.create(
+        config="/home/<you>/.config/supreme-mcp-tools/utcp-client.json")
+    print(await client.search_tools("square", 10))
+    print(await client.call_tool("simplemcp.square", {"body": {"value": 6}}))
+    await client.close()
+
+asyncio.run(main())
+```
+
+Gotchas (2026-11-17 live + suite-proven):
+- `call_tool` returns a plain dict (`{"result": "36.0"}` — string numbers);
+  there is no `list_tools` — use `search_tools("", N)` to list everything.
+- Missing/invalid args → HTTP 400 surfaces as a client exception carrying the
+  pydantic detail; masked tools never register → client-side `Tool not found`.
+- Manual (tool) names with underscores: the reference client doubles
+  underscores when deriving variable scopes (`name_` → `name__` in variable
+  lookups). Keep tool names underscore-free (all six are); the generator
+  (setup_utcp_client.sh) handles the doubling since 2026-11-17.
+- The server-side proof that traffic rode UTCP: `mcp.access` log shows
+  `GET /utcp` + `POST /utcp/call/<tool>` lines — never `POST /mcp`.

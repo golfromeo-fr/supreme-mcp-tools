@@ -126,10 +126,14 @@ for name in names:
         },
     })
     if key:
-        # plain (RFC variable name) + provider-namespaced (reference clients
-        # resolve manual placeholders under "<manual>_" scope)
+        # plain (RFC variable name) + provider-namespaced name. NOTE: the
+        # reference client scopes variables under the manual name with every
+        # "_" doubled (namespace.replace("_","!").replace("!","__") — see
+        # utcp DefaultVariableSubstitutor._get_variable), so an underscored
+        # tool name needs its underscores doubled here too. Underscore-free
+        # names coincide, which is why the six real tools never hit this.
         env_lines.append(f"{var}={key}")
-        env_lines.append(f"{name}_{var}={key}")
+        env_lines.append(f"{name.replace('_', '__')}_{var}={key}")
 
 config = {
     "load_variables_from": [
