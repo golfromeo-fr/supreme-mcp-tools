@@ -187,13 +187,107 @@ def test_real_client_bad_key_not_registered(server_url, tmp_path):
     cfg_path = _write_client_config(tmp_path, server_url, "utcpx-wrong-key")
 
     async def scenario():
+        # Client 1.2.0: a 401 yields success=False (not a raise) → create()
+        # returns a client with ZERO tools (probe-proven 2026-11-18). Tolerate
+        # a future client that raises instead, but ONLY for an auth/variable
+        # reason — a config bug must not masquerade as a passing rejection.
+        from utcp.exceptions import UtcpVariableNotFound
         try:
             client = await UtcpClient.create(config=cfg_path)
-        except Exception:
-            return  # loud failure is also an acceptable outcome
+        except UtcpVariableNotFound:
+            return
+        except Exception as e:
+            assert "401" in str(e) or "unauthorized" in str(e).lower(), \
+                f"create() failed for a non-auth reason: {e}"
+            return
         try:
             assert await _all_tools(client) == set()
         finally:
             await client.close()
 
     asyncio.run(scenario())
+
+
+def test_generator_output_drives_real_client_underscored_name(tmp_path):
+    """F1+F2 regression: run the REAL setup_utcp_client.sh against a tmp tree
+    with an UNDERSCORED tool name, then feed its generated config to the real
+    client against a matching ephemeral server.
+
+    Closes two gaps the hand-written-config test above cannot:
+    - the generator's provider-namespaced underscore-doubling is exercised
+      end-to-end (the six production tools are underscore-free, so this path
+      is otherwise never run); reverting the doubling line makes the client
+      fail to resolve the scoped variable → this test fails.
+    - the generator's ACTUAL output (not a hand-written mirror) is proven
+      client-usable, guarding against config-shape drift (e.g. a missing
+      auth block on the manual template, a historical generator bug).
+    """
+    import shutil
+    import subprocess
+
+    import uvicorn
+    from tools.shared.server_factory import create_fastmcp_server, get_transport_app
+
+    name = "my_probe"
+    key = "utcpx-gen-key-1"
+    var = "UTCP_MY_PROBE_API_KEY"
+    port = _free_port()
+
+    # tmp repo tree; common.sh derives SMC_ROOT from its own copied location,
+    # so the generator reads THIS tree's ports.json + tools/<name>/config.json
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "ports.json").write_text(
+        json.dumps({"assignments": {"mcp": {name: port}}}))
+    (tmp_path / "tools" / name).mkdir(parents=True)
+    (tmp_path / "tools" / name / "config.json").write_text(
+        json.dumps({"auth": {"api_key": key}}))
+    (tmp_path / "scripts").mkdir()
+    for f in ("setup_utcp_client.sh", "common.sh"):
+        shutil.copy(PROJECT_ROOT / "scripts" / f, tmp_path / "scripts" / f)
+
+    cfg_path = tmp_path / "client.json"
+    env_path = tmp_path / "client.env"
+    subprocess.run(
+        ["bash", str(tmp_path / "scripts" / "setup_utcp_client.sh"),
+         "--tools", name, "--config", str(cfg_path), "--env", str(env_path)],
+        check=True, capture_output=True, text=True)
+
+    # the fix itself: doubled namespaced line + plain line both present
+    env_text = env_path.read_text()
+    assert f"my__probe_{var}={key}" in env_text, env_text
+    assert f"{var}={key}" in env_text, env_text
+
+    # server on the SAME port the generator wrote into the config URL
+    mcp = create_fastmcp_server(name, api_key=key)
+
+    @mcp.tool()
+    def ping() -> str:
+        return "pong"
+
+    @mcp.tool()
+    def echo(message: str) -> str:
+        return f"echo: {message}"
+
+    app = get_transport_app(mcp)
+    server = uvicorn.Server(uvicorn.Config(
+        app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    assert _wait_for_server(port), f"Server did not start on port {port}"
+
+    try:
+        async def scenario():
+            client = await UtcpClient.create(config=str(cfg_path))
+            try:
+                names = {t.name for t in await client.search_tools("", 200)}
+                assert {f"{name}.ping", f"{name}.echo"} <= names, names
+                r = await client.call_tool(f"{name}.echo",
+                                           {"body": {"message": "hi"}})
+                assert r["result"] == "echo: hi"
+            finally:
+                await client.close()
+
+        asyncio.run(scenario())
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)

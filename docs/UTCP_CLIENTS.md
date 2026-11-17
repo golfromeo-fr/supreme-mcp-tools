@@ -132,8 +132,8 @@ Gotchas (2026-11-17 live + suite-proven):
 - Missing/invalid args → HTTP 400 surfaces as a client exception carrying the
   pydantic detail; masked tools never register → client-side `Tool not found`.
 - Manual (tool) names with underscores: the reference client doubles
-  underscores when deriving variable scopes (`name_` → `name__` in variable
-  lookups). Keep tool names underscore-free (all six are); the generator
-  (setup_utcp_client.sh) handles the doubling since 2026-11-17.
+  underscores when deriving variable scopes (every `_` doubles:
+  `foo_bar` → `foo__bar`). Keep tool names underscore-free (all six are); the
+  generator (setup_utcp_client.sh) handles the doubling since 2026-11-17.
 - The server-side proof that traffic rode UTCP: `mcp.access` log shows
   `GET /utcp` + `POST /utcp/call/<tool>` lines — never `POST /mcp`.
