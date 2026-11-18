@@ -54,17 +54,35 @@ Notes:
 
 ```bash
 cd <dir with .utcp_config.json>   # copy or symlink the generated config there
-npx -y @utcp/code-mode-cli prompt  # built-in agent guide
-npx -y @utcp/code-mode-cli search "memory"          # discover + TS interfaces
-npx -y @utcp/code-mode-cli run <<'EOF'
-const r = await simplemcp.square({ body: { value: 5 } });
-const m = await memorymcp.getMemoryMetrics({});
-return { square: r, memory: typeof m };
+npx -y @utcp/code-mode-cli prompt           # built-in agent guide
+npx -y @utcp/code-mode-cli validate         # register + check all manuals
+npx -y @utcp/code-mode-cli search "square"  # discover + generated TS interfaces
+npx -y @utcp/code-mode-cli run <<'EOF'      # execute a tool-chain in the sandbox
+const a = await simplemcp.square({ body: { value: 7 } });
+const n = parseFloat(a.result);             # compute on the result in code
+const b = await simplemcp.double({ body: { value: n } });
+return { square: a.result, doubled: b.result };
 EOF
 ```
 
-(CLI is v0.1.1 — subcommands verified against its README, but untested against
-our servers; treat as experimental.)
+**Proven live 2026-11-18** (CLI v0.1.1, node 24): `isolated-vm` (the native
+sandbox) installs cleanly; `validate` → `valid:true` on the generated config
+(6 manuals / 64 tools); `search` emits TypeScript interfaces
+(`simplemcp.square(args)` with typed `body:{value:number}` → `{result:string}`);
+`run` chained 3 tools in ONE sandboxed execution →
+`{"success":true,"result":{"squareOf7":"49.0","parsed":49,"doubled":"98.0",
+"greeting":"Hello, CodeMode!","chainedCalls":3}}` — intermediate data flows
+through code, not the agent's context (the Code-Mode payoff over MCP). The
+sandbox exposes ONLY the injected tool namespaces: `process`/`require`/`fetch`
+are `undefined`, so agent-written code can only call registered tools.
+
+Gotchas: `--config <path>` must FOLLOW the subcommand (before it → "Unknown
+command"); otherwise the cwd-default `./.utcp_config.json` is used. `run` needs
+no LLM key (the agent writes the TS; the CLI just executes it). Tools are called
+as `manual.tool({ body: {...} })`; cross-manual chains work too.
+
+Run [`scripts/utcp_code_mode_demo.sh`](../scripts/utcp_code_mode_demo.sh) for a
+ready-made validate + search + chain smoke against the live launcher.
 
 ## 3. Python clients
 

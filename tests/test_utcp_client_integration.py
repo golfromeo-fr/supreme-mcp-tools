@@ -20,6 +20,7 @@ Requires: utcp, utcp-http, uvicorn, fastmcp — all project dependencies
 """
 import asyncio
 import json
+import os
 import socket
 import sys
 import threading
@@ -288,6 +289,69 @@ def test_generator_output_drives_real_client_underscored_name(tmp_path):
                 await client.close()
 
         asyncio.run(scenario())
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
+@pytest.mark.skipif(not os.environ.get("RUN_UTCP_CODEMODE_CLI"),
+                    reason="opt-in: set RUN_UTCP_CODEMODE_CLI=1 (needs node/npx + network)")
+def test_code_mode_cli_chains_tools(tmp_path):
+    """Opt-in: the @utcp/code-mode-cli runs a TS tool-chain in its isolated-vm
+    sandbox against an ephemeral server. Skipped by default so the suite stays
+    offline/deterministic (the CLI needs npx + a network fetch + native addon).
+
+    Proven live 2026-11-18 (docs/UTCP_CLIENTS.md §2); this is the self-contained
+    automated variant. Enable with RUN_UTCP_CODEMODE_CLI=1.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("npx"):
+        pytest.skip("npx not available")
+
+    import uvicorn
+    from tools.shared.server_factory import create_fastmcp_server, get_transport_app
+
+    port = _free_port()
+    mcp = create_fastmcp_server(SERVER_NAME, api_key=API_KEY)
+
+    @mcp.tool()
+    def square(value: float) -> str:
+        return str(float(value * value))
+
+    @mcp.tool()
+    def double(value: float) -> str:
+        return str(float(value * 2))
+
+    app = get_transport_app(mcp)
+    server = uvicorn.Server(uvicorn.Config(
+        app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    assert _wait_for_server(port), f"Server did not start on port {port}"
+
+    try:
+        # stage the generated-shape config as the CLI's cwd-default file
+        cfg = _write_client_config(tmp_path, f"http://127.0.0.1:{port}", API_KEY)
+        shutil.copy(cfg, tmp_path / ".utcp_config.json")
+
+        chain = (
+            f"const a = await {SERVER_NAME}.square({{ body: {{ value: 7 }} }});\n"
+            "const n = parseFloat(a.result);\n"
+            f"const b = await {SERVER_NAME}.double({{ body: {{ value: n }} }});\n"
+            "return { squareOf7: a.result, parsed: n, doubled: b.result };\n"
+        )
+        proc = subprocess.run(
+            ["npx", "-y", "@utcp/code-mode-cli", "run"],
+            input=chain, cwd=str(tmp_path),
+            capture_output=True, text=True, timeout=280)
+        assert proc.returncode == 0, f"cli failed: {proc.stderr[-800:]}"
+        data = json.loads(proc.stdout)
+        assert data["success"] is True, data
+        assert data["result"]["squareOf7"] == "49.0", data
+        assert data["result"]["parsed"] == 49, data
+        assert data["result"]["doubled"] == "98.0", data
     finally:
         server.should_exit = True
         thread.join(timeout=5)
