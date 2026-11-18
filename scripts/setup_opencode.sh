@@ -7,6 +7,12 @@
 # non-MCP settings), timestamped backup before any write, keys pulled from
 # tools/<name>/config.json into opencode headers, bounded /health wait,
 # --dry-run prints the exact JSONC with keys redacted.
+#
+# Writes the opencode V2 config shape: mcp.servers.<name> with type/url/headers,
+# oauth:false (header-only auth) and codemode:false (native tool list; v2 defaults
+# Code Mode ON). The flat mcp.<name> shape + `enabled` key are deprecated/invalid
+# in v2; existing flat entries are migrated into mcp.servers on merge. Verified
+# against the live https://opencode.ai/config.json schema (tests/test_setup_opencode.py).
 
 set -euo pipefail
 
@@ -78,13 +84,18 @@ dry_run = sys.argv[4] == "1"
 
 ports = json.loads((root / "config" / "ports.json").read_text(encoding="utf-8"))["assignments"]["mcp"]
 
-mcp = {}
+servers = {}
 skipped = []
 for name in tool_names:
     if name not in ports:
         skipped.append(name)
         continue
-    entry = {"type": "remote", "url": f"http://127.0.0.1:{ports[name]}/mcp", "enabled": True}
+    # opencode v2 remote server (nested under mcp.servers): type/url required;
+    # oauth:false = header-only auth (no OAuth discovery); codemode:false keeps
+    # tools on the native tool list (v2 defaults Code Mode ON). v2 REJECTS the
+    # old `enabled` key — a server connects unless `disabled: true`.
+    entry = {"type": "remote", "url": f"http://127.0.0.1:{ports[name]}/mcp",
+             "oauth": False, "codemode": False}
     if include_keys:
         cfg_path = root / "tools" / name / "config.json"
         key = ""
@@ -98,12 +109,12 @@ for name in tool_names:
                 entry["headers"] = {"X-API-Key": f"<redacted len={len(key)}>"}
             else:
                 entry["headers"] = {"X-API-Key": key}
-    mcp[name] = entry
+    servers[name] = entry
 
 if skipped:
     print(f"# skipped (no port assignment in config/ports.json): {', '.join(skipped)}", file=sys.stderr)
 
-print(json.dumps({"$schema": "https://opencode.ai/config.json", "mcp": mcp}, indent=2))
+print(json.dumps({"$schema": "https://opencode.ai/config.json", "mcp": {"servers": servers}}, indent=2))
 SMC_OC_PY
 }
 
@@ -159,20 +170,25 @@ fi
 
 # Merge: load the existing config (pure JSON), set the mcp block, keep the rest.
 merge_and_write() {
-    python3 - "$CONFIG" "$FORCE" <<'SMC_OC_MERGE_PY'
+    # NOTE: the payload arrives via $1/env, NOT stdin — `python3 - <<'PY'`
+    # already consumes stdin as the script source, so piping gen_config into
+    # stdin here read empty and crashed (the old fatal bug; never wrote a config).
+    SMC_OC_PAYLOAD="$1" python3 - "$CONFIG" "$FORCE" <<'SMC_OC_MERGE_PY'
 import json
+import os
 import sys
 from pathlib import Path
 
 config_path = Path(sys.argv[1])
 force = sys.argv[2] == "1"
+payload = json.loads(os.environ["SMC_OC_PAYLOAD"])
 
 existing = {}
 if config_path.is_file():
     try:
         existing = json.loads(config_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        if force != "1":
+        if not force:
             sys.stderr.write(
                 f"ERROR: existing config {config_path} is not plain JSON ({exc}).\n"
                 "It may be hand-edited JSONC. A timestamped backup was already taken.\n"
@@ -181,12 +197,40 @@ if config_path.is_file():
             sys.exit(3)
         existing = {}
 
-existing["mcp"] = json.loads(sys.stdin.read())
+new_servers = payload.get("mcp", {}).get("servers", {})
+old_mcp = existing.get("mcp")
+old_mcp = old_mcp if isinstance(old_mcp, dict) else {}
+
+merged = {}
+# preserve existing v2 servers
+if isinstance(old_mcp.get("servers"), dict):
+    merged.update(old_mcp["servers"])
+# migrate deprecated flat v1 entries (mcp.<name>) into servers; v2 rejects
+# `enabled`, so translate enabled:false -> disabled:true and drop enabled:true
+for k, v in old_mcp.items():
+    if k == "servers":
+        continue
+    if isinstance(v, dict) and v.get("type") in ("remote", "local"):
+        v = dict(v)
+        if v.pop("enabled", None) is False:
+            v["disabled"] = True
+        merged.setdefault(k, v)
+merged.update(new_servers)  # our entries win on name collisions
+
+# preserve mcp-level settings (e.g. timeout), replace the server set
+out_mcp = {k: v for k, v in old_mcp.items()
+           if k != "servers"
+           and not (isinstance(v, dict) and v.get("type") in ("remote", "local"))}
+out_mcp["servers"] = merged
+existing["mcp"] = out_mcp
+if "$schema" in payload:
+    existing["$schema"] = payload["$schema"]
+
 config_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
-print(f"Config written: {config_path} (merge: existing non-mcp keys preserved)")
+print(f"Config written: {config_path} (merge: non-mcp keys + existing servers preserved)")
 SMC_OC_MERGE_PY
 }
 
-gen_config | merge_and_write
+merge_and_write "$(gen_config)"
 chmod 600 "$CONFIG"
 echo "Done. Run 'opencode mcp list' to verify servers are connected."
